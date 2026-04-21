@@ -18,17 +18,18 @@ Everything runs inside Claude Code using the built-in `Agent` tool for parallel 
 
 ## Inputs
 
-| Input | Required | Description |
-|-------|----------|-------------|
-| PR number | Yes | The PR to review (number or URL) |
-| Repo | No | `owner/repo` — inferred from cwd if omitted |
-| Ticket context | No | Ticket number, description, or requirements. Can be provided inline or as a file path. |
+| Input          | Required | Description                                                                            |
+| -------------- | -------- | -------------------------------------------------------------------------------------- |
+| PR number      | Yes      | The PR to review (number or URL)                                                       |
+| Repo           | No       | `owner/repo` — inferred from cwd if omitted                                            |
+| Ticket context | No       | Ticket number, description, or requirements. Can be provided inline or as a file path. |
 
 No mandatory context files. The diff is the primary input. Ticket context improves the review but isn't blocking.
 
 ## Review Artifacts
 
 All artifacts are written to `.context/reviews/` (already gitignored) and cleaned up after posting:
+
 - `.context/reviews/pr<number>-xhigh.review.md` — Reviewer A findings
 - `.context/reviews/pr<number>-omax.review.md` — Reviewer B findings
 - `.context/reviews/pr<number>-audit.review.md` — Consolidated audit
@@ -41,13 +42,13 @@ Create the directory at the start of the review: `mkdir -p .context/reviews`
 ### Phase 0 — Gather context
 
 1. Get the PR metadata:
-   ```bash
-   gh pr view <number> --repo <owner/repo> --json headRefName,headRefOid,title,body,additions,deletions,changedFiles
-   ```
+    ```bash
+    gh pr view <number> --repo <owner/repo> --json headRefName,headRefOid,title,body,additions,deletions,changedFiles
+    ```
 2. Save the full diff to a temp file (subagents read from disk):
-   ```bash
-   gh pr diff <number> --repo <owner/repo> > /tmp/pr<number>-diff.txt
-   ```
+    ```bash
+    gh pr diff <number> --repo <owner/repo> > /tmp/pr<number>-diff.txt
+    ```
 3. Note the PR size — file count, additions, deletions. This determines whether Phase 3 runs.
 4. If ticket context was provided, include it in the review prompts.
 
@@ -59,6 +60,7 @@ Launch **2 subagents in parallel** using the Agent tool with `run_in_background:
 **Subagent B** → `.context/reviews/pr<number>-omax.review.md`
 
 Each subagent receives the same prompt (see Review Prompt Template below) but is told to approach from a different angle:
+
 - Subagent A: Focus on architectural correctness, API contracts, SQL logic, and security.
 - Subagent B: Focus on data flow, state management, edge cases, and performance.
 
@@ -69,6 +71,7 @@ Wait for both subagents to complete before proceeding.
 ### Phase 2 — Audit (round 1)
 
 Launch **1 subagent** that reads both reviews + the diff. It:
+
 - Validates/invalidates each finding against the actual code
 - Catches what both reviewers missed
 - Writes to `.context/reviews/pr<number>-audit.review.md`
@@ -80,10 +83,12 @@ See Audit Prompt Template below.
 **Trigger when**: diff >500 lines, >10 files, spans multiple subsystems, or explicitly requested.
 
 Launch **2 subagents in parallel**, each independently verifying the round-1 audit:
+
 - Subagent 2A → `.context/reviews/pr<number>-audit-2a.review.md`
 - Subagent 2B → `.context/reviews/pr<number>-audit-2b.review.md`
 
 Each reads the audit + diff and marks each finding as:
+
 - ✅ VERIFIED
 - ❌ INCORRECT (with explanation)
 - ⚠️ NUANCED (partially correct, needs clarification)
@@ -105,47 +110,52 @@ If running autonomously (no user in the loop), skip to Phase 5 directly.
 Post **every** finding as an inline comment on the exact file and line, with a summary table as the review body.
 
 **Deriving line numbers** — no git fetch or clone needed:
+
 - For **new files** (`status: added`): the line number in the file is the line number in the diff.
 - For **modified files**: use the line number in the **new version** of the file (the `+` side of the hunk). The hunk header `@@ -old_start,old_count +new_start,new_count @@` gives you the starting line — count forward through context and `+` lines to find your target.
 
 **Two-step API call** (body + comments can't be reliably sent together in a single `gh api` call):
 
 1. Create a pending review with inline comments (omit `event` to keep it pending):
-   ```bash
-   gh api repos/<owner>/<repo>/pulls/<number>/reviews \
-     --method POST \
-     --field commit_id=<head_sha> \
-     --input <(python3 -c "
-   import json
-   comments = [
-       {'path': 'path/to/file.ts', 'line': 42, 'side': 'RIGHT', 'body': '**Critical**: ...'},
-       {'path': 'path/to/other.ts', 'line': 17, 'side': 'RIGHT', 'body': '**Major**: ...'},
-   ]
-   print(json.dumps({'comments': comments}))
-   ")
-   ```
-   Save the returned `id` from the response.
+
+    ```bash
+    gh api repos/<owner>/<repo>/pulls/<number>/reviews \
+      --method POST \
+      --field commit_id=<head_sha> \
+      --input <(python3 -c "
+    import json
+    comments = [
+        {'path': 'path/to/file.ts', 'line': 42, 'side': 'RIGHT', 'body': '**Critical**: ...'},
+        {'path': 'path/to/other.ts', 'line': 17, 'side': 'RIGHT', 'body': '**Major**: ...'},
+    ]
+    print(json.dumps({'comments': comments}))
+    ")
+    ```
+
+    Save the returned `id` from the response.
 
 2. Submit the review with the summary body:
-   ```bash
-   gh api repos/<owner>/<repo>/pulls/<number>/reviews/<review_id>/events \
-     --method POST \
-     --field event=COMMENT \
-     --field body="$(cat <<'EOF'
-   ## QC Review Summary — PR #<number>
 
-   **X critical, Y major, Z minor, W nits** — see inline comments.
+    ```bash
+    gh api repos/<owner>/<repo>/pulls/<number>/reviews/<review_id>/events \
+      --method POST \
+      --field event=COMMENT \
+      --field body="$(cat <<'EOF'
+    ## QC Review Summary — PR #<number>
 
-   | # | Severity | Location | Issue |
-   |---|----------|----------|-------|
-   | 1 | Critical | `file.ts:42` | One-line description |
-   | 2 | Major | `other.ts:17` | One-line description |
-   ...
-   EOF
-   )"
-   ```
+    **X critical, Y major, Z minor, W nits** — see inline comments.
+
+    | # | Severity | Location | Issue |
+    |---|----------|----------|-------|
+    | 1 | Critical | `file.ts:42` | One-line description |
+    | 2 | Major | `other.ts:17` | One-line description |
+    ...
+    EOF
+    )"
+    ```
 
 **Rules for inline comments:**
+
 - Post **all** findings as inline comments — critical, major, minor, and nits. Every finding belongs on the line it references.
 - Each comment is self-contained — reader shouldn't need to see other comments to understand.
 - Prefix with bold severity: `**Critical:**`, `**Major:**`, `**Minor:**`, `**Nit:**`.

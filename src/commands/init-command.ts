@@ -144,15 +144,16 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         }
 
         // Step 3: Select default provider and model
-        const defaultProvider = selectedProviders.length === 1
-            ? selectedProviders[0]
-            : await select({
-                  message: "Which provider should be the default?",
-                  choices: selectedProviders.map((p) => ({
-                      name: PROVIDER_DISPLAY_NAMES[p],
-                      value: p,
-                  })),
-              });
+        const defaultProvider =
+            selectedProviders.length === 1
+                ? selectedProviders[0]
+                : await select({
+                      message: "Which provider should be the default?",
+                      choices: selectedProviders.map((p) => ({
+                          name: PROVIDER_DISPLAY_NAMES[p],
+                          value: p,
+                      })),
+                  });
 
         const defaultModel = await this.promptForModel(defaultProvider, providers[defaultProvider]);
 
@@ -230,9 +231,13 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
                 const data = (await response.json()) as { models?: Array<{ name: string }> };
                 detectedModels = (data.models ?? []).map((m) => m.name);
                 if (detectedModels.length > 0) {
-                    logger.info(`Ollama is running with ${detectedModels.length} model(s): ${detectedModels.join(", ")}`);
+                    logger.info(
+                        `Ollama is running with ${detectedModels.length} model(s): ${detectedModels.join(", ")}`,
+                    );
                 } else {
-                    logger.warn("Ollama is running but no models are pulled. Run 'ollama pull <model>' to download one.");
+                    logger.warn(
+                        "Ollama is running but no models are pulled. Run 'ollama pull <model>' to download one.",
+                    );
                 }
             }
         } catch {
@@ -288,15 +293,16 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
             return;
         }
 
-        const provider = configuredProviders.length === 1
-            ? configuredProviders[0]
-            : await select({
-                  message: "Select the provider:",
-                  choices: configuredProviders.map((p) => ({
-                      name: PROVIDER_DISPLAY_NAMES[p],
-                      value: p,
-                  })),
-              });
+        const provider =
+            configuredProviders.length === 1
+                ? configuredProviders[0]
+                : await select({
+                      message: "Select the provider:",
+                      choices: configuredProviders.map((p) => ({
+                          name: PROVIDER_DISPLAY_NAMES[p],
+                          value: p,
+                      })),
+                  });
 
         const model = await this.promptForModel(provider, existing.providers?.[provider]);
         const config: PersonalConfiguration = {
@@ -390,7 +396,12 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
 
     private async configureSCMPlatforms(
         existing: PersonalConfiguration,
-    ): Promise<Pick<PersonalConfiguration, "githubToken" | "bitbucketToken" | "bitbucketUsername" | "gitlabToken" | "gitlabInstanceUrl">> {
+    ): Promise<
+        Pick<
+            PersonalConfiguration,
+            "githubToken" | "bitbucketToken" | "bitbucketUsername" | "gitlabToken" | "gitlabInstanceUrl"
+        >
+    > {
         logger.info("\n--- Source Control Platforms ---");
 
         const platforms = await checkbox({
@@ -531,7 +542,9 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
                 if (provider === AIProvider.BEDROCK) {
                     const profile = val.awsProfile ?? "default chain";
                     const region = val.awsRegion ?? "us-east-1";
-                    logger.info(`    ${PROVIDER_DISPLAY_NAMES[provider]}: profile=${profile}, region=${region}${isDefault}`);
+                    logger.info(
+                        `    ${PROVIDER_DISPLAY_NAMES[provider]}: profile=${profile}, region=${region}${isDefault}`,
+                    );
                 } else if (provider === AIProvider.OLLAMA) {
                     const url = val.baseUrl ?? "http://localhost:11434";
                     const custom = val.customModel ? `, custom=${val.customModel}` : "";
@@ -553,7 +566,9 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
             scmPlatforms.push("GitHub (via gh CLI)");
         }
         if (config.bitbucketToken) {
-            const authType = config.bitbucketUsername ? `app password, user: ${config.bitbucketUsername}` : "access token";
+            const authType = config.bitbucketUsername
+                ? `app password, user: ${config.bitbucketUsername}`
+                : "access token";
             scmPlatforms.push(`Bitbucket (${authType})`);
         }
         if (config.gitlabToken) {

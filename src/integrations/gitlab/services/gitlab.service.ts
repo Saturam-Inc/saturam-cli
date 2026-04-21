@@ -47,10 +47,9 @@ export class GitLabService {
         const headers = await this.getHeaders();
         const projectId = this.encodeProjectId(namespace, repo);
         // unidiff=true returns unified diff compatible with the existing diff parser
-        const response = await fetch(
-            `${baseUrl}/projects/${projectId}/merge_requests/${mrIid}/diffs?unidiff=true`,
-            { headers },
-        );
+        const response = await fetch(`${baseUrl}/projects/${projectId}/merge_requests/${mrIid}/diffs?unidiff=true`, {
+            headers,
+        });
         if (!response.ok) {
             throw new Error(`Failed to fetch GitLab MR diff !${mrIid}: ${response.status} ${response.statusText}`);
         }
@@ -80,14 +79,11 @@ export class GitLabService {
         const baseUrl = await this.getBaseUrl();
         const headers = await this.getHeaders();
         const projectId = this.encodeProjectId(namespace, repo);
-        const response = await fetch(
-            `${baseUrl}/projects/${projectId}/merge_requests/${mrIid}/notes`,
-            {
-                method: "POST",
-                headers,
-                body: JSON.stringify({ body }),
-            },
-        );
+        const response = await fetch(`${baseUrl}/projects/${projectId}/merge_requests/${mrIid}/notes`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ body }),
+        });
         if (!response.ok) {
             throw new Error(`Failed to post GitLab MR comment: ${response.status} ${response.statusText}`);
         }
@@ -103,17 +99,16 @@ export class GitLabService {
         const baseUrl = await this.getBaseUrl();
         const headers = await this.getHeaders();
         const projectId = this.encodeProjectId(namespace, repo);
-        const response = await fetch(
-            `${baseUrl}/projects/${projectId}/merge_requests/${mrIid}/discussions`,
-            {
-                method: "POST",
-                headers,
-                body: JSON.stringify({ body, position }),
-            },
-        );
+        const response = await fetch(`${baseUrl}/projects/${projectId}/merge_requests/${mrIid}/discussions`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ body, position }),
+        });
         if (!response.ok) {
             const errText = await response.text();
-            logger.warn(`Failed to post GitLab inline comment on ${position.new_path}:${position.new_line}: ${response.status} ${errText}`);
+            logger.warn(
+                `Failed to post GitLab inline comment on ${position.new_path}:${position.new_line}: ${response.status} ${errText}`,
+            );
         }
     }
 }

@@ -45,7 +45,10 @@ export const PersonalConfigurationSchema = z.object({
     bitbucketToken: z.string().optional().describe("Bitbucket access token or app password"),
     bitbucketUsername: z.string().optional().describe("Bitbucket username (for app password auth)"),
     gitlabToken: z.string().optional().describe("GitLab personal access token"),
-    gitlabInstanceUrl: z.string().optional().describe("GitLab instance base URL (for self-hosted, e.g. https://gitlab.example.com)"),
+    gitlabInstanceUrl: z
+        .string()
+        .optional()
+        .describe("GitLab instance base URL (for self-hosted, e.g. https://gitlab.example.com)"),
 });
 
 export type PersonalConfiguration = z.infer<typeof PersonalConfigurationSchema>;
@@ -69,17 +72,38 @@ export type SessionConfiguration = z.infer<typeof SessionConfigurationSchema>;
 // --- Provider to model mapping ---
 
 export const PROVIDER_MODELS: Record<AIProvider, LLMModel[]> = {
-    [AIProvider.ANTHROPIC]: [LLMModel.ANTHROPIC_CLAUDE_4_SONNET, LLMModel.ANTHROPIC_CLAUDE_4_5_SONNET, LLMModel.ANTHROPIC_CLAUDE_4_6_OPUS],
-    [AIProvider.BEDROCK]: [LLMModel.BEDROCK_CLAUDE_4_SONNET, LLMModel.BEDROCK_CLAUDE_4_5_SONNET, LLMModel.BEDROCK_CLAUDE_4_6_OPUS, LLMModel.BEDROCK_NOVA_PRO],
-    [AIProvider.GOOGLE]: [LLMModel.GEMINI_2_5_PRO, LLMModel.GEMINI_2_5_FLASH, LLMModel.GEMINI_3_PRO, LLMModel.GEMINI_3_FLASH],
+    [AIProvider.ANTHROPIC]: [
+        LLMModel.ANTHROPIC_CLAUDE_4_SONNET,
+        LLMModel.ANTHROPIC_CLAUDE_4_5_SONNET,
+        LLMModel.ANTHROPIC_CLAUDE_4_6_OPUS,
+    ],
+    [AIProvider.BEDROCK]: [
+        LLMModel.BEDROCK_CLAUDE_4_SONNET,
+        LLMModel.BEDROCK_CLAUDE_4_5_SONNET,
+        LLMModel.BEDROCK_CLAUDE_4_6_OPUS,
+        LLMModel.BEDROCK_NOVA_PRO,
+    ],
+    [AIProvider.GOOGLE]: [
+        LLMModel.GEMINI_2_5_PRO,
+        LLMModel.GEMINI_2_5_FLASH,
+        LLMModel.GEMINI_3_PRO,
+        LLMModel.GEMINI_3_FLASH,
+    ],
     [AIProvider.OPENAI]: [LLMModel.OPENAI_GPT_4O, LLMModel.OPENAI_GPT_5, LLMModel.OPENAI_O3_MINI],
     [AIProvider.XAI]: [LLMModel.GROK_2],
     [AIProvider.DEEPSEEK]: [LLMModel.DEEPSEEK_CHAT, LLMModel.DEEPSEEK_REASONER],
     [AIProvider.OLLAMA]: [
-        LLMModel.OLLAMA_LLAMA3, LLMModel.OLLAMA_LLAMA3_1, LLMModel.OLLAMA_LLAMA3_2,
-        LLMModel.OLLAMA_CODELLAMA, LLMModel.OLLAMA_MISTRAL, LLMModel.OLLAMA_MIXTRAL,
-        LLMModel.OLLAMA_DEEPSEEK_CODER_V2, LLMModel.OLLAMA_QWEN2_5_CODER,
-        LLMModel.OLLAMA_GEMMA2, LLMModel.OLLAMA_PHI3, LLMModel.OLLAMA_CUSTOM,
+        LLMModel.OLLAMA_LLAMA3,
+        LLMModel.OLLAMA_LLAMA3_1,
+        LLMModel.OLLAMA_LLAMA3_2,
+        LLMModel.OLLAMA_CODELLAMA,
+        LLMModel.OLLAMA_MISTRAL,
+        LLMModel.OLLAMA_MIXTRAL,
+        LLMModel.OLLAMA_DEEPSEEK_CODER_V2,
+        LLMModel.OLLAMA_QWEN2_5_CODER,
+        LLMModel.OLLAMA_GEMMA2,
+        LLMModel.OLLAMA_PHI3,
+        LLMModel.OLLAMA_CUSTOM,
     ],
 };
 

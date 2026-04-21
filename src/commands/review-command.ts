@@ -87,9 +87,10 @@ export class ReviewCommand implements TypedCommand<typeof INPUTS> {
         }
 
         logger.info(`PR: ${pr.title}`);
-        const statsLine = pr.additions === 0 && pr.deletions === 0
-            ? `${pr.changedFiles} files changed`
-            : `+${pr.additions}/-${pr.deletions}, ${pr.changedFiles} files`;
+        const statsLine =
+            pr.additions === 0 && pr.deletions === 0
+                ? `${pr.changedFiles} files changed`
+                : `+${pr.additions}/-${pr.deletions}, ${pr.changedFiles} files`;
         logger.info(`  ${statsLine}`);
         logger.info("");
 
@@ -106,7 +107,9 @@ export class ReviewCommand implements TypedCommand<typeof INPUTS> {
         // Log findings
         logger.info(`\n${audit.findings.length} finding(s) from audit:`);
         for (const f of audit.findings) {
-            logger.info(`  [${f.severity.toUpperCase()}] ${f.file}:${f.line} — ${f.title || f.description.slice(0, 60)}`);
+            logger.info(
+                `  [${f.severity.toUpperCase()}] ${f.file}:${f.line} — ${f.title || f.description.slice(0, 60)}`,
+            );
         }
 
         // Phase 4: Show audit
@@ -192,16 +195,27 @@ export class ReviewCommand implements TypedCommand<typeof INPUTS> {
     private async resolveTicketContext(ticket?: string): Promise<string | undefined> {
         if (!ticket) return undefined;
         if (ticket.includes("/") || ticket.endsWith(".md") || ticket.endsWith(".txt")) {
-            try { return await readFile(ticket, "utf8"); } catch { /* inline text */ }
+            try {
+                return await readFile(ticket, "utf8");
+            } catch {
+                /* inline text */
+            }
         }
         return ticket;
     }
 
-    private async resolveTarget(target?: string): Promise<{ scm: SCMService; owner: string; repo: string; prNumber: number }> {
+    private async resolveTarget(
+        target?: string,
+    ): Promise<{ scm: SCMService; owner: string; repo: string; prNumber: number }> {
         if (target && isPullRequestUrl(target)) {
             const parsed = parsePullRequestUrl(target);
             if (!parsed) throw new Error(`Invalid PR URL: ${target}`);
-            return { scm: this.scmFactory.get(parsed.provider), owner: parsed.owner, repo: parsed.repo, prNumber: parsed.prNumber };
+            return {
+                scm: this.scmFactory.get(parsed.provider),
+                owner: parsed.owner,
+                repo: parsed.repo,
+                prNumber: parsed.prNumber,
+            };
         }
 
         const scm = await this.scmFactory.detect();

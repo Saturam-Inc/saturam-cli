@@ -7,12 +7,12 @@
 1. Go to [Issues](https://github.com/Saturam-Inc/saturam-cli/issues)
 2. Click **New issue**
 3. Include:
-   - What you expected to happen
-   - What actually happened
-   - Steps to reproduce
-   - CLI version (`sat-cli --version`)
-   - Node.js version (`node --version`)
-   - Operating system
+    - What you expected to happen
+    - What actually happened
+    - Steps to reproduce
+    - CLI version (`sat-cli --version`)
+    - Node.js version (`node --version`)
+    - Operating system
 
 ### Feature Requests
 
@@ -75,6 +75,7 @@ git commit -m "feat: add support for custom review rules"
 ```
 
 Follow conventional commits:
+
 - `feat:` — new feature
 - `fix:` — bug fix
 - `docs:` — documentation
@@ -87,9 +88,9 @@ git push origin feature/your-feature-name
 ```
 
 6. **Open a Pull Request** against `Saturam-Inc/saturam-cli:main`
-   - Describe what you changed and why
-   - Link any related issues
-   - PRs require 1 approving review before merge
+    - Describe what you changed and why
+    - Link any related issues
+    - PRs require 1 approving review before merge
 
 ### Project Structure
 

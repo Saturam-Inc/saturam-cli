@@ -15,6 +15,7 @@ sat-cli init
 ```
 
 This will configure:
+
 - AI provider (Anthropic, OpenAI, Gemini, Bedrock, Grok, DeepSeek, Ollama)
 - API keys
 - SCM provider (GitHub, Bitbucket, or GitLab)
@@ -50,6 +51,7 @@ sat-cli review 9 --keep-artifacts
 ```
 
 **How it works:**
+
 1. Two independent AI reviewers analyze the PR from different angles
 2. An auditor cross-validates both reviews against the diff
 3. Findings are extracted as structured JSON with exact code references
@@ -72,6 +74,7 @@ sat-cli add-skill code-review --tool cursor
 ```
 
 **Available skills:**
+
 - `code-review` — Multi-model code review with inline comments
 
 ### `sat-cli init`
@@ -157,27 +160,27 @@ All settings can also be provided via environment variables, which take priority
 
 **AI providers**
 
-| Variable | Provider |
-|---|---|
-| `ANTHROPIC_API_KEY` | Anthropic (Claude) |
-| `OPENAI_API_KEY` | OpenAI (GPT) |
-| `GOOGLE_API_KEY` | Google (Gemini) |
-| `XAI_API_KEY` | xAI (Grok) |
-| `DEEPSEEK_API_KEY` | DeepSeek |
-| `AWS_PROFILE` | AWS Bedrock |
-| `AWS_REGION` | AWS Bedrock region (default: `us-east-1`) |
-| `OLLAMA_BASE_URL` | Ollama (default: `http://localhost:11434`) |
+| Variable            | Provider                                   |
+| ------------------- | ------------------------------------------ |
+| `ANTHROPIC_API_KEY` | Anthropic (Claude)                         |
+| `OPENAI_API_KEY`    | OpenAI (GPT)                               |
+| `GOOGLE_API_KEY`    | Google (Gemini)                            |
+| `XAI_API_KEY`       | xAI (Grok)                                 |
+| `DEEPSEEK_API_KEY`  | DeepSeek                                   |
+| `AWS_PROFILE`       | AWS Bedrock                                |
+| `AWS_REGION`        | AWS Bedrock region (default: `us-east-1`)  |
+| `OLLAMA_BASE_URL`   | Ollama (default: `http://localhost:11434`) |
 
 **SCM platforms**
 
-| Variable | Description |
-|---|---|
-| `GITHUB_TOKEN` | GitHub personal access token |
-| `BITBUCKET_TOKEN` | Bitbucket access token |
-| `BITBUCKET_APP_PASSWORD` | Bitbucket app password |
-| `BITBUCKET_USERNAME` | Bitbucket username (required with app password) |
-| `GITLAB_TOKEN` | GitLab personal access token (`api` scope required) |
-| `GITLAB_INSTANCE_URL` | Base URL for self-hosted GitLab (e.g. `https://git.example.com`) |
+| Variable                 | Description                                                      |
+| ------------------------ | ---------------------------------------------------------------- |
+| `GITHUB_TOKEN`           | GitHub personal access token                                     |
+| `BITBUCKET_TOKEN`        | Bitbucket access token                                           |
+| `BITBUCKET_APP_PASSWORD` | Bitbucket app password                                           |
+| `BITBUCKET_USERNAME`     | Bitbucket username (required with app password)                  |
+| `GITLAB_TOKEN`           | GitLab personal access token (`api` scope required)              |
+| `GITLAB_INSTANCE_URL`    | Base URL for self-hosted GitLab (e.g. `https://git.example.com`) |
 
 ## License
 

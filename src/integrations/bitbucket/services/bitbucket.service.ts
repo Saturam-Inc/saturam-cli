@@ -84,7 +84,9 @@ export class BitbucketService {
             { headers },
         );
         if (!response.ok) {
-            throw new Error(`Failed to fetch Bitbucket PR diff #${prNumber}: ${response.status} ${response.statusText}`);
+            throw new Error(
+                `Failed to fetch Bitbucket PR diff #${prNumber}: ${response.status} ${response.statusText}`,
+            );
         }
         return response.text();
     }
@@ -101,12 +103,7 @@ export class BitbucketService {
         return response.json() as Promise<BitbucketDiffStat>;
     }
 
-    public async postComment(
-        workspace: string,
-        repo: string,
-        prNumber: number,
-        body: string,
-    ): Promise<void> {
+    public async postComment(workspace: string, repo: string, prNumber: number, body: string): Promise<void> {
         const headers = await this.getAuthHeaders();
         const response = await fetch(
             `${BITBUCKET_API_BASE_URL}/repositories/${workspace}/${repo}/pullrequests/${prNumber}/comments`,
@@ -147,11 +144,7 @@ export class BitbucketService {
         }
     }
 
-    public async findPullRequestByBranch(
-        workspace: string,
-        repo: string,
-        branch: string,
-    ): Promise<number | null> {
+    public async findPullRequestByBranch(workspace: string, repo: string, branch: string): Promise<number | null> {
         const headers = await this.getAuthHeaders();
         const query = encodeURIComponent(`source.branch.name="${branch}" AND state="OPEN"`);
         const response = await fetch(

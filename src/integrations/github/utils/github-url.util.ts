@@ -16,17 +16,32 @@ const GITLAB_MR_REGEX = /\/([^/]+)\/([^/]+)\/-\/merge_requests\/(\d+)/;
 export function parsePullRequestUrl(url: string): ParsedPRUrl | null {
     const ghMatch = url.match(GITHUB_PR_REGEX);
     if (ghMatch) {
-        return { provider: SCMProvider.GITHUB, owner: ghMatch[1], repo: ghMatch[2], prNumber: parseInt(ghMatch[3], 10) };
+        return {
+            provider: SCMProvider.GITHUB,
+            owner: ghMatch[1],
+            repo: ghMatch[2],
+            prNumber: parseInt(ghMatch[3], 10),
+        };
     }
 
     const bbMatch = url.match(BITBUCKET_PR_REGEX);
     if (bbMatch) {
-        return { provider: SCMProvider.BITBUCKET, owner: bbMatch[1], repo: bbMatch[2], prNumber: parseInt(bbMatch[3], 10) };
+        return {
+            provider: SCMProvider.BITBUCKET,
+            owner: bbMatch[1],
+            repo: bbMatch[2],
+            prNumber: parseInt(bbMatch[3], 10),
+        };
     }
 
     const glMatch = url.match(GITLAB_MR_REGEX);
     if (glMatch) {
-        return { provider: SCMProvider.GITLAB, owner: glMatch[1], repo: glMatch[2], prNumber: parseInt(glMatch[3], 10) };
+        return {
+            provider: SCMProvider.GITLAB,
+            owner: glMatch[1],
+            repo: glMatch[2],
+            prNumber: parseInt(glMatch[3], 10),
+        };
     }
 
     return null;

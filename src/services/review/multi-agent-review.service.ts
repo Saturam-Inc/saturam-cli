@@ -3,7 +3,12 @@ import { getLogger } from "log4js";
 import { join } from "path";
 import { Service } from "typedi";
 import { PullRequestInfo } from "../../integrations/scm/scm.model";
-import { getAuditMessages, getExtractFindingsMessages, getReviewerMessages, getSecondAuditMessages } from "../../prompts/review.prompt";
+import {
+    getAuditMessages,
+    getExtractFindingsMessages,
+    getReviewerMessages,
+    getSecondAuditMessages,
+} from "../../prompts/review.prompt";
 import { WorkingDirectory } from "../../utils/working-directory";
 import { LlmService } from "../llm-service";
 import { AuditResult, FindingParser } from "./finding-parser.service";
@@ -98,7 +103,11 @@ export class MultiAgentReviewService {
         await rm(artifactsDir, { recursive: true, force: true });
     }
 
-    private async runReviewer(context: ReviewContext, approach: "architecture" | "data-flow", temperature: number): Promise<string> {
+    private async runReviewer(
+        context: ReviewContext,
+        approach: "architecture" | "data-flow",
+        temperature: number,
+    ): Promise<string> {
         const { system, user } = getReviewerMessages({
             prNumber: context.prNumber,
             prTitle: context.pr.title,
