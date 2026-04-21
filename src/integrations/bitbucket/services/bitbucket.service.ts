@@ -61,7 +61,7 @@ export class BitbucketService {
         }
 
         throw new Error(
-            "No Bitbucket credentials found. Set BITBUCKET_TOKEN env var, or run 'sateng init' to configure.",
+            "No Bitbucket credentials found. Set BITBUCKET_TOKEN env var, or run 'sat-cli init' to configure.",
         );
     }
 

@@ -30,7 +30,7 @@ export class Cli {
             writeErr: (msg) => logger.error(msg),
         });
         this.program
-            .name("sateng")
+            .name("sat-cli")
             .version("1.0.0")
             .description("Saturam Engineering CLI")
             .option("-d, --debug", "Enable debug logging")

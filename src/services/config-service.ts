@@ -224,7 +224,7 @@ export class ConfigService {
         }
 
         throw new Error(
-            `No API key found for ${provider}. Set ${envVar}, run 'sateng init', or add it to ${this.getPersonalConfigPath()}.`,
+            `No API key found for ${provider}. Set ${envVar}, run 'sat-cli init', or add it to ${this.getPersonalConfigPath()}.`,
         );
     }
 
@@ -248,7 +248,7 @@ export class ConfigService {
         try {
             return execSync("gh auth token", { encoding: "utf8" }).trim();
         } catch {
-            throw new Error("No GitHub token found. Set GITHUB_TOKEN, run 'sateng init', or run 'gh auth login'.");
+            throw new Error("No GitHub token found. Set GITHUB_TOKEN, run 'sat-cli init', or run 'gh auth login'.");
         }
     }
 

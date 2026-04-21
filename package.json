@@ -1,9 +1,13 @@
 {
     "name": "saturam-cli",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "Saturam Engineering CLI",
     "main": "built/entrypoints/main.js",
-    "files": ["built", "bin", "skills"],
+    "files": [
+        "built",
+        "bin",
+        "skills"
+    ],
     "bin": {
         "sat-cli": "./bin/cli.js"
     },
@@ -21,7 +25,9 @@
         "fix:lint": "eslint --fix .",
         "fix:format": "prettier --write ."
     },
-    "keywords": ["cli"],
+    "keywords": [
+        "cli"
+    ],
     "author": "Saturam",
     "license": "UNLICENSED",
     "devDependencies": {

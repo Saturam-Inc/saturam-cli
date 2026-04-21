@@ -122,7 +122,7 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         logger.info("\n--- Configuration saved ---");
         logger.info(`Config file: ${this.config.getPersonalConfigPath()}`);
         this.printCurrentConfig(config);
-        logger.info("\nRun 'sateng review' to try it out!");
+        logger.info("\nRun 'sat-cli review' to try it out!");
     }
 
     private async fullSetup(existing: PersonalConfiguration): Promise<PersonalConfiguration> {
@@ -284,7 +284,7 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
             .map(([k]) => k as AIProvider);
 
         if (configuredProviders.length === 0) {
-            logger.info("No providers configured. Run 'sateng init' to set up providers first.");
+            logger.info("No providers configured. Run 'sat-cli init' to set up providers first.");
             return;
         }
 
