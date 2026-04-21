@@ -43,6 +43,11 @@ const INPUTS = [
         description: "Inline ticket context, or path to a file with ticket requirements",
         schema: z.string().optional(),
     },
+    {
+        name: "self",
+        description: "Self-review mode: display results in terminal only, do not post to GitHub/Bitbucket",
+        schema: z.boolean().optional(),
+    },
 ] as const;
 
 @Service()
@@ -102,35 +107,39 @@ export class ReviewCommand implements TypedCommand<typeof INPUTS> {
         }
 
         // Phase 4: Show audit
-        if (!autoMode) {
-            const auditMd = this.multiAgent.findingParser.formatAuditMarkdown(audit, prNumber);
+        const auditMd = this.multiAgent.findingParser.formatAuditMarkdown(audit, prNumber);
+        if (!autoMode || inputs.self) {
             logger.info("\n--- Audit Review ---\n");
             logger.info(auditMd);
             logger.info("\n--- End Audit ---\n");
         }
 
-        // Phase 5: Post decision
-        let shouldPost = false;
-        if (autoMode) {
-            shouldPost = !!inputs.post;
-        } else if (inputs.post) {
-            shouldPost = await confirm({
-                message: `Post ${audit.findings.length} inline comment(s) to ${scm.provider}?`,
-                default: true,
-            });
+        // Phase 5: Post decision (skip entirely in self-review mode)
+        if (inputs.self) {
+            logger.info("Self-review complete. Results displayed above (not posted).");
         } else {
-            shouldPost = await confirm({
-                message: `Post this review as ${audit.findings.length} inline comment(s) on ${scm.provider}?`,
-                default: false,
-            });
-        }
+            let shouldPost = false;
+            if (autoMode) {
+                shouldPost = !!inputs.post;
+            } else if (inputs.post) {
+                shouldPost = await confirm({
+                    message: `Post ${audit.findings.length} inline comment(s) to ${scm.provider}?`,
+                    default: true,
+                });
+            } else {
+                shouldPost = await confirm({
+                    message: `Post this review as ${audit.findings.length} inline comment(s) on ${scm.provider}?`,
+                    default: false,
+                });
+            }
 
-        if (shouldPost) {
-            await this.postReview(scm, owner, repo, prNumber, audit, rawDiff);
-        } else if (!autoMode) {
-            logger.info(`Review not posted. Artifacts at: ${result.artifactsDir}`);
-        } else {
-            logger.info(this.multiAgent.findingParser.formatAuditMarkdown(audit, prNumber));
+            if (shouldPost) {
+                await this.postReview(scm, owner, repo, prNumber, audit, rawDiff);
+            } else if (!autoMode) {
+                logger.info(`Review not posted. Artifacts at: ${result.artifactsDir}`);
+            } else {
+                logger.info(auditMd);
+            }
         }
 
         // Phase 6: Cleanup

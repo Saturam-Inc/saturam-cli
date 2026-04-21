@@ -1,10 +1,11 @@
 {
-    "name": "@saturam/saturam-cli",
+    "name": "saturam-cli",
     "version": "1.0.0",
     "description": "Saturam Engineering CLI",
     "main": "built/entrypoints/main.js",
+    "files": ["built", "bin", "skills"],
     "bin": {
-        "sateng": "./bin/cli.js"
+        "sat-cli": "./bin/cli.js"
     },
     "packageManager": "pnpm@9.14.2",
     "engines": {
