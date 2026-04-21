@@ -65,7 +65,6 @@ export class GitHubService {
 
     public async findPullRequestByBranch(owner: string, repo: string, branch: string): Promise<number | null> {
         const headers = await this.getHeaders();
-        console.log(`URL is:${GITHUB_API_BASE_URL}/repos/${owner}/${repo}/pulls?head=${owner}:${branch}&state=open`);
         const response = await fetch(
             `${GITHUB_API_BASE_URL}/repos/${owner}/${repo}/pulls?head=${owner}:${branch}&state=open`,
             { headers },
