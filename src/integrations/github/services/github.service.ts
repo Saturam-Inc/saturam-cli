@@ -43,10 +43,7 @@ export class GitHubService {
 
     public async getPullRequestFiles(owner: string, repo: string, prNumber: number): Promise<PullRequestFile[]> {
         const headers = await this.getHeaders();
-        const files: PullRequestFile[] = [];
-        let page = 1;
-
-        while (true) {
+        const fetchPage = async (page: number): Promise<PullRequestFile[]> => {
             const response = await fetch(
                 `${GITHUB_API_BASE_URL}/repos/${owner}/${repo}/pulls/${prNumber}/files?per_page=100&page=${page}`,
                 { headers },
@@ -55,12 +52,10 @@ export class GitHubService {
                 throw new Error(`Failed to fetch PR files: ${response.status}`);
             }
             const batch = (await response.json()) as PullRequestFile[];
-            files.push(...batch);
-            if (batch.length < 100) break;
-            page++;
-        }
+            return batch.length < 100 ? batch : [...batch, ...(await fetchPage(page + 1))];
+        };
 
-        return files;
+        return fetchPage(1);
     }
 
     public async findPullRequestByBranch(owner: string, repo: string, branch: string): Promise<number | null> {

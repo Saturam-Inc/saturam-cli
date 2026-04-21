@@ -76,25 +76,28 @@ export class MultiAgentReviewService {
         const rawJson = await this.extractFindings(rawAudit, context.diff);
         await writeFile(join(artifactsDir, `${base}-findings.json`), rawJson, "utf8");
 
-        let audit = this.findingParser.parseJsonFindings(rawJson, rawAudit, context.diff);
-        logger.info(`  Findings: ${audit.findings.length}, Verdict: ${audit.verdict}`);
+        const initialAudit = this.findingParser.parseJsonFindings(rawJson, rawAudit, context.diff);
+        logger.info(`  Findings: ${initialAudit.findings.length}, Verdict: ${initialAudit.verdict}`);
 
         // --- Phase 3: Second Audit (large PRs only) ---
-        if (this.shouldRunSecondAudit(context)) {
-            logger.info("Phase 3: Large PR — running 2 second-round auditors...");
-            const [rawSecondA, rawSecondB] = await Promise.all([
-                this.runSecondAuditor(context, rawAudit, TEMP_SECOND_AUDITOR_A),
-                this.runSecondAuditor(context, rawAudit, TEMP_SECOND_AUDITOR_B),
-            ]);
+        const audit = this.shouldRunSecondAudit(context)
+            ? await (async () => {
+                logger.info("Phase 3: Large PR — running 2 second-round auditors...");
+                const [rawSecondA, rawSecondB] = await Promise.all([
+                    this.runSecondAuditor(context, rawAudit, TEMP_SECOND_AUDITOR_A),
+                    this.runSecondAuditor(context, rawAudit, TEMP_SECOND_AUDITOR_B),
+                ]);
 
-            await Promise.all([
-                writeFile(join(artifactsDir, `${base}-audit-2a.md`), rawSecondA, "utf8"),
-                writeFile(join(artifactsDir, `${base}-audit-2b.md`), rawSecondB, "utf8"),
-            ]);
+                await Promise.all([
+                    writeFile(join(artifactsDir, `${base}-audit-2a.md`), rawSecondA, "utf8"),
+                    writeFile(join(artifactsDir, `${base}-audit-2b.md`), rawSecondB, "utf8"),
+                ]);
 
-            audit = this.findingParser.applySecondAuditCorrections(audit, [rawSecondA, rawSecondB]);
-            logger.info(`  After corrections: ${audit.findings.length} finding(s)`);
-        }
+                const corrected = this.findingParser.applySecondAuditCorrections(initialAudit, [rawSecondA, rawSecondB]);
+                logger.info(`  After corrections: ${corrected.findings.length} finding(s)`);
+                return corrected;
+            })()
+            : initialAudit;
 
         return { audit, artifactsDir };
     }

@@ -9,12 +9,7 @@ type ServiceIdentifier<T = unknown> = new (...args: any[]) => T;
 
 export async function getContainer(cwd: string, commandClasses: ServiceIdentifier<TypedCommand>[]) {
     const cliFolder = process.cwd();
-    let repoRoot = cwd;
-    try {
-        repoRoot = await GitService.getRepoRootByCwd(cwd);
-    } catch {
-        // default to cwd
-    }
+    const repoRoot = await GitService.getRepoRootByCwd(cwd).catch(() => cwd);
 
     const directory = new WorkingDirectory(cwd, cliFolder, repoRoot);
     const container = Container.of(randomUUID());

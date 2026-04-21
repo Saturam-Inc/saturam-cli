@@ -59,7 +59,7 @@ export class GitLabService {
     }
 
     public async findMergeRequestByBranch(namespace: string, repo: string, branch: string): Promise<number | null> {
-        let baseUrl = await this.getBaseUrl();
+        const baseUrl = await this.getBaseUrl();
         const headers = await this.getHeaders();
         const projectId = this.encodeProjectId(namespace, repo);
 

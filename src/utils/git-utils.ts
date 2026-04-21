@@ -25,17 +25,15 @@ export const VENDORED_CODE_PATTERNS = ["vendor/**", "third_party/**", "node_modu
 export function parseDiffByFile(rawDiff: string): Record<string, string> {
     const chunks: Record<string, string> = {};
     const diffRegex = /^diff --git a\/(.+?) b\//gm;
-    let match: RegExpExecArray | null;
-    const positions: { file: string; start: number }[] = [];
+    const positions = [...rawDiff.matchAll(diffRegex)].map((match) => ({
+        file: match[1],
+        start: match.index!,
+    }));
 
-    while ((match = diffRegex.exec(rawDiff)) !== null) {
-        positions.push({ file: match[1], start: match.index });
-    }
-
-    for (let i = 0; i < positions.length; i++) {
+    positions.forEach((pos, i) => {
         const end = i + 1 < positions.length ? positions[i + 1].start : rawDiff.length;
-        chunks[positions[i].file] = rawDiff.slice(positions[i].start, end);
-    }
+        chunks[pos.file] = rawDiff.slice(pos.start, end);
+    });
 
     return chunks;
 }

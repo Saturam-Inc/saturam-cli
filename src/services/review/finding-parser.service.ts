@@ -50,11 +50,7 @@ export class FindingParser {
         for (const item of parsed) {
             if (!item.file || !item.code) continue;
 
-            // Strip leading + prefix if present (some models include the diff prefix)
-            let code = item.code;
-            if (code.startsWith("+")) {
-                code = code.slice(1);
-            }
+            const code = item.code.startsWith("+") ? item.code.slice(1) : item.code;
 
             // Find the exact line in the diff
             const line = this.findCodeInDiff(code, item.file, diffData);
@@ -73,10 +69,11 @@ export class FindingParser {
             });
         }
 
-        // Extract verdict from raw audit
-        let verdict = "unknown";
-        if (/reject|block|do not merge|request.changes/i.test(rawAudit)) verdict = "request_changes";
-        else if (/approve|lgtm|looks good/i.test(rawAudit)) verdict = "approve";
+        const verdict = /reject|block|do not merge|request.changes/i.test(rawAudit)
+            ? "request_changes"
+            : /approve|lgtm|looks good/i.test(rawAudit)
+                ? "approve"
+                : "unknown";
 
         return {
             summary: "",
@@ -104,44 +101,35 @@ export class FindingParser {
             // Not pure JSON, search for arrays in the text
         }
 
-        // Find all [ ... ] blocks, take the last one that parses as valid JSON
-        let lastValid: any[] | null = null;
-        let searchFrom = 0;
+        const findMatchingBracket = (text: string, start: number): number =>
+            text.slice(start).split("").reduce(
+                (state: { depth: number; result: number }, ch, offset) => {
+                    if (state.result !== -1) return state;
+                    const depth = ch === "[" ? state.depth + 1 : ch === "]" ? state.depth - 1 : state.depth;
+                    return depth === 0 ? { depth, result: start + offset } : { depth, result: -1 };
+                },
+                { depth: 0, result: -1 },
+            ).result;
 
-        while (true) {
-            const start = text.indexOf("[", searchFrom);
-            if (start === -1) break;
-
-            // Find the matching closing bracket
-            let depth = 0;
-            let end = -1;
-            for (let i = start; i < text.length; i++) {
-                if (text[i] === "[") depth++;
-                else if (text[i] === "]") {
-                    depth--;
-                    if (depth === 0) {
-                        end = i;
-                        break;
-                    }
-                }
-            }
-
-            if (end === -1) break;
-
-            const candidate = text.slice(start, end + 1);
+        const tryParseArray = (candidate: string): any[] | null => {
             try {
                 const parsed = JSON.parse(candidate);
-                if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].file) {
-                    lastValid = parsed;
-                }
-            } catch {
-                // Not valid JSON, continue searching
-            }
+                if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].file) return parsed;
+            } catch { /* not valid JSON */ }
+            return null;
+        };
 
-            searchFrom = end + 1;
-        }
+        const collectArrays = (text: string, from: number, results: any[][]): any[][] => {
+            const start = text.indexOf("[", from);
+            if (start === -1) return results;
+            const end = findMatchingBracket(text, start);
+            if (end === -1) return results;
+            const parsed = tryParseArray(text.slice(start, end + 1));
+            return collectArrays(text, end + 1, parsed ? [...results, parsed] : results);
+        };
 
-        return lastValid;
+        const validArrays = collectArrays(text, 0, []);
+        return validArrays.length > 0 ? validArrays[validArrays.length - 1] : null;
     }
 
     /**
@@ -160,15 +148,16 @@ export class FindingParser {
         const diffData = parseDiff(diff);
         const findings = this.extractFindings(raw, diffData);
 
-        let summary = "";
         const summaryMatch = raw.match(
             /(?:executive summary|summary|conclusion)[:\s]*\n+([\s\S]*?)(?=\n#{1,3}\s|\n\*\*|\n---)/i,
         );
-        if (summaryMatch) summary = summaryMatch[1].trim().split("\n\n")[0];
+        const summary = summaryMatch ? summaryMatch[1].trim().split("\n\n")[0] : "";
 
-        let verdict = "unknown";
-        if (/reject|block|do not merge/i.test(raw)) verdict = "request_changes";
-        else if (/approve|lgtm|looks good/i.test(raw)) verdict = "approve";
+        const verdict = /reject|block|do not merge/i.test(raw)
+            ? "request_changes"
+            : /approve|lgtm|looks good/i.test(raw)
+                ? "approve"
+                : "unknown";
 
         const invalidated: string[] = [];
         const invSection = raw.match(/#{1,3}\s*Invalidated[\s\S]*?(?=\n#{1,3}\s|\n---|\$)/i);
@@ -299,15 +288,7 @@ export class FindingParser {
 
         // For each code ref, find in addition lines
         for (const code of codeRefs) {
-            let bestMatch: { file: string; dl: DiffLine } | null = null;
-            let bestScore = 0;
-
-            for (const { file, dl } of additionLines) {
-                if (dl.content.includes(code) && code.length > bestScore) {
-                    bestScore = code.length;
-                    bestMatch = { file, dl };
-                }
-            }
+            const bestMatch = additionLines.find(({ dl }) => dl.content.includes(code));
 
             if (!bestMatch) continue;
 
@@ -342,18 +323,8 @@ export class FindingParser {
      * Returns the line number of the first addition line that contains the code.
      */
     private findCodeInDiff(code: string, file: string, diffData: Map<string, FileDiff>): number | null {
-        // Try exact file match first
-        let fileDiff = diffData.get(file);
-
-        // Try partial match (file path might be relative vs full)
-        if (!fileDiff) {
-            for (const [path, fd] of diffData) {
-                if (path.endsWith(file) || file.endsWith(path)) {
-                    fileDiff = fd;
-                    break;
-                }
-            }
-        }
+        const fileDiff = diffData.get(file)
+            ?? [...diffData.entries()].find(([path]) => path.endsWith(file) || file.endsWith(path))?.[1];
 
         if (!fileDiff) return null;
 

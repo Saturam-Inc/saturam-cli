@@ -124,20 +124,17 @@ export class ReviewCommand implements TypedCommand<typeof INPUTS> {
         if (inputs.self) {
             logger.info("Self-review complete. Results displayed above (not posted).");
         } else {
-            let shouldPost = false;
-            if (autoMode) {
-                shouldPost = !!inputs.post;
-            } else if (inputs.post) {
-                shouldPost = await confirm({
-                    message: `Post ${audit.findings.length} inline comment(s) to ${scm.provider}?`,
-                    default: true,
-                });
-            } else {
-                shouldPost = await confirm({
-                    message: `Post this review as ${audit.findings.length} inline comment(s) on ${scm.provider}?`,
-                    default: false,
-                });
-            }
+            const shouldPost = autoMode
+                ? !!inputs.post
+                : inputs.post
+                    ? await confirm({
+                        message: `Post ${audit.findings.length} inline comment(s) to ${scm.provider}?`,
+                        default: true,
+                    })
+                    : await confirm({
+                        message: `Post this review as ${audit.findings.length} inline comment(s) on ${scm.provider}?`,
+                        default: false,
+                    });
 
             if (shouldPost) {
                 await this.postReview(scm, owner, repo, prNumber, audit, rawDiff);

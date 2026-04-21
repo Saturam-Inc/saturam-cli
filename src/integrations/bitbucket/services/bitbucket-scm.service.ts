@@ -12,12 +12,8 @@ export class BitbucketSCMService implements SCMService {
         const pr = await this.bitbucket.getPullRequest(workspace, repo, prNumber);
         const diffstat = await this.bitbucket.getDiffStat(workspace, repo, prNumber);
 
-        let additions = 0;
-        let deletions = 0;
-        for (const file of diffstat.values) {
-            additions += file.lines_added;
-            deletions += file.lines_removed;
-        }
+        const additions = diffstat.values.reduce((sum: number, file: any) => sum + file.lines_added, 0);
+        const deletions = diffstat.values.reduce((sum: number, file: any) => sum + file.lines_removed, 0);
 
         return {
             number: pr.id,

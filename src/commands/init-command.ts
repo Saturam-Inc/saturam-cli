@@ -224,25 +224,28 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         });
 
         // Detect locally available models
-        let detectedModels: string[] = [];
-        try {
-            const response = await fetch(`${baseUrl}/api/tags`);
-            if (response.ok) {
-                const data = (await response.json()) as { models?: Array<{ name: string }> };
-                detectedModels = (data.models ?? []).map((m) => m.name);
-                if (detectedModels.length > 0) {
-                    logger.info(
-                        `Ollama is running with ${detectedModels.length} model(s): ${detectedModels.join(", ")}`,
-                    );
-                } else {
-                    logger.warn(
-                        "Ollama is running but no models are pulled. Run 'ollama pull <model>' to download one.",
-                    );
+        const detectedModels: string[] = await (async () => {
+            try {
+                const response = await fetch(`${baseUrl}/api/tags`);
+                if (response.ok) {
+                    const data = (await response.json()) as { models?: Array<{ name: string }> };
+                    const models = (data.models ?? []).map((m) => m.name);
+                    if (models.length > 0) {
+                        logger.info(
+                            `Ollama is running with ${models.length} model(s): ${models.join(", ")}`,
+                        );
+                    } else {
+                        logger.warn(
+                            "Ollama is running but no models are pulled. Run 'ollama pull <model>' to download one.",
+                        );
+                    }
+                    return models;
                 }
+            } catch {
+                logger.warn(`Warning: Could not connect to Ollama at ${baseUrl}. Make sure it's running.`);
             }
-        } catch {
-            logger.warn(`Warning: Could not connect to Ollama at ${baseUrl}. Make sure it's running.`);
-        }
+            return [];
+        })();
 
         return {
             enabled: true,
@@ -413,104 +416,17 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
             ],
         });
 
-        let githubToken = existing.githubToken;
-        let bitbucketToken = existing.bitbucketToken;
-        let bitbucketUsername = existing.bitbucketUsername;
-        let gitlabToken = existing.gitlabToken;
-        let gitlabInstanceUrl = existing.gitlabInstanceUrl;
+        const githubToken = platforms.includes("github")
+            ? await this.resolveGitHubToken(existing)
+            : existing.githubToken;
 
-        // GitHub
-        if (platforms.includes("github")) {
-            const hasGhCli = this.checkGhCli();
-            if (hasGhCli) {
-                logger.info("GitHub CLI detected — will use 'gh auth token' for GitHub access.");
-                const overrideAnyway = await confirm({
-                    message: "Store a separate token in config anyway?",
-                    default: false,
-                });
-                if (overrideAnyway) {
-                    githubToken = await password({ message: "GitHub personal access token:", mask: "*" });
-                }
-            } else if (process.env.GITHUB_TOKEN) {
-                logger.info("Found GITHUB_TOKEN in environment.");
-                const save = await confirm({ message: "Save it to config?", default: false });
-                if (save) githubToken = process.env.GITHUB_TOKEN;
-            } else {
-                githubToken = await password({
-                    message: `GitHub personal access token${existing.githubToken ? " (press enter to keep existing)" : ""}:`,
-                    mask: "*",
-                });
-                if (!githubToken && existing.githubToken) githubToken = existing.githubToken;
-            }
-        }
+        const { bitbucketToken, bitbucketUsername } = platforms.includes("bitbucket")
+            ? await this.resolveBitbucketAuth(existing)
+            : { bitbucketToken: existing.bitbucketToken, bitbucketUsername: existing.bitbucketUsername };
 
-        // Bitbucket
-        if (platforms.includes("bitbucket")) {
-            logger.info("\nBitbucket supports two auth methods:");
-            const authMethod = await select({
-                message: "How do you want to authenticate with Bitbucket?",
-                choices: [
-                    { name: "App password (username + app password)", value: "app_password" as const },
-                    { name: "Repository/OAuth access token", value: "token" as const },
-                ],
-            });
-
-            if (authMethod === "app_password") {
-                bitbucketUsername = await input({
-                    message: "Bitbucket username:",
-                    default: existing.bitbucketUsername ?? process.env.BITBUCKET_USERNAME ?? "",
-                });
-
-                const existingAppPw = existing.bitbucketToken;
-                if (process.env.BITBUCKET_APP_PASSWORD) {
-                    logger.info("Found BITBUCKET_APP_PASSWORD in environment.");
-                    const save = await confirm({ message: "Save it to config?", default: true });
-                    if (save) bitbucketToken = process.env.BITBUCKET_APP_PASSWORD;
-                } else {
-                    bitbucketToken = await password({
-                        message: `Bitbucket app password${existingAppPw ? " (press enter to keep existing)" : ""}:`,
-                        mask: "*",
-                    });
-                    if (!bitbucketToken && existingAppPw) bitbucketToken = existingAppPw;
-                }
-            } else {
-                if (process.env.BITBUCKET_TOKEN) {
-                    logger.info("Found BITBUCKET_TOKEN in environment.");
-                    const save = await confirm({ message: "Save it to config?", default: true });
-                    if (save) bitbucketToken = process.env.BITBUCKET_TOKEN;
-                } else {
-                    const existingToken = existing.bitbucketToken;
-                    bitbucketToken = await password({
-                        message: `Bitbucket access token${existingToken ? " (press enter to keep existing)" : ""}:`,
-                        mask: "*",
-                    });
-                    if (!bitbucketToken && existingToken) bitbucketToken = existingToken;
-                }
-                bitbucketUsername = undefined;
-            }
-        }
-
-        // GitLab
-        if (platforms.includes("gitlab")) {
-            const envToken = process.env.GITLAB_TOKEN;
-            if (envToken) {
-                logger.info("Found GITLAB_TOKEN in environment.");
-                const save = await confirm({ message: "Save it to config?", default: false });
-                if (save) gitlabToken = envToken;
-            } else {
-                gitlabToken = await password({
-                    message: `GitLab personal access token${existing.gitlabToken ? " (press enter to keep existing)" : ""}:`,
-                    mask: "*",
-                });
-                if (!gitlabToken && existing.gitlabToken) gitlabToken = existing.gitlabToken;
-            }
-
-            const instanceUrl = await input({
-                message: "GitLab instance URL (leave empty for gitlab.com):",
-                default: existing.gitlabInstanceUrl ?? "",
-            });
-            gitlabInstanceUrl = instanceUrl.trim() || undefined;
-        }
+        const { gitlabToken, gitlabInstanceUrl } = platforms.includes("gitlab")
+            ? await this.resolveGitLabAuth(existing)
+            : { gitlabToken: existing.gitlabToken, gitlabInstanceUrl: existing.gitlabInstanceUrl };
 
         return {
             githubToken: githubToken || undefined,
@@ -519,6 +435,113 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
             gitlabToken: gitlabToken || undefined,
             gitlabInstanceUrl: gitlabInstanceUrl || undefined,
         };
+    }
+
+    private async resolveGitHubToken(existing: PersonalConfiguration): Promise<string | undefined> {
+        const hasGhCli = this.checkGhCli();
+        if (hasGhCli) {
+            logger.info("GitHub CLI detected — will use 'gh auth token' for GitHub access.");
+            const overrideAnyway = await confirm({
+                message: "Store a separate token in config anyway?",
+                default: false,
+            });
+            if (overrideAnyway) {
+                return await password({ message: "GitHub personal access token:", mask: "*" });
+            }
+            return existing.githubToken;
+        }
+        if (process.env.GITHUB_TOKEN) {
+            logger.info("Found GITHUB_TOKEN in environment.");
+            const save = await confirm({ message: "Save it to config?", default: false });
+            if (save) return process.env.GITHUB_TOKEN;
+            return existing.githubToken;
+        }
+        const token = await password({
+            message: `GitHub personal access token${existing.githubToken ? " (press enter to keep existing)" : ""}:`,
+            mask: "*",
+        });
+        return token || existing.githubToken;
+    }
+
+    private async resolveBitbucketAuth(
+        existing: PersonalConfiguration,
+    ): Promise<{ bitbucketToken: string | undefined; bitbucketUsername: string | undefined }> {
+        logger.info("\nBitbucket supports two auth methods:");
+        const authMethod = await select({
+            message: "How do you want to authenticate with Bitbucket?",
+            choices: [
+                { name: "App password (username + app password)", value: "app_password" as const },
+                { name: "Repository/OAuth access token", value: "token" as const },
+            ],
+        });
+
+        if (authMethod === "app_password") {
+            const bitbucketUsername = await input({
+                message: "Bitbucket username:",
+                default: existing.bitbucketUsername ?? process.env.BITBUCKET_USERNAME ?? "",
+            });
+
+            const existingAppPw = existing.bitbucketToken;
+            const bitbucketToken = await (async (): Promise<string | undefined> => {
+                if (process.env.BITBUCKET_APP_PASSWORD) {
+                    logger.info("Found BITBUCKET_APP_PASSWORD in environment.");
+                    const save = await confirm({ message: "Save it to config?", default: true });
+                    if (save) return process.env.BITBUCKET_APP_PASSWORD;
+                    return existingAppPw;
+                }
+                const pw = await password({
+                    message: `Bitbucket app password${existingAppPw ? " (press enter to keep existing)" : ""}:`,
+                    mask: "*",
+                });
+                return pw || existingAppPw;
+            })();
+
+            return { bitbucketToken, bitbucketUsername };
+        }
+
+        const bitbucketToken = await (async (): Promise<string | undefined> => {
+            if (process.env.BITBUCKET_TOKEN) {
+                logger.info("Found BITBUCKET_TOKEN in environment.");
+                const save = await confirm({ message: "Save it to config?", default: true });
+                if (save) return process.env.BITBUCKET_TOKEN;
+                return existing.bitbucketToken;
+            }
+            const existingToken = existing.bitbucketToken;
+            const token = await password({
+                message: `Bitbucket access token${existingToken ? " (press enter to keep existing)" : ""}:`,
+                mask: "*",
+            });
+            return token || existingToken;
+        })();
+
+        return { bitbucketToken, bitbucketUsername: undefined };
+    }
+
+    private async resolveGitLabAuth(
+        existing: PersonalConfiguration,
+    ): Promise<{ gitlabToken: string | undefined; gitlabInstanceUrl: string | undefined }> {
+        const envToken = process.env.GITLAB_TOKEN;
+        const gitlabToken = await (async (): Promise<string | undefined> => {
+            if (envToken) {
+                logger.info("Found GITLAB_TOKEN in environment.");
+                const save = await confirm({ message: "Save it to config?", default: false });
+                if (save) return envToken;
+                return existing.gitlabToken;
+            }
+            const token = await password({
+                message: `GitLab personal access token${existing.gitlabToken ? " (press enter to keep existing)" : ""}:`,
+                mask: "*",
+            });
+            return token || existing.gitlabToken;
+        })();
+
+        const instanceUrl = await input({
+            message: "GitLab instance URL (leave empty for gitlab.com):",
+            default: existing.gitlabInstanceUrl ?? "",
+        });
+        const gitlabInstanceUrl = instanceUrl.trim() || undefined;
+
+        return { gitlabToken, gitlabInstanceUrl };
     }
 
     private checkGhCli(): boolean {

@@ -32,23 +32,21 @@ export function parseDiff(diff: string): Map<string, FileDiff> {
 
         const diffLines: DiffLine[] = [];
         const hunkRegex = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@.*$/gm;
-        let hunkMatch: RegExpExecArray | null;
         const hunkPositions: Array<{ newStart: number; startIdx: number }> = [];
 
-        while ((hunkMatch = hunkRegex.exec(section)) !== null) {
+        for (const hunkMatch of section.matchAll(hunkRegex)) {
             hunkPositions.push({
                 newStart: parseInt(hunkMatch[1], 10),
-                startIdx: hunkMatch.index + hunkMatch[0].length,
+                startIdx: hunkMatch.index! + hunkMatch[0].length,
             });
         }
 
-        for (let i = 0; i < hunkPositions.length; i++) {
-            const hp = hunkPositions[i];
+        hunkPositions.forEach((hp, i) => {
             const endIdx = i + 1 < hunkPositions.length ? hunkPositions[i + 1].startIdx : section.length;
             const hunkBody = section.slice(hp.startIdx, endIdx);
             const lines = hunkBody.split("\n");
 
-            let newLineNum = hp.newStart;
+            const tracked = { newLineNum: hp.newStart };
 
             for (const line of lines) {
                 if (line.startsWith("@@") || line.startsWith("diff ")) break;
@@ -57,19 +55,19 @@ export function parseDiff(diff: string): Map<string, FileDiff> {
                 if (line.startsWith("-")) {
                     diffLines.push({ newLineNumber: -1, content: line.slice(1), type: "delete" });
                 } else if (line.startsWith("+")) {
-                    diffLines.push({ newLineNumber: newLineNum, content: line.slice(1), type: "add" });
-                    newLineNum++;
+                    diffLines.push({ newLineNumber: tracked.newLineNum, content: line.slice(1), type: "add" });
+                    tracked.newLineNum++;
                 } else if (line.length > 0) {
                     // Context line (starts with space)
                     diffLines.push({
-                        newLineNumber: newLineNum,
+                        newLineNumber: tracked.newLineNum,
                         content: line.startsWith(" ") ? line.slice(1) : line,
                         type: "context",
                     });
-                    newLineNum++;
+                    tracked.newLineNum++;
                 }
             }
-        }
+        });
 
         result.set(file, { file, lines: diffLines });
     }
@@ -104,33 +102,22 @@ export function findLineInDiff(
     const codePatterns = extractCodePatterns(searchText);
 
     // Score each commentable line
-    let bestLine: DiffLine | null = null;
-    let bestScore = 0;
+    const { bestLine, bestScore } = commentableLines.reduce(
+        (best, dl) => {
+            const content = dl.content.toLowerCase().trim();
+            if (!content) return best;
 
-    for (const dl of commentableLines) {
-        const content = dl.content.toLowerCase().trim();
-        if (!content) continue;
+            const baseScore = codePatterns.reduce(
+                (sum, pattern) => (content.includes(pattern) ? sum + pattern.length : sum),
+                0,
+            );
 
-        let score = 0;
+            const score = dl.type === "add" && baseScore > 0 ? baseScore + 2 : baseScore;
 
-        // Check each code pattern against this line
-        for (const pattern of codePatterns) {
-            if (content.includes(pattern)) {
-                // Longer matches are worth more
-                score += pattern.length;
-            }
-        }
-
-        // Bonus for addition lines (new code is more likely to have issues)
-        if (dl.type === "add" && score > 0) {
-            score += 2;
-        }
-
-        if (score > bestScore) {
-            bestScore = score;
-            bestLine = dl;
-        }
-    }
+            return score > best.bestScore ? { bestLine: dl, bestScore: score } : best;
+        },
+        { bestLine: null as DiffLine | null, bestScore: 0 },
+    );
 
     // If we found a good match, use it
     if (bestLine && bestScore > 0) {

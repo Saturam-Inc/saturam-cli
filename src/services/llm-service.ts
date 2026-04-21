@@ -76,12 +76,9 @@ export class LlmService {
         const region = providerConfig?.awsRegion ?? process.env.AWS_REGION ?? "us-east-1";
         const profile = providerConfig?.awsProfile ?? process.env.AWS_PROFILE;
 
-        let credentials: any;
-        if (profile) {
-            const { fromIni } = await import("@aws-sdk/credential-providers");
-            credentials = fromIni({ profile });
-        }
-        // If no profile, SDK falls back to default credential chain (env vars, instance role, etc.)
+        const credentials: any = profile
+            ? (await import("@aws-sdk/credential-providers")).fromIni({ profile })
+            : undefined;
 
         return new ChatBedrockConverse({
             model,
@@ -152,9 +149,10 @@ export class LlmService {
         const baseUrl = providerConfig?.baseUrl ?? process.env.OLLAMA_BASE_URL ?? DEFAULT_OLLAMA_BASE_URL;
 
         // For custom models, use the customModel name from config
-        let modelName = model as string;
+        const modelName = model === LLMModel.OLLAMA_CUSTOM
+            ? (providerConfig?.customModel ?? "llama3")
+            : model as string;
         if (model === LLMModel.OLLAMA_CUSTOM) {
-            modelName = providerConfig?.customModel ?? "llama3";
             logger.info(`Using custom Ollama model: ${modelName}`);
         }
 
