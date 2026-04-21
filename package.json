@@ -1,0 +1,61 @@
+{
+    "name": "@saturam/saturam-cli",
+    "version": "1.0.0",
+    "description": "Saturam Engineering CLI",
+    "main": "built/entrypoints/main.js",
+    "bin": {
+        "sateng": "./bin/cli.js"
+    },
+    "packageManager": "pnpm@9.14.2",
+    "engines": {
+        "node": ">=22"
+    },
+    "scripts": {
+        "start": "node ./built/entrypoints/main.js",
+        "start:dev": "ts-node ./src/entrypoints/main.ts",
+        "build": "tsc --outDir built",
+        "format": "prettier --write .",
+        "check": "tsc --noEmit",
+        "test": "jest --runInBand",
+        "fix:lint": "eslint --fix .",
+        "fix:format": "prettier --write ."
+    },
+    "keywords": ["cli"],
+    "author": "Saturam",
+    "license": "UNLICENSED",
+    "devDependencies": {
+        "@types/node": "^22.0.0",
+        "@swc/core": "^1.6.5",
+        "typescript": "5.9.3",
+        "ts-node": "^10.9.2",
+        "prettier": "^3.3.0",
+        "jest": "^29.7.0",
+        "ts-jest": "^29.2.5",
+        "@types/jest": "^29.5.14"
+    },
+    "dependencies": {
+        "@aws-sdk/credential-providers": "^3.687.0",
+        "@langchain/anthropic": "^0.3.22",
+        "@langchain/aws": "^0.1.11",
+        "@langchain/community": "^0.3.0",
+        "@langchain/core": "^0.3.58",
+        "@langchain/google-genai": "^0.2.10",
+        "@langchain/ollama": "^0.2.0",
+        "@langchain/openai": "^0.5.13",
+        "@langchain/xai": "^0.0.3",
+        "@octokit/rest": "^21.1.0",
+        "commander": "12.1.0",
+        "cross-spawn": "^7.0.5",
+        "dotenv": "^16.4.5",
+        "log4js": "^6.9.1",
+        "reflect-metadata": "^0.2.2",
+        "typedi": "^0.10.0",
+        "which": "^5.0.0",
+        "zod": "^3.23.8",
+        "ignore": "^7.0.5",
+        "marked": "^15.0.0",
+        "marked-terminal": "^7.1.0",
+        "@inquirer/prompts": "^7.0.1",
+        "yoctocolors-cjs": "^2.1.2"
+    }
+}

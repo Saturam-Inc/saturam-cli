@@ -1,0 +1,10 @@
+node_modules/
+built/
+*.js.map
+*.d.ts
+!src/**/*.d.ts
+.env
+.env.*
+logs/
+*.log
+.DS_Store

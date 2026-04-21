@@ -1,0 +1,27 @@
+{
+    "include": ["**/*.d.ts", "src/**/*.ts"],
+    "exclude": ["build", "built", "node_modules"],
+    "ts-node": {
+        "swc": true,
+        "compilerOptions": {
+            "target": "ES2022"
+        }
+    },
+    "compilerOptions": {
+        "target": "ES2022",
+        "module": "commonjs",
+        "lib": ["ES2022"],
+        "outDir": "built",
+        "rootDir": "src",
+        "strict": true,
+        "esModuleInterop": true,
+        "skipLibCheck": true,
+        "forceConsistentCasingInFileNames": true,
+        "resolveJsonModule": true,
+        "declaration": true,
+        "declarationMap": true,
+        "sourceMap": true,
+        "emitDecoratorMetadata": true,
+        "experimentalDecorators": true
+    }
+}
