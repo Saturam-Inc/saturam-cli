@@ -44,6 +44,8 @@ export const PersonalConfigurationSchema = z.object({
     githubToken: z.string().optional().describe("GitHub personal access token"),
     bitbucketToken: z.string().optional().describe("Bitbucket access token or app password"),
     bitbucketUsername: z.string().optional().describe("Bitbucket username (for app password auth)"),
+    gitlabToken: z.string().optional().describe("GitLab personal access token"),
+    gitlabInstanceUrl: z.string().optional().describe("GitLab instance base URL (for self-hosted, e.g. https://gitlab.example.com)"),
 });
 
 export type PersonalConfiguration = z.infer<typeof PersonalConfigurationSchema>;
@@ -250,6 +252,27 @@ export class ConfigService {
         } catch {
             throw new Error("No GitHub token found. Set GITHUB_TOKEN, run 'sat-cli init', or run 'gh auth login'.");
         }
+    }
+
+    // --- GitLab Token ---
+
+    public async getGitLabToken(): Promise<string> {
+        // 1. Env var
+        if (process.env.GITLAB_TOKEN) return process.env.GITLAB_TOKEN;
+
+        // 2. Personal config
+        const config = await this.loadPersonalConfig();
+        if (config.gitlabToken) return config.gitlabToken;
+
+        throw new Error("No GitLab token found. Set GITLAB_TOKEN, run 'sat-cli init', or add it to your config.");
+    }
+
+    // --- GitLab Instance URL ---
+
+    public async getGitLabInstanceUrl(): Promise<string | undefined> {
+        if (process.env.GITLAB_INSTANCE_URL) return process.env.GITLAB_INSTANCE_URL;
+        const config = await this.loadPersonalConfig();
+        return config.gitlabInstanceUrl;
     }
 
     // --- Static helpers ---

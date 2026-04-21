@@ -3,6 +3,8 @@ import { Service } from "typedi";
 import { GitService } from "../github/services/git.service";
 import { GitHubSCMService } from "../github/services/github-scm.service";
 import { BitbucketSCMService } from "../bitbucket/services/bitbucket-scm.service";
+import { GitLabSCMService } from "../gitlab/services/gitlab-scm.service";
+import { ConfigService } from "../../services/config-service";
 import { SCMProvider, SCMService } from "./scm.model";
 
 const logger = getLogger("SCMFactory");
@@ -13,10 +15,23 @@ export class SCMFactory {
         private readonly git: GitService,
         private readonly github: GitHubSCMService,
         private readonly bitbucket: BitbucketSCMService,
+        private readonly gitlab: GitLabSCMService,
+        private readonly config: ConfigService,
     ) {}
 
     public async detect(): Promise<SCMService> {
         const remoteUrl = await this.git.getRemoteUrl();
+
+        // Check configured self-hosted GitLab instance URL before falling back to static detection
+        const instanceUrl = await this.config.getGitLabInstanceUrl();
+        if (instanceUrl) {
+            const instanceHost = new URL(instanceUrl).hostname;
+            if (remoteUrl.includes(instanceHost)) {
+                logger.debug(`Detected GitLab (self-hosted: ${instanceHost}) from remote: ${remoteUrl}`);
+                return this.gitlab;
+            }
+        }
+
         const provider = SCMFactory.detectProvider(remoteUrl);
         logger.debug(`Detected SCM provider: ${provider} from remote: ${remoteUrl}`);
 
@@ -25,6 +40,8 @@ export class SCMFactory {
                 return this.github;
             case SCMProvider.BITBUCKET:
                 return this.bitbucket;
+            case SCMProvider.GITLAB:
+                return this.gitlab;
         }
     }
 
@@ -34,6 +51,8 @@ export class SCMFactory {
                 return this.github;
             case SCMProvider.BITBUCKET:
                 return this.bitbucket;
+            case SCMProvider.GITLAB:
+                return this.gitlab;
         }
     }
 
@@ -46,7 +65,7 @@ export class SCMFactory {
         }
         // Default to GitHub for unknown remotes
         throw new Error(
-            `Could not detect SCM provider from remote URL: ${remoteUrl}. Supported: GitHub, Bitbucket.`,
+            `Could not detect SCM provider from remote URL: ${remoteUrl}. Supported: GitHub, Bitbucket, GitLab.`,
         );
     }
 
