@@ -87,7 +87,10 @@ export class ReviewCommand implements TypedCommand<typeof INPUTS> {
         }
 
         logger.info(`PR: ${pr.title}`);
-        logger.info(`  +${pr.additions}/-${pr.deletions}, ${pr.changedFiles} files`);
+        const statsLine = pr.additions === 0 && pr.deletions === 0
+            ? `${pr.changedFiles} files changed`
+            : `+${pr.additions}/-${pr.deletions}, ${pr.changedFiles} files`;
+        logger.info(`  ${statsLine}`);
         logger.info("");
 
         // Phases 1-3: Multi-agent review

@@ -14,8 +14,6 @@ export interface GitLabMR {
     web_url: string;
     author: { username: string; name: string };
     changes_count: string | null;
-    additions: number;
-    deletions: number;
     diff_refs: GitLabDiffRefs;
 }
 

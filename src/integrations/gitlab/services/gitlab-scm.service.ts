@@ -21,8 +21,8 @@ export class GitLabSCMService implements SCMService {
             url: mr.web_url,
             author: mr.author.username,
             changedFiles: mr.changes_count !== null ? parseInt(mr.changes_count, 10) : 0,
-            additions: mr.additions,
-            deletions: mr.deletions,
+            additions: 0,
+            deletions: 0,
         };
     }
 
