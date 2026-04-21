@@ -1,6 +1,12 @@
 import { z } from "zod";
 
-export type InputType = z.ZodString | z.ZodNumber | z.ZodBoolean | z.ZodEnum<any> | z.ZodOptional<any> | z.ZodDefault<any>;
+export type InputType =
+    | z.ZodString
+    | z.ZodNumber
+    | z.ZodBoolean
+    | z.ZodEnum<any>
+    | z.ZodOptional<any>
+    | z.ZodDefault<any>;
 
 export type InputDefinition<T extends InputType = InputType> = {
     name: string;

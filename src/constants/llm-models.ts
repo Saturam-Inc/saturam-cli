@@ -53,7 +53,13 @@ export enum LLMModel {
     OLLAMA_CUSTOM = "ollama-custom",
 }
 
-export type ChatModel = ChatAnthropic | ChatBedrockConverse | ChatGoogleGenerativeAI | ChatOpenAI | ChatXAI | ChatOllama;
+export type ChatModel =
+    | ChatAnthropic
+    | ChatBedrockConverse
+    | ChatGoogleGenerativeAI
+    | ChatOpenAI
+    | ChatXAI
+    | ChatOllama;
 
 export const MODEL_CONTEXT_WINDOWS: Record<LLMModel, number> = {
     // Anthropic
@@ -99,17 +105,38 @@ export function getModelContextWindow(model: LLMModel): number {
 
 // --- Model groupings ---
 
-const ANTHROPIC_MODELS = new Set([LLMModel.ANTHROPIC_CLAUDE_4_SONNET, LLMModel.ANTHROPIC_CLAUDE_4_5_SONNET, LLMModel.ANTHROPIC_CLAUDE_4_6_OPUS]);
-const BEDROCK_MODELS = new Set([LLMModel.BEDROCK_CLAUDE_4_SONNET, LLMModel.BEDROCK_CLAUDE_4_5_SONNET, LLMModel.BEDROCK_CLAUDE_4_6_OPUS, LLMModel.BEDROCK_NOVA_PRO]);
-const GEMINI_MODELS = new Set([LLMModel.GEMINI_2_5_PRO, LLMModel.GEMINI_2_5_FLASH, LLMModel.GEMINI_3_PRO, LLMModel.GEMINI_3_FLASH]);
+const ANTHROPIC_MODELS = new Set([
+    LLMModel.ANTHROPIC_CLAUDE_4_SONNET,
+    LLMModel.ANTHROPIC_CLAUDE_4_5_SONNET,
+    LLMModel.ANTHROPIC_CLAUDE_4_6_OPUS,
+]);
+const BEDROCK_MODELS = new Set([
+    LLMModel.BEDROCK_CLAUDE_4_SONNET,
+    LLMModel.BEDROCK_CLAUDE_4_5_SONNET,
+    LLMModel.BEDROCK_CLAUDE_4_6_OPUS,
+    LLMModel.BEDROCK_NOVA_PRO,
+]);
+const GEMINI_MODELS = new Set([
+    LLMModel.GEMINI_2_5_PRO,
+    LLMModel.GEMINI_2_5_FLASH,
+    LLMModel.GEMINI_3_PRO,
+    LLMModel.GEMINI_3_FLASH,
+]);
 const OPENAI_MODELS = new Set([LLMModel.OPENAI_GPT_4O, LLMModel.OPENAI_GPT_5, LLMModel.OPENAI_O3_MINI]);
 const GROK_MODELS = new Set([LLMModel.GROK_2]);
 const DEEPSEEK_MODELS = new Set([LLMModel.DEEPSEEK_CHAT, LLMModel.DEEPSEEK_REASONER]);
 const OLLAMA_MODELS = new Set([
-    LLMModel.OLLAMA_LLAMA3, LLMModel.OLLAMA_LLAMA3_1, LLMModel.OLLAMA_LLAMA3_2,
-    LLMModel.OLLAMA_CODELLAMA, LLMModel.OLLAMA_MISTRAL, LLMModel.OLLAMA_MIXTRAL,
-    LLMModel.OLLAMA_DEEPSEEK_CODER_V2, LLMModel.OLLAMA_QWEN2_5_CODER,
-    LLMModel.OLLAMA_GEMMA2, LLMModel.OLLAMA_PHI3, LLMModel.OLLAMA_CUSTOM,
+    LLMModel.OLLAMA_LLAMA3,
+    LLMModel.OLLAMA_LLAMA3_1,
+    LLMModel.OLLAMA_LLAMA3_2,
+    LLMModel.OLLAMA_CODELLAMA,
+    LLMModel.OLLAMA_MISTRAL,
+    LLMModel.OLLAMA_MIXTRAL,
+    LLMModel.OLLAMA_DEEPSEEK_CODER_V2,
+    LLMModel.OLLAMA_QWEN2_5_CODER,
+    LLMModel.OLLAMA_GEMMA2,
+    LLMModel.OLLAMA_PHI3,
+    LLMModel.OLLAMA_CUSTOM,
 ]);
 
 export function isAnthropicModel(model: LLMModel): boolean {

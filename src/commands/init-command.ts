@@ -92,7 +92,7 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
                     { name: "Reconfigure everything", value: "reconfigure" },
                     { name: "Add/update an AI provider", value: "add" },
                     { name: "Change default model", value: "model" },
-                    { name: "Configure SCM platforms (GitHub/Bitbucket)", value: "scm" },
+                    { name: "Configure SCM platforms (GitHub/Bitbucket/GitLab)", value: "scm" },
                     { name: "Exit", value: "exit" },
                 ],
             });
@@ -144,15 +144,16 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         }
 
         // Step 3: Select default provider and model
-        const defaultProvider = selectedProviders.length === 1
-            ? selectedProviders[0]
-            : await select({
-                  message: "Which provider should be the default?",
-                  choices: selectedProviders.map((p) => ({
-                      name: PROVIDER_DISPLAY_NAMES[p],
-                      value: p,
-                  })),
-              });
+        const defaultProvider =
+            selectedProviders.length === 1
+                ? selectedProviders[0]
+                : await select({
+                      message: "Which provider should be the default?",
+                      choices: selectedProviders.map((p) => ({
+                          name: PROVIDER_DISPLAY_NAMES[p],
+                          value: p,
+                      })),
+                  });
 
         const defaultModel = await this.promptForModel(defaultProvider, providers[defaultProvider]);
 
@@ -230,9 +231,13 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
                 const data = (await response.json()) as { models?: Array<{ name: string }> };
                 detectedModels = (data.models ?? []).map((m) => m.name);
                 if (detectedModels.length > 0) {
-                    logger.info(`Ollama is running with ${detectedModels.length} model(s): ${detectedModels.join(", ")}`);
+                    logger.info(
+                        `Ollama is running with ${detectedModels.length} model(s): ${detectedModels.join(", ")}`,
+                    );
                 } else {
-                    logger.warn("Ollama is running but no models are pulled. Run 'ollama pull <model>' to download one.");
+                    logger.warn(
+                        "Ollama is running but no models are pulled. Run 'ollama pull <model>' to download one.",
+                    );
                 }
             }
         } catch {
@@ -288,15 +293,16 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
             return;
         }
 
-        const provider = configuredProviders.length === 1
-            ? configuredProviders[0]
-            : await select({
-                  message: "Select the provider:",
-                  choices: configuredProviders.map((p) => ({
-                      name: PROVIDER_DISPLAY_NAMES[p],
-                      value: p,
-                  })),
-              });
+        const provider =
+            configuredProviders.length === 1
+                ? configuredProviders[0]
+                : await select({
+                      message: "Select the provider:",
+                      choices: configuredProviders.map((p) => ({
+                          name: PROVIDER_DISPLAY_NAMES[p],
+                          value: p,
+                      })),
+                  });
 
         const model = await this.promptForModel(provider, existing.providers?.[provider]);
         const config: PersonalConfiguration = {
@@ -390,7 +396,12 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
 
     private async configureSCMPlatforms(
         existing: PersonalConfiguration,
-    ): Promise<Pick<PersonalConfiguration, "githubToken" | "bitbucketToken" | "bitbucketUsername">> {
+    ): Promise<
+        Pick<
+            PersonalConfiguration,
+            "githubToken" | "bitbucketToken" | "bitbucketUsername" | "gitlabToken" | "gitlabInstanceUrl"
+        >
+    > {
         logger.info("\n--- Source Control Platforms ---");
 
         const platforms = await checkbox({
@@ -398,12 +409,15 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
             choices: [
                 { name: "GitHub", value: "github" as const, checked: !!existing.githubToken || this.checkGhCli() },
                 { name: "Bitbucket", value: "bitbucket" as const, checked: !!existing.bitbucketToken },
+                { name: "GitLab", value: "gitlab" as const, checked: !!existing.gitlabToken },
             ],
         });
 
         let githubToken = existing.githubToken;
         let bitbucketToken = existing.bitbucketToken;
         let bitbucketUsername = existing.bitbucketUsername;
+        let gitlabToken = existing.gitlabToken;
+        let gitlabInstanceUrl = existing.gitlabInstanceUrl;
 
         // GitHub
         if (platforms.includes("github")) {
@@ -476,10 +490,34 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
             }
         }
 
+        // GitLab
+        if (platforms.includes("gitlab")) {
+            const envToken = process.env.GITLAB_TOKEN;
+            if (envToken) {
+                logger.info("Found GITLAB_TOKEN in environment.");
+                const save = await confirm({ message: "Save it to config?", default: false });
+                if (save) gitlabToken = envToken;
+            } else {
+                gitlabToken = await password({
+                    message: `GitLab personal access token${existing.gitlabToken ? " (press enter to keep existing)" : ""}:`,
+                    mask: "*",
+                });
+                if (!gitlabToken && existing.gitlabToken) gitlabToken = existing.gitlabToken;
+            }
+
+            const instanceUrl = await input({
+                message: "GitLab instance URL (leave empty for gitlab.com):",
+                default: existing.gitlabInstanceUrl ?? "",
+            });
+            gitlabInstanceUrl = instanceUrl.trim() || undefined;
+        }
+
         return {
             githubToken: githubToken || undefined,
             bitbucketToken: bitbucketToken || undefined,
             bitbucketUsername: bitbucketUsername || undefined,
+            gitlabToken: gitlabToken || undefined,
+            gitlabInstanceUrl: gitlabInstanceUrl || undefined,
         };
     }
 
@@ -504,7 +542,9 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
                 if (provider === AIProvider.BEDROCK) {
                     const profile = val.awsProfile ?? "default chain";
                     const region = val.awsRegion ?? "us-east-1";
-                    logger.info(`    ${PROVIDER_DISPLAY_NAMES[provider]}: profile=${profile}, region=${region}${isDefault}`);
+                    logger.info(
+                        `    ${PROVIDER_DISPLAY_NAMES[provider]}: profile=${profile}, region=${region}${isDefault}`,
+                    );
                 } else if (provider === AIProvider.OLLAMA) {
                     const url = val.baseUrl ?? "http://localhost:11434";
                     const custom = val.customModel ? `, custom=${val.customModel}` : "";
@@ -526,8 +566,14 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
             scmPlatforms.push("GitHub (via gh CLI)");
         }
         if (config.bitbucketToken) {
-            const authType = config.bitbucketUsername ? `app password, user: ${config.bitbucketUsername}` : "access token";
+            const authType = config.bitbucketUsername
+                ? `app password, user: ${config.bitbucketUsername}`
+                : "access token";
             scmPlatforms.push(`Bitbucket (${authType})`);
+        }
+        if (config.gitlabToken) {
+            const instance = config.gitlabInstanceUrl ?? "gitlab.com";
+            scmPlatforms.push(`GitLab (token: ${config.gitlabToken.slice(0, 8)}..., instance: ${instance})`);
         }
         if (scmPlatforms.length > 0) {
             logger.info("  SCM platforms:");

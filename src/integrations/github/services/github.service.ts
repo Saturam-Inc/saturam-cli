@@ -73,6 +73,7 @@ export class GitHubService {
             throw new Error(`Failed to search PRs for branch ${branch}: ${response.status}`);
         }
         const prs = (await response.json()) as Array<{ number: number }>;
+        console.log(`PR length: ${prs.length}`);
         return prs.length > 0 ? prs[0].number : null;
     }
 
@@ -105,14 +106,11 @@ export class GitHubService {
         }));
 
         // Step 1: Create pending review with inline comments (omit `event` to keep pending)
-        const createResponse = await fetch(
-            `${GITHUB_API_BASE_URL}/repos/${owner}/${repo}/pulls/${prNumber}/reviews`,
-            {
-                method: "POST",
-                headers: { ...headers, "Content-Type": "application/json" },
-                body: JSON.stringify({ commit_id: headSha, comments: apiComments }),
-            },
-        );
+        const createResponse = await fetch(`${GITHUB_API_BASE_URL}/repos/${owner}/${repo}/pulls/${prNumber}/reviews`, {
+            method: "POST",
+            headers: { ...headers, "Content-Type": "application/json" },
+            body: JSON.stringify({ commit_id: headSha, comments: apiComments }),
+        });
 
         if (!createResponse.ok) {
             const err = await createResponse.text();
@@ -137,12 +135,7 @@ export class GitHubService {
         }
     }
 
-    public async postReviewComment(
-        owner: string,
-        repo: string,
-        prNumber: number,
-        body: string,
-    ): Promise<void> {
+    public async postReviewComment(owner: string, repo: string, prNumber: number, body: string): Promise<void> {
         const headers = await this.getHeaders();
         const response = await fetch(`${GITHUB_API_BASE_URL}/repos/${owner}/${repo}/pulls/${prNumber}/reviews`, {
             method: "POST",

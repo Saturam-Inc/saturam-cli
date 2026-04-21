@@ -93,7 +93,10 @@ export class FindingParser {
      */
     private extractLastJsonArray(text: string): any[] | null {
         // First try: entire response is valid JSON
-        const stripped = text.replace(/^```(?:json)?\s*\n?/m, "").replace(/\n?```\s*$/m, "").trim();
+        const stripped = text
+            .replace(/^```(?:json)?\s*\n?/m, "")
+            .replace(/\n?```\s*$/m, "")
+            .trim();
         try {
             const parsed = JSON.parse(stripped);
             if (Array.isArray(parsed)) return parsed;
@@ -158,7 +161,9 @@ export class FindingParser {
         const findings = this.extractFindings(raw, diffData);
 
         let summary = "";
-        const summaryMatch = raw.match(/(?:executive summary|summary|conclusion)[:\s]*\n+([\s\S]*?)(?=\n#{1,3}\s|\n\*\*|\n---)/i);
+        const summaryMatch = raw.match(
+            /(?:executive summary|summary|conclusion)[:\s]*\n+([\s\S]*?)(?=\n#{1,3}\s|\n\*\*|\n---)/i,
+        );
         if (summaryMatch) summary = summaryMatch[1].trim().split("\n\n")[0];
 
         let verdict = "unknown";
@@ -185,9 +190,10 @@ export class FindingParser {
             const incorrectMatches = raw.matchAll(/❌\s*\*\*INCORRECT\*\*[:\s]*(?:\*\*)?(.+?)(?:\*\*)?[\s\n]/gi);
             for (const m of incorrectMatches) {
                 const title = m[1].trim();
-                const idx = findings.findIndex((f) =>
-                    f.title.toLowerCase().includes(title.toLowerCase()) ||
-                    title.toLowerCase().includes(f.title.toLowerCase()),
+                const idx = findings.findIndex(
+                    (f) =>
+                        f.title.toLowerCase().includes(title.toLowerCase()) ||
+                        title.toLowerCase().includes(f.title.toLowerCase()),
                 );
                 if (idx >= 0) findings.splice(idx, 1);
             }
@@ -388,12 +394,22 @@ export class FindingParser {
 
         // First sentence
         const firstLine = block.trim().split("\n")[0];
-        return firstLine.replace(/^[-*#\s]+/, "").replace(/\*\*/g, "").slice(0, 100);
+        return firstLine
+            .replace(/^[-*#\s]+/, "")
+            .replace(/\*\*/g, "")
+            .slice(0, 100);
     }
 
     private extractDescription(block: string): string {
-        const issue = block.match(/\*\*(?:Issue|Description)\*\*\s*:\s*\n?([\s\S]+?)(?=\n\s*\*\*(?:Risk|Impact|Fix|Recommendation|Line|File)|$)/i);
-        if (issue) return issue[1].trim().replace(/```[\s\S]*?```/g, "").trim().split("\n\n")[0];
+        const issue = block.match(
+            /\*\*(?:Issue|Description)\*\*\s*:\s*\n?([\s\S]+?)(?=\n\s*\*\*(?:Risk|Impact|Fix|Recommendation|Line|File)|$)/i,
+        );
+        if (issue)
+            return issue[1]
+                .trim()
+                .replace(/```[\s\S]*?```/g, "")
+                .trim()
+                .split("\n\n")[0];
 
         // Strip metadata, keep substance
         return block
@@ -408,7 +424,9 @@ export class FindingParser {
     }
 
     private extractRecommendation(block: string): string | undefined {
-        const match = block.match(/\*\*(?:Fix Required|Fix|Recommendation|Suggestion|Required next steps)\*\*\s*:\s*([\s\S]+?)(?=\n\s*\*\*|\n\n|$)/i);
+        const match = block.match(
+            /\*\*(?:Fix Required|Fix|Recommendation|Suggestion|Required next steps)\*\*\s*:\s*([\s\S]+?)(?=\n\s*\*\*|\n\n|$)/i,
+        );
         return match ? match[1].trim() : undefined;
     }
 
@@ -424,7 +442,12 @@ export class FindingParser {
         if (finding.body) return finding.body;
 
         // Fallback: build from parts
-        const label: Record<Severity, string> = { critical: "**Critical:**", major: "**Major:**", minor: "**Minor:**", nit: "**Nit:**" };
+        const label: Record<Severity, string> = {
+            critical: "**Critical:**",
+            major: "**Major:**",
+            minor: "**Minor:**",
+            nit: "**Nit:**",
+        };
         const title = finding.title ? ` **${finding.title}**\n\n` : " ";
         const rec = finding.recommendation ? `\n\n**Recommendation:** ${finding.recommendation}` : "";
         return `${label[finding.severity]}${title}${finding.description}${rec}`;
@@ -435,7 +458,10 @@ export class FindingParser {
         const counts: Record<Severity, number> = { critical: 0, major: 0, minor: 0, nit: 0 };
         for (const f of findings) counts[f.severity]++;
 
-        const rows = findings.map((f, i) => `| ${i + 1} | ${f.severity.charAt(0).toUpperCase() + f.severity.slice(1)} | \`${f.file}:${f.line}\` | ${(f.title || f.description).split("\n")[0].slice(0, 100)} |`);
+        const rows = findings.map(
+            (f, i) =>
+                `| ${i + 1} | ${f.severity.charAt(0).toUpperCase() + f.severity.slice(1)} | \`${f.file}:${f.line}\` | ${(f.title || f.description).split("\n")[0].slice(0, 100)} |`,
+        );
 
         const emoji = verdict === "approve" ? "✅" : verdict.includes("change") || verdict === "block" ? "🚫" : "⚠️";
 
@@ -457,14 +483,26 @@ ${rows.join("\n")}`;
 
         const sections: string[] = [];
         const emoji = audit.verdict === "approve" ? "✅" : "🚫";
-        sections.push(`# Audit — PR #${prNumber}\n\n${audit.summary}\n\n**Verdict:** ${emoji} ${audit.verdict.toUpperCase()}`);
+        sections.push(
+            `# Audit — PR #${prNumber}\n\n${audit.summary}\n\n**Verdict:** ${emoji} ${audit.verdict.toUpperCase()}`,
+        );
 
         const grouped: Record<Severity, Finding[]> = { critical: [], major: [], minor: [], nit: [] };
         for (const f of audit.findings) grouped[f.severity].push(f);
 
-        for (const [sev, label] of [["critical", "Critical"], ["major", "Major"], ["minor", "Minor"], ["nit", "Nits"]] as const) {
+        for (const [sev, label] of [
+            ["critical", "Critical"],
+            ["major", "Major"],
+            ["minor", "Minor"],
+            ["nit", "Nits"],
+        ] as const) {
             if (grouped[sev].length > 0) {
-                sections.push(`## ${label}\n` + grouped[sev].map((f) => `- **${f.title}** — \`${f.file}:${f.line}\`\n  ${f.description}\n`).join("\n"));
+                sections.push(
+                    `## ${label}\n` +
+                        grouped[sev]
+                            .map((f) => `- **${f.title}** — \`${f.file}:${f.line}\`\n  ${f.description}\n`)
+                            .join("\n"),
+                );
             }
         }
 
@@ -473,7 +511,20 @@ ${rows.join("\n")}`;
 }
 
 const SKIP_IDENTIFIERS = new Set([
-    "must_fix", "should_fix", "could_lead", "does_not", "must_be", "can_be",
-    "will_be", "has_been", "would_be", "could_be", "might_be", "may_be",
-    "not_be", "line_number", "file_path", "review_criteria",
+    "must_fix",
+    "should_fix",
+    "could_lead",
+    "does_not",
+    "must_be",
+    "can_be",
+    "will_be",
+    "has_been",
+    "would_be",
+    "could_be",
+    "might_be",
+    "may_be",
+    "not_be",
+    "line_number",
+    "file_path",
+    "review_criteria",
 ]);

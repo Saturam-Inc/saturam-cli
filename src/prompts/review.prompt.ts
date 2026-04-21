@@ -165,11 +165,10 @@ Produce your audit.`);
  * Prompt for the second-round audit (Phase 3, large PRs only).
  * Two subagents independently verify each finding in the round-1 audit.
  */
-export function getSecondAuditMessages(params: {
-    prNumber: number;
-    audit: string;
-    diff: string;
-}): { system: SystemMessage; user: HumanMessage } {
+export function getSecondAuditMessages(params: { prNumber: number; audit: string; diff: string }): {
+    system: SystemMessage;
+    user: HumanMessage;
+} {
     const system = new SystemMessage(
         `You are a second-round auditor verifying the accuracy of a first-round audit.
 
@@ -205,10 +204,10 @@ Verify each finding.`);
  * This is the final step — takes the human-readable audit and converts it to
  * machine-readable JSON with exact code snippets for line resolution.
  */
-export function getExtractFindingsMessages(params: {
-    audit: string;
-    diff: string;
-}): { system: SystemMessage; user: HumanMessage } {
+export function getExtractFindingsMessages(params: { audit: string; diff: string }): {
+    system: SystemMessage;
+    user: HumanMessage;
+} {
     const system = new SystemMessage(
         `You are a JSON extraction tool. You take a code review and a diff, and return ONLY a JSON array. No explanation, no markdown, no text before or after — just the JSON array.
 

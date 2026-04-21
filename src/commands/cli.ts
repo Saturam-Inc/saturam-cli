@@ -71,7 +71,10 @@ export class Cli {
                     const a = new Argument(input.name, input.description);
                     a.required = false;
                     cmd.addArgument(a);
-                } else if (input.schema instanceof z.ZodBoolean || (input.schema instanceof z.ZodOptional && input.schema._def.innerType instanceof z.ZodBoolean)) {
+                } else if (
+                    input.schema instanceof z.ZodBoolean ||
+                    (input.schema instanceof z.ZodOptional && input.schema._def.innerType instanceof z.ZodBoolean)
+                ) {
                     cmd.option(`--${input.name}`, input.description);
                     cmd.option(`--no-${input.name}`, input.description);
                 } else {

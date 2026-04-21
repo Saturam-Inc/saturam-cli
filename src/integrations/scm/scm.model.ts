@@ -1,6 +1,7 @@
 export enum SCMProvider {
     GITHUB = "github",
     BITBUCKET = "bitbucket",
+    GITLAB = "gitlab",
 }
 
 export interface PullRequestInfo {
