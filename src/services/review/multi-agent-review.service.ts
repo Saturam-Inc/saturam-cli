@@ -82,21 +82,24 @@ export class MultiAgentReviewService {
         // --- Phase 3: Second Audit (large PRs only) ---
         const audit = this.shouldRunSecondAudit(context)
             ? await (async () => {
-                logger.info("Phase 3: Large PR — running 2 second-round auditors...");
-                const [rawSecondA, rawSecondB] = await Promise.all([
-                    this.runSecondAuditor(context, rawAudit, TEMP_SECOND_AUDITOR_A),
-                    this.runSecondAuditor(context, rawAudit, TEMP_SECOND_AUDITOR_B),
-                ]);
+                  logger.info("Phase 3: Large PR — running 2 second-round auditors...");
+                  const [rawSecondA, rawSecondB] = await Promise.all([
+                      this.runSecondAuditor(context, rawAudit, TEMP_SECOND_AUDITOR_A),
+                      this.runSecondAuditor(context, rawAudit, TEMP_SECOND_AUDITOR_B),
+                  ]);
 
-                await Promise.all([
-                    writeFile(join(artifactsDir, `${base}-audit-2a.md`), rawSecondA, "utf8"),
-                    writeFile(join(artifactsDir, `${base}-audit-2b.md`), rawSecondB, "utf8"),
-                ]);
+                  await Promise.all([
+                      writeFile(join(artifactsDir, `${base}-audit-2a.md`), rawSecondA, "utf8"),
+                      writeFile(join(artifactsDir, `${base}-audit-2b.md`), rawSecondB, "utf8"),
+                  ]);
 
-                const corrected = this.findingParser.applySecondAuditCorrections(initialAudit, [rawSecondA, rawSecondB]);
-                logger.info(`  After corrections: ${corrected.findings.length} finding(s)`);
-                return corrected;
-            })()
+                  const corrected = this.findingParser.applySecondAuditCorrections(initialAudit, [
+                      rawSecondA,
+                      rawSecondB,
+                  ]);
+                  logger.info(`  After corrections: ${corrected.findings.length} finding(s)`);
+                  return corrected;
+              })()
             : initialAudit;
 
         return { audit, artifactsDir };

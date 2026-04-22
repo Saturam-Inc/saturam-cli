@@ -72,8 +72,8 @@ export class FindingParser {
         const verdict = /reject|block|do not merge|request.changes/i.test(rawAudit)
             ? "request_changes"
             : /approve|lgtm|looks good/i.test(rawAudit)
-                ? "approve"
-                : "unknown";
+              ? "approve"
+              : "unknown";
 
         return {
             summary: "",
@@ -102,20 +102,25 @@ export class FindingParser {
         }
 
         const findMatchingBracket = (text: string, start: number): number =>
-            text.slice(start).split("").reduce(
-                (state: { depth: number; result: number }, ch, offset) => {
-                    if (state.result !== -1) return state;
-                    const depth = ch === "[" ? state.depth + 1 : ch === "]" ? state.depth - 1 : state.depth;
-                    return depth === 0 ? { depth, result: start + offset } : { depth, result: -1 };
-                },
-                { depth: 0, result: -1 },
-            ).result;
+            text
+                .slice(start)
+                .split("")
+                .reduce(
+                    (state: { depth: number; result: number }, ch, offset) => {
+                        if (state.result !== -1) return state;
+                        const depth = ch === "[" ? state.depth + 1 : ch === "]" ? state.depth - 1 : state.depth;
+                        return depth === 0 ? { depth, result: start + offset } : { depth, result: -1 };
+                    },
+                    { depth: 0, result: -1 },
+                ).result;
 
         const tryParseArray = (candidate: string): any[] | null => {
             try {
                 const parsed = JSON.parse(candidate);
                 if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].file) return parsed;
-            } catch { /* not valid JSON */ }
+            } catch {
+                /* not valid JSON */
+            }
             return null;
         };
 
@@ -156,8 +161,8 @@ export class FindingParser {
         const verdict = /reject|block|do not merge/i.test(raw)
             ? "request_changes"
             : /approve|lgtm|looks good/i.test(raw)
-                ? "approve"
-                : "unknown";
+              ? "approve"
+              : "unknown";
 
         const invalidated: string[] = [];
         const invSection = raw.match(/#{1,3}\s*Invalidated[\s\S]*?(?=\n#{1,3}\s|\n---|\$)/i);
@@ -323,8 +328,9 @@ export class FindingParser {
      * Returns the line number of the first addition line that contains the code.
      */
     private findCodeInDiff(code: string, file: string, diffData: Map<string, FileDiff>): number | null {
-        const fileDiff = diffData.get(file)
-            ?? [...diffData.entries()].find(([path]) => path.endsWith(file) || file.endsWith(path))?.[1];
+        const fileDiff =
+            diffData.get(file) ??
+            [...diffData.entries()].find(([path]) => path.endsWith(file) || file.endsWith(path))?.[1];
 
         if (!fileDiff) return null;
 

@@ -33,6 +33,7 @@ None.
 ## Summary Verdict
 
 **Request changes** — 3 issues should be fixed:
+
 1. Remove `console.log` (trivial fix)
 2. Add `gitlab.com` to static detection (trivial fix)
 3. Report failed inline comment count to user (minor effort)

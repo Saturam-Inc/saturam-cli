@@ -149,9 +149,8 @@ export class LlmService {
         const baseUrl = providerConfig?.baseUrl ?? process.env.OLLAMA_BASE_URL ?? DEFAULT_OLLAMA_BASE_URL;
 
         // For custom models, use the customModel name from config
-        const modelName = model === LLMModel.OLLAMA_CUSTOM
-            ? (providerConfig?.customModel ?? "llama3")
-            : model as string;
+        const modelName =
+            model === LLMModel.OLLAMA_CUSTOM ? (providerConfig?.customModel ?? "llama3") : (model as string);
         if (model === LLMModel.OLLAMA_CUSTOM) {
             logger.info(`Using custom Ollama model: ${modelName}`);
         }

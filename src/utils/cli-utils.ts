@@ -4,9 +4,10 @@ import { Cli } from "../commands/cli";
 import { configureLogging, shimConsole, waitForLogsToFlush } from "./logging-utils";
 
 async function runCliInner(cwd: string, getContainer: () => Promise<ContainerInstance>): Promise<void> {
-    const args = process.argv.length === 2 && process.env.SATENG_CLI_COMMAND
-        ? [...process.argv, ...process.env.SATENG_CLI_COMMAND.split(" ")]
-        : [...process.argv];
+    const args =
+        process.argv.length === 2 && process.env.SATENG_CLI_COMMAND
+            ? [...process.argv, ...process.env.SATENG_CLI_COMMAND.split(" ")]
+            : [...process.argv];
 
     await configureLogging(args, cwd);
     shimConsole();
