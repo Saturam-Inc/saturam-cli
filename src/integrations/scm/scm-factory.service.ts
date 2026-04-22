@@ -63,7 +63,9 @@ export class SCMFactory {
         if (remoteUrl.includes("bitbucket.org")) {
             return SCMProvider.BITBUCKET;
         }
-        // Default to GitHub for unknown remotes
+        if (remoteUrl.includes("gitlab.com")) {
+            return SCMProvider.GITLAB;
+        }
         throw new Error(
             `Could not detect SCM provider from remote URL: ${remoteUrl}. Supported: GitHub, Bitbucket, GitLab.`,
         );
