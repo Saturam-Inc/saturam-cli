@@ -62,7 +62,6 @@ export class GitLabService {
         const baseUrl = await this.getBaseUrl();
         const headers = await this.getHeaders();
         const projectId = this.encodeProjectId(namespace, repo);
-
         const response = await fetch(
             `${baseUrl}/projects/${projectId}/merge_requests?source_branch=${encodeURIComponent(branch)}&state=opened`,
             { headers },

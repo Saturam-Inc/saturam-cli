@@ -150,6 +150,33 @@ To rebuild after changes:
 pnpm build
 ```
 
+### Running tests
+
+Tests use [Jest](https://jestjs.io/) with `ts-jest` — no build step needed.
+
+```bash
+# Run all tests
+pnpm test
+
+# Run a specific test file
+pnpm test -- tests/github/services/git.service.test.ts
+
+# Run tests matching a name pattern
+pnpm test -- --testNamePattern "GitLab"
+```
+
+**Example output:**
+
+```
+PASS tests/integrations/github/utils/github-url.util.test.ts
+PASS tests/github/services/git.service.test.ts
+
+Test Suites: 2 passed, 2 total
+Tests:       6 passed, 6 total
+```
+
+Test files live under `tests/`, mirroring the `src/` directory structure.
+
 ## Configuration
 
 Configuration is stored in `~/Library/Application Support/sateng/config.json` (macOS) or `~/.config/sateng/config.json` (Linux/Windows). Run `sat-cli init` to set it up interactively.

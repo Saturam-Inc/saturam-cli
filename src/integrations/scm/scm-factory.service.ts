@@ -70,15 +70,6 @@ export class SCMFactory {
     }
 
     public static parseRemoteUrl(remoteUrl: string): { owner: string; repo: string } {
-        // Handles:
-        //   git@github.com:owner/repo.git
-        //   https://github.com/owner/repo.git
-        //   git@bitbucket.org:workspace/repo.git
-        //   https://bitbucket.org/workspace/repo.git
-        const match = remoteUrl.match(/[:/]([^/]+)\/([^/.]+?)(?:\.git)?$/);
-        if (!match) {
-            throw new Error(`Could not parse owner/repo from remote URL: ${remoteUrl}`);
-        }
-        return { owner: match[1], repo: match[2] };
+        return GitService.parseOwnerAndRepo(remoteUrl);
     }
 }
