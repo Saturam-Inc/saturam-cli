@@ -15,10 +15,10 @@ export enum LLMModel {
     ANTHROPIC_CLAUDE_4_5_SONNET = "claude-sonnet-4-5-20250929",
     ANTHROPIC_CLAUDE_4_6_OPUS = "claude-opus-4-6",
 
-    // AWS Bedrock
-    BEDROCK_CLAUDE_4_SONNET = "us.anthropic.claude-sonnet-4-20250514-v1:0",
-    BEDROCK_CLAUDE_4_5_SONNET = "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-    BEDROCK_CLAUDE_4_6_OPUS = "us.anthropic.claude-opus-4-6-v1",
+    // AWS Bedrock — base IDs without region prefix; prefix is applied at runtime
+    BEDROCK_CLAUDE_4_SONNET = "anthropic.claude-sonnet-4-20250514-v1:0",
+    BEDROCK_CLAUDE_4_5_SONNET = "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    BEDROCK_CLAUDE_4_6_OPUS = "anthropic.claude-opus-4-6-v1",
     BEDROCK_NOVA_PRO = "amazon.nova-pro-v1:0",
 
     // Google Gemini
