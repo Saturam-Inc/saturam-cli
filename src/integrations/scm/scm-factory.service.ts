@@ -67,7 +67,7 @@ export class SCMFactory {
             return SCMProvider.GITLAB;
         }
         throw new Error(
-            `Could not detect SCM provider from remote URL: ${remoteUrl}. Supported: GitHub, Bitbucket, GitLab.\nFor self-hosted GitLab, run: sat-cli init and configure your GitLab instance URL.`,
+            `Could not detect SCM provider from remote URL: ${remoteUrl}. Supported: GitHub, Bitbucket, GitLab.`,
         );
     }
 
