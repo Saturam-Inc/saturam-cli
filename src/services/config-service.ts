@@ -33,9 +33,13 @@ export const ProviderConfigSchema = z.object({
 
 export type ProviderConfig = z.infer<typeof ProviderConfigSchema>;
 
+const migrateModelId = (val: unknown) =>
+    typeof val === "string" ? val.replace(/^(us|eu|ap)\./, "") : val;
+const modelField = z.preprocess(migrateModelId, z.nativeEnum(LLMModel).optional());
+
 export const PersonalConfigurationSchema = z.object({
     defaultProvider: z.nativeEnum(AIProvider).optional().describe("Default AI provider"),
-    defaultModel: z.nativeEnum(LLMModel).optional().describe("Default model to use"),
+    defaultModel: modelField.describe("Default model to use"),
     providers: z
         .record(z.nativeEnum(AIProvider), ProviderConfigSchema)
         .optional()
@@ -54,7 +58,7 @@ export const PersonalConfigurationSchema = z.object({
 export type PersonalConfiguration = z.infer<typeof PersonalConfigurationSchema>;
 
 export const ProjectConfigurationSchema = z.object({
-    defaultModel: z.nativeEnum(LLMModel).optional().describe("Default model for this project"),
+    defaultModel: modelField.describe("Default model for this project"),
     defaultProvider: z.nativeEnum(AIProvider).optional().describe("Default provider for this project"),
 });
 
@@ -62,7 +66,7 @@ export type ProjectConfiguration = z.infer<typeof ProjectConfigurationSchema>;
 
 export const SessionConfigurationSchema = z.object({
     debug: z.boolean().optional().default(false).describe("Enable debug logging"),
-    model: z.nativeEnum(LLMModel).optional().describe("The AI model to use"),
+    model: modelField.describe("The AI model to use"),
     quiet: z.boolean().optional().default(false).describe("Suppress output"),
     ci: z.boolean().optional().default(false).describe("Run in CI mode (no interactive prompts)"),
 });
