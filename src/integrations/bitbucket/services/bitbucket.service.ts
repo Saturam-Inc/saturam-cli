@@ -33,7 +33,21 @@ export class BitbucketService {
     constructor(private readonly config: ConfigService) {}
 
     private async getAuthHeaders(): Promise<Record<string, string>> {
-        // 1. Env var: app password (Basic auth)
+        // Bitbucket API tokens (replacing App Passwords since Sep 2025) use Basic auth
+        // with the user's Atlassian account email as the username:
+        //   Authorization: Basic base64(email:api_token)
+        // See: https://support.atlassian.com/bitbucket-cloud/docs/using-api-tokens/
+
+        // 1. Env vars: new API token (email + token → Basic auth)
+        if (process.env.BITBUCKET_TOKEN && process.env.BITBUCKET_EMAIL) {
+            const encoded = Buffer.from(
+                `${process.env.BITBUCKET_EMAIL}:${process.env.BITBUCKET_TOKEN}`,
+            ).toString("base64");
+            return { Authorization: `Basic ${encoded}`, Accept: "application/json" };
+        }
+
+        // 2. Env vars: legacy app password (username + app password → Basic auth)
+        //    Deprecated by Bitbucket Sep 9 2025, disabled Jun 9 2026.
         if (process.env.BITBUCKET_APP_PASSWORD && process.env.BITBUCKET_USERNAME) {
             const encoded = Buffer.from(
                 `${process.env.BITBUCKET_USERNAME}:${process.env.BITBUCKET_APP_PASSWORD}`,
@@ -41,27 +55,27 @@ export class BitbucketService {
             return { Authorization: `Basic ${encoded}`, Accept: "application/json" };
         }
 
-        // 2. Env var: bearer token
-        if (process.env.BITBUCKET_TOKEN) {
-            return { Authorization: `Bearer ${process.env.BITBUCKET_TOKEN}`, Accept: "application/json" };
+        // 3. Personal config: new API token (email + token → Basic auth)
+        const personalConfig = await this.config.loadPersonalConfig();
+        if (personalConfig.bitbucketToken && personalConfig.bitbucketEmail) {
+            const encoded = Buffer.from(
+                `${personalConfig.bitbucketEmail}:${personalConfig.bitbucketToken}`,
+            ).toString("base64");
+            return { Authorization: `Basic ${encoded}`, Accept: "application/json" };
         }
 
-        // 3. Personal config
-        const personalConfig = await this.config.loadPersonalConfig();
+        // 4. Personal config: legacy app password (username + token → Basic auth)
         if (personalConfig.bitbucketToken && personalConfig.bitbucketUsername) {
-            // App password stored in config
             const encoded = Buffer.from(
                 `${personalConfig.bitbucketUsername}:${personalConfig.bitbucketToken}`,
             ).toString("base64");
             return { Authorization: `Basic ${encoded}`, Accept: "application/json" };
         }
-        if (personalConfig.bitbucketToken) {
-            // Access token stored in config
-            return { Authorization: `Bearer ${personalConfig.bitbucketToken}`, Accept: "application/json" };
-        }
 
         throw new Error(
-            "No Bitbucket credentials found. Set BITBUCKET_TOKEN env var, or run 'sat-cli init' to configure.",
+            "No Bitbucket credentials found.\n" +
+            "Set BITBUCKET_EMAIL (your Atlassian account email) and BITBUCKET_TOKEN (your API token),\n" +
+            "or run 'sat-cli init' to configure.",
         );
     }
 

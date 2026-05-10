@@ -402,7 +402,7 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
     ): Promise<
         Pick<
             PersonalConfiguration,
-            "githubToken" | "bitbucketToken" | "bitbucketUsername" | "gitlabToken" | "gitlabInstanceUrl"
+            "githubToken" | "bitbucketToken" | "bitbucketEmail" | "bitbucketUsername" | "gitlabToken" | "gitlabInstanceUrl"
         >
     > {
         logger.info("\n--- Source Control Platforms ---");
@@ -420,9 +420,9 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
             ? await this.resolveGitHubToken(existing)
             : existing.githubToken;
 
-        const { bitbucketToken, bitbucketUsername } = platforms.includes("bitbucket")
+        const { bitbucketToken, bitbucketEmail, bitbucketUsername } = platforms.includes("bitbucket")
             ? await this.resolveBitbucketAuth(existing)
-            : { bitbucketToken: existing.bitbucketToken, bitbucketUsername: existing.bitbucketUsername };
+            : { bitbucketToken: existing.bitbucketToken, bitbucketEmail: existing.bitbucketEmail, bitbucketUsername: existing.bitbucketUsername };
 
         const { gitlabToken, gitlabInstanceUrl } = platforms.includes("gitlab")
             ? await this.resolveGitLabAuth(existing)
@@ -431,6 +431,7 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         return {
             githubToken: githubToken || undefined,
             bitbucketToken: bitbucketToken || undefined,
+            bitbucketEmail: bitbucketEmail || undefined,
             bitbucketUsername: bitbucketUsername || undefined,
             gitlabToken: gitlabToken || undefined,
             gitlabInstanceUrl: gitlabInstanceUrl || undefined,
@@ -465,39 +466,27 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
 
     private async resolveBitbucketAuth(
         existing: PersonalConfiguration,
-    ): Promise<{ bitbucketToken: string | undefined; bitbucketUsername: string | undefined }> {
-        logger.info("\nBitbucket supports two auth methods:");
-        const authMethod = await select({
-            message: "How do you want to authenticate with Bitbucket?",
-            choices: [
-                { name: "App password (username + app password)", value: "app_password" as const },
-                { name: "Repository/OAuth access token", value: "token" as const },
-            ],
-        });
+    ): Promise<{ bitbucketToken: string | undefined; bitbucketEmail: string | undefined; bitbucketUsername: string | undefined }> {
+        logger.info("\nBitbucket API tokens replaced App Passwords as of September 2025.");
+        logger.info("Create one at: Atlassian account → Security → Create and manage API tokens");
+        logger.info("  → Select 'Bitbucket' as the app");
+        logger.info("  → Required scopes: Repositories (Read), Pull requests (Read + Write)");
+        logger.info("Your Atlassian account email is used together with the token for authentication.\n");
 
-        if (authMethod === "app_password") {
-            const bitbucketUsername = await input({
-                message: "Bitbucket username:",
-                default: existing.bitbucketUsername ?? process.env.BITBUCKET_USERNAME ?? "",
+        const bitbucketEmail = await (async (): Promise<string | undefined> => {
+            if (process.env.BITBUCKET_EMAIL) {
+                logger.info("Found BITBUCKET_EMAIL in environment.");
+                const save = await confirm({ message: "Save it to config?", default: true });
+                if (save) return process.env.BITBUCKET_EMAIL;
+                return existing.bitbucketEmail;
+            }
+            const existingEmail = existing.bitbucketEmail;
+            const email = await input({
+                message: `Atlassian account email${existingEmail ? ` (current: ${existingEmail})` : ""}:`,
+                default: existingEmail ?? "",
             });
-
-            const existingAppPw = existing.bitbucketToken;
-            const bitbucketToken = await (async (): Promise<string | undefined> => {
-                if (process.env.BITBUCKET_APP_PASSWORD) {
-                    logger.info("Found BITBUCKET_APP_PASSWORD in environment.");
-                    const save = await confirm({ message: "Save it to config?", default: true });
-                    if (save) return process.env.BITBUCKET_APP_PASSWORD;
-                    return existingAppPw;
-                }
-                const pw = await password({
-                    message: `Bitbucket app password${existingAppPw ? " (press enter to keep existing)" : ""}:`,
-                    mask: "*",
-                });
-                return pw || existingAppPw;
-            })();
-
-            return { bitbucketToken, bitbucketUsername };
-        }
+            return email || existingEmail;
+        })();
 
         const bitbucketToken = await (async (): Promise<string | undefined> => {
             if (process.env.BITBUCKET_TOKEN) {
@@ -508,13 +497,13 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
             }
             const existingToken = existing.bitbucketToken;
             const token = await password({
-                message: `Bitbucket access token${existingToken ? " (press enter to keep existing)" : ""}:`,
+                message: `Bitbucket API token${existingToken ? " (press enter to keep existing)" : ""}:`,
                 mask: "*",
             });
             return token || existingToken;
         })();
 
-        return { bitbucketToken, bitbucketUsername: undefined };
+        return { bitbucketToken, bitbucketEmail, bitbucketUsername: undefined };
     }
 
     private async resolveGitLabAuth(
@@ -589,9 +578,11 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
             scmPlatforms.push("GitHub (via gh CLI)");
         }
         if (config.bitbucketToken) {
-            const authType = config.bitbucketUsername
-                ? `app password, user: ${config.bitbucketUsername}`
-                : "access token";
+            const authType = config.bitbucketEmail
+                ? `API token, email: ${config.bitbucketEmail}`
+                : config.bitbucketUsername
+                  ? `legacy app password, user: ${config.bitbucketUsername}`
+                  : "API token (no email set — run 'sat-cli init' to add email)";
             scmPlatforms.push(`Bitbucket (${authType})`);
         }
         if (config.gitlabToken) {
