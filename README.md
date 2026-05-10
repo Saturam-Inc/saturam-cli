@@ -85,6 +85,69 @@ Initialize configuration for a project.
 sat-cli init
 ```
 
+## Bitbucket
+
+`sat-cli` supports Bitbucket Cloud (`bitbucket.org`).
+
+### Authentication
+
+Bitbucket uses **API tokens** (App Passwords were deprecated on September 9, 2025 and will be fully disabled on June 9, 2026).
+
+API tokens use **Basic auth** with your **Atlassian account email** as the username. You need both your email and the token.
+
+**Step 1 — Create an API token:**
+
+1. Go to **[Atlassian account security](https://id.atlassian.com/manage-profile/security/api-tokens)** (not Bitbucket settings)
+2. Click **Create and manage API tokens**
+3. Click **Create API token with scopes**
+4. Give it a name, set an expiry date, click **Next**
+5. Select **Bitbucket** as the app, click **Next**
+6. Enable scopes: **Repositories** → Read, **Pull requests** → Read + Write
+7. Click **Create token** and copy it immediately (shown only once)
+
+**Step 2 — Set your credentials:**
+
+```bash
+export BITBUCKET_EMAIL=your-atlassian-email@example.com
+export BITBUCKET_TOKEN=your-api-token
+```
+
+**Verify it works:**
+
+```bash
+curl -s -o /dev/null -w "%{http_code}" \
+  -u "$BITBUCKET_EMAIL:$BITBUCKET_TOKEN" \
+  https://api.bitbucket.org/2.0/user
+# Should print: 200
+```
+
+Or save permanently via `sat-cli init` (select Bitbucket, enter your email and token when prompted).
+
+### Running a review
+
+```bash
+# Review by PR number (auto-detects workspace/repo from git remote)
+sat-cli review 42
+
+# Review by PR URL
+sat-cli review https://bitbucket.org/your-workspace/your-repo/pull-requests/42
+
+# Auto-post without confirmation
+sat-cli review 42 --post
+```
+
+### Persistent configuration
+
+Instead of env vars, save once via `sat-cli init`:
+
+```
+? Which source control platforms do you use? Bitbucket
+? Atlassian account email: you@example.com
+? Bitbucket API token: ••••••••
+```
+
+This writes to `~/.config/sateng/config.json` (Linux) or `%APPDATA%\sateng\config.json` (Windows).
+
 ## GitLab
 
 `sat-cli` supports both gitlab.com and self-hosted GitLab instances.
@@ -173,14 +236,13 @@ All settings can also be provided via environment variables, which take priority
 
 **SCM platforms**
 
-| Variable                 | Description                                                      |
-| ------------------------ | ---------------------------------------------------------------- |
-| `GITHUB_TOKEN`           | GitHub personal access token                                     |
-| `BITBUCKET_TOKEN`        | Bitbucket access token                                           |
-| `BITBUCKET_APP_PASSWORD` | Bitbucket app password                                           |
-| `BITBUCKET_USERNAME`     | Bitbucket username (required with app password)                  |
-| `GITLAB_TOKEN`           | GitLab personal access token (`api` scope required)              |
-| `GITLAB_INSTANCE_URL`    | Base URL for self-hosted GitLab (e.g. `https://git.example.com`) |
+| Variable              | Description                                                                     |
+| --------------------- | ------------------------------------------------------------------------------- |
+| `GITHUB_TOKEN`        | GitHub personal access token                                                    |
+| `BITBUCKET_EMAIL`     | Atlassian account email (used as username for Basic auth)                       |
+| `BITBUCKET_TOKEN`     | Bitbucket API token (create at Atlassian account → Security → API tokens)      |
+| `GITLAB_TOKEN`        | GitLab personal access token (`api` scope required)                             |
+| `GITLAB_INSTANCE_URL` | Base URL for self-hosted GitLab (e.g. `https://git.example.com`)                |
 
 ## License
 
