@@ -31,6 +31,12 @@ export enum LLMModel {
     OPENAI_GPT_4O = "gpt-4o",
     OPENAI_GPT_5 = "gpt-5",
     OPENAI_O3_MINI = "o3-mini",
+    OPENAI_GPT_OSS_120B = "gpt-oss-120b",
+    OPENAI_GPT_OSS_20B = "gpt-oss-20b",
+    OPENAI_QWEN3_NEXT_80B_A3B_INSTRUCT = "qwen3-next-80b-a3b-instruct",
+    OPENAI_GEMMA_4_26B_A4B_IT = "gemma-4-26b-a4b-it",
+    OPENAI_GEMMA_4_31B_IT = "gemma-4-31b-it",
+    OPENAI_LLAMA_3_3_70B_INSTRUCT = "llama-3.3-70b-instruct",
 
     // Grok
     GROK_2 = "grok-2-1212",
@@ -80,6 +86,12 @@ export const MODEL_CONTEXT_WINDOWS: Record<LLMModel, number> = {
     [LLMModel.OPENAI_GPT_4O]: 128000,
     [LLMModel.OPENAI_GPT_5]: 128000,
     [LLMModel.OPENAI_O3_MINI]: 128000,
+    [LLMModel.OPENAI_GPT_OSS_120B]: 128000,
+    [LLMModel.OPENAI_GPT_OSS_20B]: 128000,
+    [LLMModel.OPENAI_QWEN3_NEXT_80B_A3B_INSTRUCT]: 128000,
+    [LLMModel.OPENAI_GEMMA_4_26B_A4B_IT]: 128000,
+    [LLMModel.OPENAI_GEMMA_4_31B_IT]: 128000,
+    [LLMModel.OPENAI_LLAMA_3_3_70B_INSTRUCT]: 128000,
     // Grok
     [LLMModel.GROK_2]: 131072,
     // DeepSeek
@@ -122,7 +134,17 @@ const GEMINI_MODELS = new Set([
     LLMModel.GEMINI_3_PRO,
     LLMModel.GEMINI_3_FLASH,
 ]);
-const OPENAI_MODELS = new Set([LLMModel.OPENAI_GPT_4O, LLMModel.OPENAI_GPT_5, LLMModel.OPENAI_O3_MINI]);
+const OPENAI_MODELS = new Set([
+    LLMModel.OPENAI_GPT_4O,
+    LLMModel.OPENAI_GPT_5,
+    LLMModel.OPENAI_O3_MINI,
+    LLMModel.OPENAI_GPT_OSS_120B,
+    LLMModel.OPENAI_GPT_OSS_20B,
+    LLMModel.OPENAI_QWEN3_NEXT_80B_A3B_INSTRUCT,
+    LLMModel.OPENAI_GEMMA_4_26B_A4B_IT,
+    LLMModel.OPENAI_GEMMA_4_31B_IT,
+    LLMModel.OPENAI_LLAMA_3_3_70B_INSTRUCT,
+]);
 const GROK_MODELS = new Set([LLMModel.GROK_2]);
 const DEEPSEEK_MODELS = new Set([LLMModel.DEEPSEEK_CHAT, LLMModel.DEEPSEEK_REASONER]);
 const OLLAMA_MODELS = new Set([

@@ -25,8 +25,10 @@ export const ProviderConfigSchema = z.object({
     // Bedrock-specific
     awsProfile: z.string().optional().describe("AWS CLI profile name (for Bedrock)"),
     awsRegion: z.string().optional().describe("AWS region (for Bedrock)"),
+    // OpenAI-specific
+    baseUrl: z.string().optional().describe("Base URL for OpenAI API (for custom OpenAI-compatible endpoints)"),
     // Ollama-specific
-    baseUrl: z.string().optional().describe("Base URL for local model server (for Ollama)"),
+    ollamaBaseUrl: z.string().optional().describe("Base URL for local model server (for Ollama)"),
     customModel: z.string().optional().describe("Custom model name (for Ollama custom models)"),
     detectedModels: z.array(z.string()).optional().describe("Models detected from the local Ollama instance"),
 });
@@ -89,7 +91,17 @@ export const PROVIDER_MODELS: Record<AIProvider, LLMModel[]> = {
         LLMModel.GEMINI_3_PRO,
         LLMModel.GEMINI_3_FLASH,
     ],
-    [AIProvider.OPENAI]: [LLMModel.OPENAI_GPT_4O, LLMModel.OPENAI_GPT_5, LLMModel.OPENAI_O3_MINI],
+    [AIProvider.OPENAI]: [
+        LLMModel.OPENAI_GPT_4O,
+        LLMModel.OPENAI_GPT_5,
+        LLMModel.OPENAI_O3_MINI,
+        LLMModel.OPENAI_GPT_OSS_120B,
+        LLMModel.OPENAI_GPT_OSS_20B,
+        LLMModel.OPENAI_QWEN3_NEXT_80B_A3B_INSTRUCT,
+        LLMModel.OPENAI_GEMMA_4_26B_A4B_IT,
+        LLMModel.OPENAI_GEMMA_4_31B_IT,
+        LLMModel.OPENAI_LLAMA_3_3_70B_INSTRUCT,
+    ],
     [AIProvider.XAI]: [LLMModel.GROK_2],
     [AIProvider.DEEPSEEK]: [LLMModel.DEEPSEEK_CHAT, LLMModel.DEEPSEEK_REASONER],
     [AIProvider.OLLAMA]: [
@@ -114,6 +126,16 @@ export const PROVIDER_ENV_VARS: Record<AIProvider, string> = {
     [AIProvider.GOOGLE]: "GOOGLE_API_KEY",
     [AIProvider.XAI]: "XAI_API_KEY",
     [AIProvider.DEEPSEEK]: "DEEPSEEK_API_KEY",
+    [AIProvider.OLLAMA]: "OLLAMA_BASE_URL",
+};
+
+export const PROVIDER_BASE_URL_ENV_VARS: Record<AIProvider, string | undefined> = {
+    [AIProvider.ANTHROPIC]: undefined,
+    [AIProvider.BEDROCK]: undefined,
+    [AIProvider.OPENAI]: "OPENAI_BASE_URL",
+    [AIProvider.GOOGLE]: undefined,
+    [AIProvider.XAI]: undefined,
+    [AIProvider.DEEPSEEK]: undefined,
     [AIProvider.OLLAMA]: "OLLAMA_BASE_URL",
 };
 

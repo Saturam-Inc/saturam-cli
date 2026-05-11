@@ -16,7 +16,7 @@ sat-cli init
 
 This will configure:
 
-- AI provider (Anthropic, OpenAI, Gemini, Bedrock, Grok, DeepSeek, Ollama)
+- AI provider (Anthropic, OpenAI, Gemini, Bedrock, Grok, DeepSeek, Ollama, OpenRouter)
 - API keys
 - SCM provider (GitHub, Bitbucket, or GitLab)
 
@@ -107,6 +107,58 @@ export GITLAB_INSTANCE_URL=https://git.example.com
 
 Without this, the CLI defaults to `https://gitlab.com`. This is required for any self-hosted instance.
 
+## OpenRouter
+
+`sat-cli` supports OpenRouter as an OpenAI-compatible provider, giving you access to a wide variety of models.
+
+### Configuration Steps
+
+1. **Create an API key from OpenRouter**
+   - Visit [OpenRouter.ai](https://openrouter.ai) and sign up
+   - Generate an API key from your dashboard
+
+2. **Configure the OpenAI provider with OpenRouter settings:**
+   
+   **Option A: Environment variables**
+   ```bash
+   export OPENAI_API_KEY=sk-or-v1-xxxxxxxxxxxxxxxxxxxx
+   export OPENAI_BASE_URL=https://openrouter.ai/api/v1
+   ```
+   
+   **Option B: Interactive setup via `sat-cli init`**
+   ```
+   ? OpenAI API key: sk-or-v1-xxxxxxxxxxxxxxxxxxxx
+   ? OpenAI base URL (leave empty for default OpenAI API): https://openrouter.ai/api/v1
+   ```
+   
+   **Note:** 
+   - If you are using the official OpenAI API, use: `https://api.openai.com/v1`
+   - If you are using OpenRouter, use: `https://openrouter.ai/api/v1`
+
+3. **Select any of the supported free models listed below**
+
+### Available Free Models
+
+When using OpenRouter, you can access free models like:
+
+- `anthropic/claude-3.5-haiku`
+- `google/gemma-2-9b-it`
+- `meta-llama/llama-3.1-8b-instruct`
+- `microsoft/wizardlm-2-8x22b`
+- `qwen/qwen-2.5-7b-instruct`
+
+### Available Premium Models
+
+Premium models also available:
+
+- `anthropic/claude-3.5-sonnet`
+- `openai/gpt-4o`
+- `google/gemini-pro-1.5`
+- `meta-llama/llama-3.1-70b-instruct`
+- And many more from the OpenRouter model registry
+
+**Important:** Use the model name exactly as shown in OpenRouter's model list when configuring your default model.
+
 ### Running a review
 
 ```bash
@@ -164,6 +216,7 @@ All settings can also be provided via environment variables, which take priority
 | ------------------- | ------------------------------------------ |
 | `ANTHROPIC_API_KEY` | Anthropic (Claude)                         |
 | `OPENAI_API_KEY`    | OpenAI (GPT)                               |
+| `OPENAI_BASE_URL`   | OpenAI-compatible API (e.g., OpenRouter)  |
 | `GOOGLE_API_KEY`    | Google (Gemini)                            |
 | `XAI_API_KEY`       | xAI (Grok)                                 |
 | `DEEPSEEK_API_KEY`  | DeepSeek                                   |
