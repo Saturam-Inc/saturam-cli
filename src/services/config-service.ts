@@ -27,6 +27,8 @@ export const ProviderConfigSchema = z.object({
     awsRegion: z.string().optional().describe("AWS region (for Bedrock)"),
     // Ollama-specific
     baseUrl: z.string().optional().describe("Base URL for local model server (for Ollama)"),
+    apiToken: z.string().optional().describe("Bearer token for remote Ollama API gateways"),
+    model: z.string().optional().describe("Model name for Ollama API-compatible servers"),
     customModel: z.string().optional().describe("Custom model name (for Ollama custom models)"),
     detectedModels: z.array(z.string()).optional().describe("Models detected from the local Ollama instance"),
 });
@@ -164,11 +166,36 @@ export class ConfigService {
         const configPath = this.getPersonalConfigPath();
         if (existsSync(configPath)) {
             const raw = await readFile(configPath, "utf8");
-            this.personalConfig = PersonalConfigurationSchema.parse(JSON.parse(raw));
+            this.personalConfig = PersonalConfigurationSchema.parse(this.normalizePersonalConfig(JSON.parse(raw)));
         } else {
             this.personalConfig = PersonalConfigurationSchema.parse({});
         }
         return this.personalConfig;
+    }
+
+    private normalizePersonalConfig(raw: unknown): unknown {
+        if (!raw || typeof raw !== "object") return raw;
+
+        const config = raw as Record<string, unknown>;
+        if (config.provider !== AIProvider.OLLAMA) return raw;
+
+        const providerConfig: ProviderConfig = { enabled: true };
+        if (typeof config.baseUrl === "string") providerConfig.baseUrl = config.baseUrl;
+        if (typeof config.apiToken === "string") providerConfig.apiToken = config.apiToken;
+        if (typeof config.model === "string") providerConfig.model = config.model;
+
+        return {
+            ...config,
+            defaultProvider: AIProvider.OLLAMA,
+            defaultModel: LLMModel.OLLAMA_CUSTOM,
+            providers: {
+                ...((config.providers as PersonalConfiguration["providers"]) ?? {}),
+                [AIProvider.OLLAMA]: {
+                    ...((config.providers as PersonalConfiguration["providers"])?.[AIProvider.OLLAMA] ?? {}),
+                    ...providerConfig,
+                },
+            },
+        };
     }
 
     public async savePersonalConfig(config: PersonalConfiguration): Promise<void> {

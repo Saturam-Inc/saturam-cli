@@ -85,6 +85,45 @@ Initialize configuration for a project.
 sat-cli init
 ```
 
+## Ollama
+
+`sat-cli` supports local Ollama and remote self-hosted Ollama endpoints behind an API gateway.
+
+Local Ollama does not require a token:
+
+```json
+{
+    "providers": {
+        "ollama": {
+            "enabled": true,
+            "baseUrl": "http://localhost:11434",
+            "model": "qwen2.5-coder:latest"
+        }
+    },
+    "defaultProvider": "ollama",
+    "defaultModel": "ollama-custom"
+}
+```
+
+For a remote gateway, keep Ollama private and expose only the gateway URL. If the gateway requires bearer authentication, add `apiToken`; requests to `/api/tags`, `/api/chat`, and `/api/generate` include `Authorization: Bearer <apiToken>`.
+
+```json
+{
+    "providers": {
+        "ollama": {
+            "enabled": true,
+            "baseUrl": "http://<VM_PUBLIC_IP>:8080",
+            "apiToken": "saturam-dev-token-123",
+            "model": "qwen2.5-coder:latest"
+        }
+    },
+    "defaultProvider": "ollama",
+    "defaultModel": "ollama-custom"
+}
+```
+
+During `sat-cli init`, the token prompt is shown only for non-local Ollama URLs.
+
 ## GitLab
 
 `sat-cli` supports both gitlab.com and self-hosted GitLab instances.

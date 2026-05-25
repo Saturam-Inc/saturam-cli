@@ -19,6 +19,10 @@ const logger = getLogger("LlmService");
 
 const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
 
+function normalizeBaseUrl(baseUrl: string): string {
+    return baseUrl.replace(/\/+$/, "");
+}
+
 @Service()
 export class LlmService {
     private llms: Map<string, ChatModel> = new Map();
@@ -146,12 +150,15 @@ export class LlmService {
     private async createOllamaModel(model: LLMModel, options?: LLMOptions): Promise<ChatModel> {
         const { ChatOllama } = await import("@langchain/ollama");
         const providerConfig = await this.config.getProviderConfig(AIProvider.OLLAMA);
-        const baseUrl = providerConfig?.baseUrl ?? process.env.OLLAMA_BASE_URL ?? DEFAULT_OLLAMA_BASE_URL;
+        const baseUrl = normalizeBaseUrl(
+            providerConfig?.baseUrl ?? process.env.OLLAMA_BASE_URL ?? DEFAULT_OLLAMA_BASE_URL,
+        );
+        const apiToken = providerConfig?.apiToken ?? process.env.OLLAMA_API_TOKEN;
 
-        // For custom models, use the customModel name from config
-        const modelName = model === LLMModel.OLLAMA_CUSTOM
-            ? (providerConfig?.customModel ?? "llama3")
-            : model as string;
+        // For remote/custom Ollama deployments, prefer the exact configured model name.
+        const modelName =
+            providerConfig?.model ??
+            (model === LLMModel.OLLAMA_CUSTOM ? (providerConfig?.customModel ?? "llama3") : (model as string));
         if (model === LLMModel.OLLAMA_CUSTOM) {
             logger.info(`Using custom Ollama model: ${modelName}`);
         }
@@ -159,6 +166,7 @@ export class LlmService {
         return new ChatOllama({
             model: modelName,
             baseUrl,
+            headers: apiToken ? { Authorization: `Bearer ${apiToken}` } : undefined,
             temperature: options?.temperature ?? 0,
         });
     }

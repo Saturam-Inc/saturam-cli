@@ -65,6 +65,23 @@ const MODEL_DISPLAY_NAMES: Record<LLMModel, string> = {
     [LLMModel.OLLAMA_CUSTOM]: "Custom model (specify name)",
 };
 
+function normalizeBaseUrl(baseUrl: string): string {
+    return baseUrl.replace(/\/+$/, "");
+}
+
+function isRemoteOllamaUrl(baseUrl: string): boolean {
+    try {
+        const hostname = new URL(baseUrl).hostname.toLowerCase();
+        return !["localhost", "127.0.0.1", "::1"].includes(hostname);
+    } catch {
+        return false;
+    }
+}
+
+function getOllamaAuthHeaders(apiToken?: string): Record<string, string> | undefined {
+    return apiToken ? { Authorization: `Bearer ${apiToken}` } : undefined;
+}
+
 @Service()
 export class InitCommand implements TypedCommand<typeof INPUTS> {
     readonly name = "init";
@@ -218,22 +235,29 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
     private async configureOllamaProvider(existing?: ProviderConfig): Promise<ProviderConfig> {
         const defaultUrl = existing?.baseUrl ?? process.env.OLLAMA_BASE_URL ?? "http://localhost:11434";
 
-        const baseUrl = await input({
-            message: "Ollama server URL:",
-            default: defaultUrl,
-        });
+        const baseUrl = normalizeBaseUrl(
+            await input({
+                message: "Ollama server URL:",
+                default: defaultUrl,
+            }),
+        );
+
+        const envApiToken = process.env.OLLAMA_API_TOKEN;
+        const shouldPromptForToken = isRemoteOllamaUrl(baseUrl);
+        const apiToken = shouldPromptForToken
+            ? await this.promptForOptionalOllamaApiToken(existing?.apiToken ?? envApiToken)
+            : undefined;
+        const headers = getOllamaAuthHeaders(apiToken);
 
         // Detect locally available models
         const detectedModels: string[] = await (async () => {
             try {
-                const response = await fetch(`${baseUrl}/api/tags`);
+                const response = await fetch(`${baseUrl}/api/tags`, { headers });
                 if (response.ok) {
                     const data = (await response.json()) as { models?: Array<{ name: string }> };
                     const models = (data.models ?? []).map((m) => m.name);
                     if (models.length > 0) {
-                        logger.info(
-                            `Ollama is running with ${models.length} model(s): ${models.join(", ")}`,
-                        );
+                        logger.info(`Ollama is running with ${models.length} model(s): ${models.join(", ")}`);
                     } else {
                         logger.warn(
                             "Ollama is running but no models are pulled. Run 'ollama pull <model>' to download one.",
@@ -241,6 +265,7 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
                     }
                     return models;
                 }
+                logger.warn(`Warning: Ollama at ${baseUrl} returned HTTP ${response.status}.`);
             } catch {
                 logger.warn(`Warning: Could not connect to Ollama at ${baseUrl}. Make sure it's running.`);
             }
@@ -250,6 +275,7 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         return {
             enabled: true,
             baseUrl,
+            apiToken: apiToken || undefined,
             detectedModels: detectedModels.length > 0 ? detectedModels : undefined,
         };
     }
@@ -364,12 +390,23 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         if (!isPreset) {
             // Update provider config with the custom model name
             if (providerConfig) {
+                providerConfig.model = selected;
                 providerConfig.customModel = selected;
             }
             return LLMModel.OLLAMA_CUSTOM;
         }
 
         return selected as LLMModel;
+    }
+
+    private async promptForOptionalOllamaApiToken(existingToken?: string): Promise<string | undefined> {
+        const masked = existingToken ? `${existingToken.slice(0, 8)}...${existingToken.slice(-4)}` : undefined;
+        const hint = masked ? ` (press enter to keep ${masked})` : " (leave empty if not required)";
+        const token = await password({
+            message: `Ollama API gateway bearer token${hint}:`,
+            mask: "*",
+        });
+        return token || existingToken;
     }
 
     private async promptForApiKey(provider: AIProvider, existingKey?: string): Promise<string> {
@@ -570,8 +607,10 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
                     );
                 } else if (provider === AIProvider.OLLAMA) {
                     const url = val.baseUrl ?? "http://localhost:11434";
-                    const custom = val.customModel ? `, custom=${val.customModel}` : "";
-                    logger.info(`    ${PROVIDER_DISPLAY_NAMES[provider]}: ${url}${custom}${isDefault}`);
+                    const custom = val.customModel ?? val.model;
+                    const customText = custom ? `, model=${custom}` : "";
+                    const auth = val.apiToken ? ", auth=token set" : "";
+                    logger.info(`    ${PROVIDER_DISPLAY_NAMES[provider]}: ${url}${customText}${auth}${isDefault}`);
                 } else {
                     const masked = val.apiKey ? `${val.apiKey.slice(0, 8)}...${val.apiKey.slice(-4)}` : "not set";
                     logger.info(`    ${PROVIDER_DISPLAY_NAMES[provider]}: ${masked}${isDefault}`);
