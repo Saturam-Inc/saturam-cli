@@ -1,7 +1,7 @@
 # Review A — Architecture & Security Focus
 
 ## Executive Summary
-
+##
 This PR adds GitLab MR support to sat-cli, following the existing GitHub/Bitbucket SCM abstraction pattern. The architecture is clean — new `GitLabService`, `GitLabSCMService`, config additions, and SCM factory wiring. However, there's a debug `console.log` left in production code, the GitLab MR URL regex is too permissive and could match non-GitLab URLs, and inline comment posting has no error resilience (silently drops failed comments without notifying the user).
 
 ## Findings
