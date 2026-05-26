@@ -17,6 +17,7 @@ export enum AIProvider {
     XAI = "xai",
     DEEPSEEK = "deepseek",
     OLLAMA = "ollama",
+    SELF_HOSTED = "selfhosted",
 }
 
 export const ProviderConfigSchema = z.object({
@@ -31,6 +32,8 @@ export const ProviderConfigSchema = z.object({
     model: z.string().optional().describe("Model name for Ollama API-compatible servers"),
     customModel: z.string().optional().describe("Custom model name (for Ollama custom models)"),
     detectedModels: z.array(z.string()).optional().describe("Models detected from the local Ollama instance"),
+    // Self-hosted-specific
+    selfHostedEndpoint: z.string().optional().describe("Self-hosted model endpoint URL"),
 });
 
 export type ProviderConfig = z.infer<typeof ProviderConfigSchema>;
@@ -107,6 +110,7 @@ export const PROVIDER_MODELS: Record<AIProvider, LLMModel[]> = {
         LLMModel.OLLAMA_PHI3,
         LLMModel.OLLAMA_CUSTOM,
     ],
+    [AIProvider.SELF_HOSTED]: [LLMModel.SELF_HOSTED_CUSTOM],
 };
 
 export const PROVIDER_ENV_VARS: Record<AIProvider, string> = {
@@ -117,6 +121,7 @@ export const PROVIDER_ENV_VARS: Record<AIProvider, string> = {
     [AIProvider.XAI]: "XAI_API_KEY",
     [AIProvider.DEEPSEEK]: "DEEPSEEK_API_KEY",
     [AIProvider.OLLAMA]: "OLLAMA_BASE_URL",
+    [AIProvider.SELF_HOSTED]: "SELF_HOSTED_API_KEY",
 };
 
 export const PROVIDER_DEFAULT_KEY_PATHS: Record<AIProvider, string[]> = {
@@ -127,6 +132,7 @@ export const PROVIDER_DEFAULT_KEY_PATHS: Record<AIProvider, string[]> = {
     [AIProvider.XAI]: [],
     [AIProvider.DEEPSEEK]: [],
     [AIProvider.OLLAMA]: [],
+    [AIProvider.SELF_HOSTED]: [],
 };
 
 /** Providers that don't need an API key */

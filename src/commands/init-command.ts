@@ -25,6 +25,7 @@ const PROVIDER_DISPLAY_NAMES: Record<AIProvider, string> = {
     [AIProvider.XAI]: "xAI (Grok)",
     [AIProvider.DEEPSEEK]: "DeepSeek",
     [AIProvider.OLLAMA]: "Ollama (local models)",
+    [AIProvider.SELF_HOSTED]: "Self-hosted (OpenAI-compatible API)",
 };
 
 const MODEL_DISPLAY_NAMES: Record<LLMModel, string> = {
@@ -63,6 +64,7 @@ const MODEL_DISPLAY_NAMES: Record<LLMModel, string> = {
     [LLMModel.OLLAMA_GEMMA2]: "Gemma 2",
     [LLMModel.OLLAMA_PHI3]: "Phi-3 (128K context)",
     [LLMModel.OLLAMA_CUSTOM]: "Custom model (specify name)",
+    [LLMModel.SELF_HOSTED_CUSTOM]: "Self-hosted Custom Model",
 };
 
 function normalizeBaseUrl(baseUrl: string): string {
@@ -196,6 +198,10 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
             return this.configureOllamaProvider(existing);
         }
 
+        if (provider === AIProvider.SELF_HOSTED) {
+            return this.configureSelfHostedProvider(existing);
+        }
+
         // Standard API key provider
         const apiKey = await this.promptForApiKey(provider, existing?.apiKey);
         return { apiKey, enabled: true };
@@ -280,6 +286,29 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         };
     }
 
+    private async configureSelfHostedProvider(existing?: ProviderConfig): Promise<ProviderConfig> {
+        const apiKey = await this.promptForApiKey(AIProvider.SELF_HOSTED, existing?.apiKey);
+
+        const selfHostedEndpoint = await input({
+            message: "Self-hosted Model Endpoint URL (baseURL, e.g. http://localhost:8000/v1):",
+            default: existing?.selfHostedEndpoint ?? process.env.SELF_HOSTED_ENDPOINT ?? "",
+            validate: (val) => (val.startsWith("http") ? true : "Must be a valid HTTP/HTTPS URL"),
+        });
+
+        const customModelName = await input({
+            message: "Model Name (default: selfhosted-custom):",
+            default: existing?.customModel ?? existing?.model ?? process.env.SELF_HOSTED_MODEL ?? "selfhosted-custom",
+        });
+
+        return {
+            enabled: true,
+            apiKey,
+            selfHostedEndpoint,
+            model: customModelName || "selfhosted-custom",
+            customModel: customModelName || "selfhosted-custom",
+        };
+    }
+
     private async addProvider(existing: PersonalConfiguration): Promise<void> {
         const allProviders = Object.values(AIProvider);
 
@@ -344,6 +373,9 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
     }
 
     private async promptForModel(provider: AIProvider, providerConfig?: ProviderConfig): Promise<LLMModel> {
+        if (provider === AIProvider.SELF_HOSTED) {
+            return LLMModel.SELF_HOSTED_CUSTOM;
+        }
         // For Ollama, build a smarter list
         if (provider === AIProvider.OLLAMA) {
             return this.promptForOllamaModel(providerConfig);
@@ -611,6 +643,12 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
                     const customText = custom ? `, model=${custom}` : "";
                     const auth = val.apiToken ? ", auth=token set" : "";
                     logger.info(`    ${PROVIDER_DISPLAY_NAMES[provider]}: ${url}${customText}${auth}${isDefault}`);
+                } else if (provider === AIProvider.SELF_HOSTED) {
+                    const endpoint = val.selfHostedEndpoint ?? "not set";
+                    const modelName = val.model ?? val.customModel ?? "selfhosted-custom";
+                    logger.info(
+                        `    ${PROVIDER_DISPLAY_NAMES[provider]}: endpoint=${endpoint}, model=${modelName}${isDefault}`,
+                    );
                 } else {
                     const masked = val.apiKey ? `${val.apiKey.slice(0, 8)}...${val.apiKey.slice(-4)}` : "not set";
                     logger.info(`    ${PROVIDER_DISPLAY_NAMES[provider]}: ${masked}${isDefault}`);

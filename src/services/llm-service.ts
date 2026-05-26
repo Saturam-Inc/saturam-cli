@@ -12,6 +12,7 @@ import {
     isGrokModel,
     isOllamaModel,
     isOpenAIModel,
+    isSelfHostedModel,
 } from "../constants/llm-models";
 import { AIProvider, ConfigService } from "./config-service";
 
@@ -56,6 +57,7 @@ export class LlmService {
         if (isGrokModel(model)) return this.createGrokModel(model, options);
         if (isDeepSeekModel(model)) return this.createDeepSeekModel(model, options);
         if (isOllamaModel(model)) return this.createOllamaModel(model, options);
+        if (isSelfHostedModel(model)) return this.createSelfHostedModel(model, options);
         throw new Error(`Unsupported model: ${model}`);
     }
 
@@ -168,6 +170,36 @@ export class LlmService {
             baseUrl,
             headers: apiToken ? { Authorization: `Bearer ${apiToken}` } : undefined,
             temperature: options?.temperature ?? 0,
+        });
+    }
+
+    // --- Self-hosted ---
+
+    private async createSelfHostedModel(model: LLMModel, options?: LLMOptions): Promise<ChatModel> {
+        const apiKey = await this.config.getApiKey(AIProvider.SELF_HOSTED);
+        const providerConfig = await this.config.getProviderConfig(AIProvider.SELF_HOSTED);
+        const { ChatOpenAI } = await import("@langchain/openai");
+
+        const endpoint = providerConfig?.selfHostedEndpoint ?? process.env.SELF_HOSTED_ENDPOINT;
+        const modelName =
+            providerConfig?.model ??
+            providerConfig?.customModel ??
+            process.env.SELF_HOSTED_MODEL ??
+            "selfhosted-custom";
+
+        if (!endpoint) {
+            throw new Error(
+                "Self-hosted model endpoint URL is required. Set SELF_HOSTED_ENDPOINT or run 'sat-cli init'.",
+            );
+        }
+
+        return new ChatOpenAI({
+            openAIApiKey: apiKey,
+            modelName: modelName,
+            temperature: options?.temperature ?? 0,
+            configuration: {
+                baseURL: endpoint,
+            },
         });
     }
 }

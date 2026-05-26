@@ -64,12 +64,12 @@ export class AddSkillCommand implements TypedCommand<typeof INPUTS> {
         const selectedSkillName = inputs.skill
             ? inputs.skill
             : await select({
-                message: "Select a skill to install:",
-                choices: skills.map((s) => ({
-                    name: `${s.name} — ${s.description}`,
-                    value: s.name,
-                })),
-            });
+                  message: "Select a skill to install:",
+                  choices: skills.map((s) => ({
+                      name: `${s.name} — ${s.description}`,
+                      value: s.name,
+                  })),
+              });
         const selectedSkill = skills.find((s) => s.name === selectedSkillName);
         if (!selectedSkill) {
             logger.error(`Skill "${selectedSkillName}" not found. Available: ${skills.map((s) => s.name).join(", ")}`);
@@ -77,15 +77,16 @@ export class AddSkillCommand implements TypedCommand<typeof INPUTS> {
         }
 
         // Step 3: Select target tool
-        const tool: ToolTarget = inputs.tool && inputs.tool in TOOL_TARGETS
-            ? inputs.tool as ToolTarget
-            : await select({
-                message: "Install to:",
-                choices: [
-                    { name: "Claude Code", value: "claude-code" as ToolTarget },
-                    { name: "Cursor", value: "cursor" as ToolTarget },
-                ],
-            });
+        const tool: ToolTarget =
+            inputs.tool && inputs.tool in TOOL_TARGETS
+                ? (inputs.tool as ToolTarget)
+                : await select({
+                      message: "Install to:",
+                      choices: [
+                          { name: "Claude Code", value: "claude-code" as ToolTarget },
+                          { name: "Cursor", value: "cursor" as ToolTarget },
+                      ],
+                  });
 
         // Step 4: Install
         await this.installSkill(selectedSkill, tool);
