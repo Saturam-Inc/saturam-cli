@@ -16,6 +16,7 @@ import { TypedCommand, TypedInputs } from "./base";
 const logger = getLogger("InitCommand");
 
 const INPUTS = [] as const;
+const SETUP_CONNECTIVITY_TIMEOUT_MS = 10000;
 
 const PROVIDER_DISPLAY_NAMES: Record<AIProvider, string> = {
     [AIProvider.ANTHROPIC]: "Anthropic (Claude)",
@@ -25,7 +26,7 @@ const PROVIDER_DISPLAY_NAMES: Record<AIProvider, string> = {
     [AIProvider.XAI]: "xAI (Grok)",
     [AIProvider.DEEPSEEK]: "DeepSeek",
     [AIProvider.OLLAMA]: "Ollama (local models)",
-    [AIProvider.SELF_HOSTED]: "Self-hosted (OpenAI-compatible API)",
+    [AIProvider.SELF_HOSTED]: "Self Hosted LLM",
 };
 
 const MODEL_DISPLAY_NAMES: Record<LLMModel, string> = {
@@ -64,7 +65,7 @@ const MODEL_DISPLAY_NAMES: Record<LLMModel, string> = {
     [LLMModel.OLLAMA_GEMMA2]: "Gemma 2",
     [LLMModel.OLLAMA_PHI3]: "Phi-3 (128K context)",
     [LLMModel.OLLAMA_CUSTOM]: "Custom model (specify name)",
-    [LLMModel.SELF_HOSTED_CUSTOM]: "Self-hosted Custom Model",
+    [LLMModel.SELF_HOSTED_CUSTOM]: "Self Hosted LLM",
 };
 
 function normalizeBaseUrl(baseUrl: string): string {
@@ -82,6 +83,10 @@ function isRemoteOllamaUrl(baseUrl: string): boolean {
 
 function getOllamaAuthHeaders(apiToken?: string): Record<string, string> | undefined {
     return apiToken ? { Authorization: `Bearer ${apiToken}` } : undefined;
+}
+
+function getBearerAuthHeaders(accessToken?: string): Record<string, string> | undefined {
+    return accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined;
 }
 
 @Service()
@@ -287,25 +292,65 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
     }
 
     private async configureSelfHostedProvider(existing?: ProviderConfig): Promise<ProviderConfig> {
-        const apiKey = await this.promptForApiKey(AIProvider.SELF_HOSTED, existing?.apiKey);
+        const endpoint = normalizeBaseUrl(
+            await input({
+                message: "Self-hosted LLM endpoint/base URL:",
+                default: existing?.endpoint ?? existing?.selfHostedEndpoint ?? process.env.SELF_HOSTED_ENDPOINT ?? "",
+                validate: (val) =>
+                    val.startsWith("http://") || val.startsWith("https://") ? true : "Must be a valid HTTP/HTTPS URL",
+            }),
+        );
 
-        const selfHostedEndpoint = await input({
-            message: "Self-hosted Model Endpoint URL (baseURL, e.g. http://localhost:8000/v1):",
-            default: existing?.selfHostedEndpoint ?? process.env.SELF_HOSTED_ENDPOINT ?? "",
-            validate: (val) => (val.startsWith("http") ? true : "Must be a valid HTTP/HTTPS URL"),
+        const model = await input({
+            message: "Model name:",
+            default:
+                existing?.model ?? existing?.customModel ?? process.env.SELF_HOSTED_MODEL ?? "qwen2.5-coder:latest",
+            validate: (val) => (val.trim() ? true : "Model name is required"),
         });
 
-        const customModelName = await input({
-            message: "Model Name (default: selfhosted-custom):",
-            default: existing?.customModel ?? existing?.model ?? process.env.SELF_HOSTED_MODEL ?? "selfhosted-custom",
+        const existingAccessToken = existing?.accessToken ?? existing?.apiToken ?? existing?.apiKey;
+        const accessToken = await password({
+            message: `Optional access token${existingAccessToken ? " (press enter to keep existing)" : ""}:`,
+            mask: "*",
         });
+        const resolvedAccessToken =
+            accessToken ||
+            existingAccessToken ||
+            process.env.SELF_HOSTED_ACCESS_TOKEN ||
+            process.env.SELF_HOSTED_API_KEY;
+        const headers = getBearerAuthHeaders(resolvedAccessToken);
+
+        try {
+            const response = await fetch(`${endpoint}/api/tags`, {
+                headers,
+                signal: AbortSignal.timeout(SETUP_CONNECTIVITY_TIMEOUT_MS),
+            });
+            if (response.ok) {
+                const data = (await response.json()) as { models?: Array<{ name: string }> };
+                const models = (data.models ?? []).map((m) => m.name);
+                if (models.length === 0) {
+                    logger.warn("Self-hosted endpoint is reachable but returned no models from /api/tags.");
+                } else if (models.includes(model)) {
+                    logger.info(`Self-hosted endpoint verified. Model '${model}' is available.`);
+                } else {
+                    logger.warn(
+                        `Warning: Self-hosted endpoint is reachable, but model '${model}' was not found. Available: ${models.join(", ")}`,
+                    );
+                }
+            } else {
+                logger.warn(`Warning: Self-hosted endpoint returned HTTP ${response.status} from /api/tags.`);
+            }
+        } catch {
+            logger.warn(`Warning: Could not connect to self-hosted endpoint at ${endpoint}.`);
+        }
 
         return {
             enabled: true,
-            apiKey,
-            selfHostedEndpoint,
-            model: customModelName || "selfhosted-custom",
-            customModel: customModelName || "selfhosted-custom",
+            endpoint,
+            selfHostedEndpoint: endpoint,
+            model,
+            customModel: model,
+            accessToken: resolvedAccessToken || undefined,
         };
     }
 
@@ -644,10 +689,11 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
                     const auth = val.apiToken ? ", auth=token set" : "";
                     logger.info(`    ${PROVIDER_DISPLAY_NAMES[provider]}: ${url}${customText}${auth}${isDefault}`);
                 } else if (provider === AIProvider.SELF_HOSTED) {
-                    const endpoint = val.selfHostedEndpoint ?? "not set";
+                    const endpoint = val.endpoint ?? val.selfHostedEndpoint ?? "not set";
                     const modelName = val.model ?? val.customModel ?? "selfhosted-custom";
+                    const auth = (val.accessToken ?? val.apiToken ?? val.apiKey) ? ", auth=token set" : "";
                     logger.info(
-                        `    ${PROVIDER_DISPLAY_NAMES[provider]}: endpoint=${endpoint}, model=${modelName}${isDefault}`,
+                        `    ${PROVIDER_DISPLAY_NAMES[provider]}: endpoint=${endpoint}, model=${modelName}${auth}${isDefault}`,
                     );
                 } else {
                     const masked = val.apiKey ? `${val.apiKey.slice(0, 8)}...${val.apiKey.slice(-4)}` : "not set";

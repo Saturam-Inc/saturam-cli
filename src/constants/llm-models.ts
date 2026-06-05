@@ -1,5 +1,6 @@
 import type { ChatAnthropic } from "@langchain/anthropic";
 import type { ChatBedrockConverse } from "@langchain/aws";
+import type { BaseMessage } from "@langchain/core/messages";
 import type { ChatGoogleGenerativeAI } from "@langchain/google-genai";
 import type { ChatOllama } from "@langchain/ollama";
 import type { ChatOpenAI } from "@langchain/openai";
@@ -39,7 +40,7 @@ export enum LLMModel {
     DEEPSEEK_CHAT = "deepseek-chat",
     DEEPSEEK_REASONER = "deepseek-reasoner",
 
-    // Self-hosted (OpenAI-compatible)
+    // Self-hosted (Ollama-compatible)
     SELF_HOSTED_CUSTOM = "selfhosted-custom",
 
     // Ollama (local)
@@ -62,7 +63,8 @@ export type ChatModel =
     | ChatGoogleGenerativeAI
     | ChatOpenAI
     | ChatXAI
-    | ChatOllama;
+    | ChatOllama
+    | { invoke(messages: BaseMessage[]): Promise<{ content: unknown }> };
 
 export const MODEL_CONTEXT_WINDOWS: Record<LLMModel, number> = {
     // Anthropic

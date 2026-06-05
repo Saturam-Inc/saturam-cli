@@ -14,14 +14,46 @@ import {
     isOpenAIModel,
     isSelfHostedModel,
 } from "../constants/llm-models";
-import { AIProvider, ConfigService } from "./config-service";
+import { AIProvider, ConfigService, ProviderConfig } from "./config-service";
 
 const logger = getLogger("LlmService");
 
 const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
+const DEFAULT_SELF_HOSTED_TIMEOUT_MS = 120000;
 
 function normalizeBaseUrl(baseUrl: string): string {
     return baseUrl.replace(/\/+$/, "");
+}
+
+type OllamaChatMessage = {
+    role: "system" | "user" | "assistant";
+    content: string;
+};
+
+function getMessageContent(message: BaseMessage): string {
+    return typeof message.content === "string" ? message.content : JSON.stringify(message.content);
+}
+
+function toOllamaChatMessages(messages: BaseMessage[]): OllamaChatMessage[] {
+    return messages.map((message) => {
+        const type = message._getType();
+        const role = type === "system" ? "system" : type === "ai" ? "assistant" : "user";
+        return { role, content: getMessageContent(message) };
+    });
+}
+
+function getSelfHostedAuthToken(providerConfig?: ProviderConfig): string | undefined {
+    return (
+        providerConfig?.accessToken ??
+        providerConfig?.apiToken ??
+        providerConfig?.apiKey ??
+        process.env.SELF_HOSTED_ACCESS_TOKEN ??
+        process.env.SELF_HOSTED_API_KEY
+    );
+}
+
+function isAbortError(error: unknown): boolean {
+    return error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError");
 }
 
 @Service()
@@ -176,16 +208,16 @@ export class LlmService {
     // --- Self-hosted ---
 
     private async createSelfHostedModel(model: LLMModel, options?: LLMOptions): Promise<ChatModel> {
-        const apiKey = await this.config.getApiKey(AIProvider.SELF_HOSTED);
         const providerConfig = await this.config.getProviderConfig(AIProvider.SELF_HOSTED);
-        const { ChatOpenAI } = await import("@langchain/openai");
-
-        const endpoint = providerConfig?.selfHostedEndpoint ?? process.env.SELF_HOSTED_ENDPOINT;
+        const endpoint =
+            providerConfig?.endpoint ?? providerConfig?.selfHostedEndpoint ?? process.env.SELF_HOSTED_ENDPOINT;
         const modelName =
             providerConfig?.model ??
             providerConfig?.customModel ??
             process.env.SELF_HOSTED_MODEL ??
             "selfhosted-custom";
+        const accessToken = getSelfHostedAuthToken(providerConfig);
+        const timeoutMs = Number(process.env.SELF_HOSTED_TIMEOUT_MS ?? DEFAULT_SELF_HOSTED_TIMEOUT_MS);
 
         if (!endpoint) {
             throw new Error(
@@ -193,13 +225,58 @@ export class LlmService {
             );
         }
 
-        return new ChatOpenAI({
-            openAIApiKey: apiKey,
-            modelName: modelName,
-            temperature: options?.temperature ?? 0,
-            configuration: {
-                baseURL: endpoint,
+        return {
+            invoke: async (messages: BaseMessage[]) => {
+                const url = `${normalizeBaseUrl(endpoint)}/api/chat`;
+                const headers: Record<string, string> = { "Content-Type": "application/json" };
+                if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+
+                let response: Response;
+                try {
+                    response = await fetch(url, {
+                        method: "POST",
+                        headers,
+                        signal: AbortSignal.timeout(timeoutMs),
+                        body: JSON.stringify({
+                            model: modelName,
+                            stream: false,
+                            messages: toOllamaChatMessages(messages),
+                            options: { temperature: options?.temperature ?? 0 },
+                        }),
+                    });
+                } catch (error) {
+                    if (isAbortError(error)) {
+                        throw new Error(`Self-hosted LLM request timed out after ${timeoutMs}ms.`);
+                    }
+                    throw new Error(`Self-hosted LLM endpoint is not reachable at ${url}.`);
+                }
+
+                if (!response.ok) {
+                    const body = await response.text().catch(() => "");
+                    if (response.status === 404 || /model.*not found|not found.*model/i.test(body)) {
+                        throw new Error(
+                            `Self-hosted LLM model '${modelName}' was not found on ${normalizeBaseUrl(endpoint)}.`,
+                        );
+                    }
+                    throw new Error(
+                        `Self-hosted LLM request failed with HTTP ${response.status}${body ? `: ${body}` : ""}`,
+                    );
+                }
+
+                let data: unknown;
+                try {
+                    data = await response.json();
+                } catch {
+                    throw new Error("Self-hosted LLM returned an invalid JSON response.");
+                }
+
+                const content = (data as { message?: { content?: unknown } }).message?.content;
+                if (typeof content !== "string") {
+                    throw new Error("Self-hosted LLM returned an invalid response: missing message.content.");
+                }
+
+                return { content };
             },
-        });
+        };
     }
 }
