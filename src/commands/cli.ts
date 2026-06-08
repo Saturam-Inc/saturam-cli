@@ -84,10 +84,17 @@ export class Cli {
 
             cmd.action(async (...args) => {
                 const opts = cmd.opts();
+                const actionArgs = args.slice(0, -1);
+                const argumentInputs = command.inputs.filter((input) => input.argument);
+                const parsedArgs = Object.fromEntries(
+                    argumentInputs
+                        .map((input, index) => [input.name, actionArgs[index]])
+                        .filter(([, value]) => value !== undefined),
+                );
                 const globalOpts = this.program?.opts() ?? {};
                 const session = SessionConfigurationSchema.parse({ ...globalOpts, ...opts });
                 await this.configService.setSessionConfiguration(session);
-                await command.execute(opts);
+                await command.execute({ ...opts, ...parsedArgs });
             });
         }
     }
