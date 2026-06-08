@@ -63,6 +63,7 @@ const MODEL_DISPLAY_NAMES: Record<LLMModel, string> = {
     [LLMModel.OLLAMA_GEMMA2]: "Gemma 2",
     [LLMModel.OLLAMA_PHI3]: "Phi-3 (128K context)",
     [LLMModel.OLLAMA_CUSTOM]: "Custom model (specify name)",
+    [LLMModel.SELF_HOSTED_CUSTOM]: "Self Hosted LLM",
 };
 
 @Service()
