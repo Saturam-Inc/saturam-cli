@@ -84,10 +84,18 @@ export class Cli {
 
             cmd.action(async (...args) => {
                 const opts = cmd.opts();
+                const positionalArgs = args.slice(0, command.inputs.filter((input) => input.argument).length);
+                const argumentInputs = command.inputs
+                    .filter((input) => input.argument)
+                    .reduce<Record<string, unknown>>((acc, input, index) => {
+                        const value = positionalArgs[index];
+                        if (value !== undefined) acc[input.name] = value;
+                        return acc;
+                    }, {});
                 const globalOpts = this.program?.opts() ?? {};
                 const session = SessionConfigurationSchema.parse({ ...globalOpts, ...opts });
                 await this.configService.setSessionConfiguration(session);
-                await command.execute(opts);
+                await command.execute({ ...opts, ...argumentInputs });
             });
         }
     }
