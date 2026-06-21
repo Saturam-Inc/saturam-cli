@@ -79,9 +79,12 @@ export class LlmService {
         const credentials: any = profile
             ? (await import("@aws-sdk/credential-providers")).fromIni({ profile })
             : undefined;
+        
+        const regionPrefix = region.startsWith("eu") ? "eu" : region.startsWith("ap") ? "ap" : "us";
+        const resolvedModel = model.startsWith("anthropic.") ? `${regionPrefix}.${model}` : model;
 
         return new ChatBedrockConverse({
-            model,
+            model: resolvedModel,
             region,
             credentials,
             temperature: options?.temperature ?? 0,
