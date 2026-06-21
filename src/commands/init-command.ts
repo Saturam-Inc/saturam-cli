@@ -46,6 +46,12 @@ const MODEL_DISPLAY_NAMES: Record<LLMModel, string> = {
     [LLMModel.OPENAI_GPT_4O]: "GPT-4o",
     [LLMModel.OPENAI_GPT_5]: "GPT-5",
     [LLMModel.OPENAI_O3_MINI]: "o3-mini",
+    [LLMModel.OPENAI_GPT_OSS_120B]: "GPT-OSS-120B",
+    [LLMModel.OPENAI_GPT_OSS_20B]: "GPT-OSS-20B",
+    [LLMModel.OPENAI_QWEN3_NEXT_80B_A3B_INSTRUCT]: "Qwen3 Next 80B",
+    [LLMModel.OPENAI_GEMMA_4_26B_A4B_IT]: "Gemma 4-26B-A4B-IT",
+    [LLMModel.OPENAI_GEMMA_4_31B_IT]: "Gemma 4-31B-IT",
+    [LLMModel.OPENAI_LLAMA_3_3_70B_INSTRUCT]: "Llama 3.3 70B Instruct",
     // Grok
     [LLMModel.GROK_2]: "Grok 2",
     // DeepSeek
@@ -175,6 +181,10 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
             return this.configureBedrockProvider(existing);
         }
 
+        if (provider === AIProvider.OPENAI) {
+            return this.configureOpenAIProvider(existing);
+        }
+
         if (provider === AIProvider.OLLAMA) {
             return this.configureOllamaProvider(existing);
         }
@@ -215,10 +225,27 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         };
     }
 
-    private async configureOllamaProvider(existing?: ProviderConfig): Promise<ProviderConfig> {
-        const defaultUrl = existing?.baseUrl ?? process.env.OLLAMA_BASE_URL ?? "http://localhost:11434";
+    private async configureOpenAIProvider(existing?: ProviderConfig): Promise<ProviderConfig> {
+        const apiKey = await this.promptForApiKey(AIProvider.OPENAI, existing?.apiKey);
 
+        // Always ask for base URL, showing current/default value
+        const currentUrl = existing?.baseUrl ?? process.env.OPENAI_BASE_URL;
         const baseUrl = await input({
+            message: "OpenAI base URL (leave empty for default OpenAI API):",
+            default: currentUrl ?? "",
+        });
+
+        return {
+            enabled: true,
+            apiKey,
+            baseUrl: baseUrl.trim() || undefined,
+        };
+    }
+
+    private async configureOllamaProvider(existing?: ProviderConfig): Promise<ProviderConfig> {
+        const defaultUrl = existing?.ollamaBaseUrl ?? process.env.OLLAMA_BASE_URL ?? "http://localhost:11434";
+
+        const ollamaBaseUrl = await input({
             message: "Ollama server URL:",
             default: defaultUrl,
         });
@@ -226,7 +253,7 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         // Detect locally available models
         const detectedModels: string[] = await (async () => {
             try {
-                const response = await fetch(`${baseUrl}/api/tags`);
+                const response = await fetch(`${ollamaBaseUrl}/api/tags`);
                 if (response.ok) {
                     const data = (await response.json()) as { models?: Array<{ name: string }> };
                     const models = (data.models ?? []).map((m) => m.name);
@@ -240,14 +267,14 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
                     return models;
                 }
             } catch {
-                logger.warn(`Warning: Could not connect to Ollama at ${baseUrl}. Make sure it's running.`);
+                logger.warn(`Warning: Could not connect to Ollama at ${ollamaBaseUrl}. Make sure it's running.`);
             }
             return [];
         })();
 
         return {
             enabled: true,
-            baseUrl,
+            ollamaBaseUrl,
             detectedModels: detectedModels.length > 0 ? detectedModels : undefined,
         };
     }
@@ -382,11 +409,18 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
             if (useEnv) return envValue;
         }
 
-        const masked = existingKey ? `${existingKey.slice(0, 8)}...${existingKey.slice(-4)}` : undefined;
-        const hint = masked ? ` (current: ${masked})` : "";
+        // If we have an existing key, ask if user wants to keep it
+        if (existingKey) {
+            const masked = `${existingKey.slice(0, 8)}...${existingKey.slice(-4)}`;
+            const useExisting = await confirm({
+                message: `Use existing API key ${masked}?`,
+                default: true,
+            });
+            if (useExisting) return existingKey;
+        }
 
         const key = await password({
-            message: `${PROVIDER_DISPLAY_NAMES[provider]} API key${hint}:`,
+            message: `${PROVIDER_DISPLAY_NAMES[provider]} API key:`,
             mask: "*",
         });
 

@@ -109,12 +109,25 @@ export class LlmService {
 
     private async createOpenAIModel(model: LLMModel, options?: LLMOptions): Promise<ChatModel> {
         const apiKey = await this.config.getApiKey(AIProvider.OPENAI);
+        const providerConfig = await this.config.getProviderConfig(AIProvider.OPENAI);
+        const baseUrl = providerConfig?.baseUrl ?? process.env.OPENAI_BASE_URL;
+
         const { ChatOpenAI } = await import("@langchain/openai");
-        return new ChatOpenAI({
+
+        const openAIConfig: any = {
             modelName: model,
             openAIApiKey: apiKey,
             temperature: options?.temperature ?? 0,
-        });
+        };
+
+        // Only add baseURL if it's configured (don't add undefined)
+        if (baseUrl) {
+            openAIConfig.configuration = {
+                baseURL: baseUrl,
+            };
+        }
+
+        return new ChatOpenAI(openAIConfig);
     }
 
     // --- xAI (Grok) ---
@@ -149,7 +162,7 @@ export class LlmService {
     private async createOllamaModel(model: LLMModel, options?: LLMOptions): Promise<ChatModel> {
         const { ChatOllama } = await import("@langchain/ollama");
         const providerConfig = await this.config.getProviderConfig(AIProvider.OLLAMA);
-        const baseUrl = providerConfig?.baseUrl ?? process.env.OLLAMA_BASE_URL ?? DEFAULT_OLLAMA_BASE_URL;
+        const baseUrl = providerConfig?.ollamaBaseUrl ?? process.env.OLLAMA_BASE_URL ?? DEFAULT_OLLAMA_BASE_URL;
 
         // For custom models, use the customModel name from config
         const modelName =
