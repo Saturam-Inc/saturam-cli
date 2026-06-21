@@ -46,8 +46,9 @@ export const PersonalConfigurationSchema = z.object({
         .default({})
         .describe("Configured AI providers with API keys"),
     githubToken: z.string().optional().describe("GitHub personal access token"),
-    bitbucketToken: z.string().optional().describe("Bitbucket access token or app password"),
-    bitbucketUsername: z.string().optional().describe("Bitbucket username (for app password auth)"),
+    bitbucketToken: z.string().optional().describe("Bitbucket API token"),
+    bitbucketEmail: z.string().optional().describe("Atlassian account email (required with API token)"),
+    bitbucketUsername: z.string().optional().describe("Bitbucket username (legacy app password auth only)"),
     gitlabToken: z.string().optional().describe("GitLab personal access token"),
     gitlabInstanceUrl: z
         .string()
