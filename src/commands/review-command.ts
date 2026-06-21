@@ -127,11 +127,11 @@ export class ReviewCommand implements TypedCommand<typeof INPUTS> {
             const shouldPost = autoMode
                 ? !!inputs.post
                 : inputs.post
-                    ? await confirm({
+                  ? await confirm({
                         message: `Post ${audit.findings.length} inline comment(s) to ${scm.provider}?`,
                         default: true,
                     })
-                    : await confirm({
+                  : await confirm({
                         message: `Post this review as ${audit.findings.length} inline comment(s) on ${scm.provider}?`,
                         default: false,
                     });

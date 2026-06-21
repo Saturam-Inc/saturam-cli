@@ -231,9 +231,7 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
                     const data = (await response.json()) as { models?: Array<{ name: string }> };
                     const models = (data.models ?? []).map((m) => m.name);
                     if (models.length > 0) {
-                        logger.info(
-                            `Ollama is running with ${models.length} model(s): ${models.join(", ")}`,
-                        );
+                        logger.info(`Ollama is running with ${models.length} model(s): ${models.join(", ")}`);
                     } else {
                         logger.warn(
                             "Ollama is running but no models are pulled. Run 'ollama pull <model>' to download one.",

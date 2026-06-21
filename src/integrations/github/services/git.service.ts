@@ -38,11 +38,24 @@ export class GitService {
 
     public async getOwnerAndRepo(): Promise<{ owner: string; repo: string }> {
         const remoteUrl = await this.getRemoteUrl();
-        // Handle both SSH and HTTPS URLs
-        const match = remoteUrl.match(/[:/]([^/]+)\/([^/.]+)(?:\.git)?$/);
-        if (!match) {
+        return GitService.parseOwnerAndRepo(remoteUrl);
+    }
+
+    public static parseOwnerAndRepo(remoteUrl: string): { owner: string; repo: string } {
+        let fullPath: string;
+        if (remoteUrl.startsWith("http://") || remoteUrl.startsWith("https://")) {
+            // HTTPS: https://host/group/sub/repo.git
+            const parsed = new URL(remoteUrl);
+            fullPath = parsed.pathname.replace(/^\//, "").replace(/\.git$/, "");
+        } else {
+            // SSH: git@host:group/sub/repo.git
+            const colonIdx = remoteUrl.lastIndexOf(":");
+            fullPath = remoteUrl.slice(colonIdx + 1).replace(/\.git$/, "");
+        }
+        const lastSlash = fullPath.lastIndexOf("/");
+        if (lastSlash === -1) {
             throw new Error(`Could not parse owner/repo from remote URL: ${remoteUrl}`);
         }
-        return { owner: match[1], repo: match[2] };
+        return { owner: fullPath.slice(0, lastSlash), repo: fullPath.slice(lastSlash + 1) };
     }
 }

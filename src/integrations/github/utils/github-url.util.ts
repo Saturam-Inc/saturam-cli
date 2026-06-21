@@ -10,8 +10,9 @@ export interface ParsedPRUrl {
 const GITHUB_PR_REGEX = /github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/;
 const BITBUCKET_PR_REGEX = /bitbucket\.org\/([^/]+)\/([^/]+)\/pull-requests\/(\d+)/;
 // GitLab MR URLs are identified by the "/-/merge_requests/" path structure, which is GitLab-specific.
-// Match any host so self-hosted instances (e.g. git.company.com) work too.
-const GITLAB_MR_REGEX = /\/([^/]+)\/([^/]+)\/-\/merge_requests\/(\d+)/;
+// Matches against the URL pathname only (after the host) so the host is never captured.
+// Supports self-hosted instances and any depth of sub-group nesting.
+const GITLAB_MR_REGEX = /^\/([^?#]+)\/-\/merge_requests\/(\d+)/;
 
 export function parsePullRequestUrl(url: string): ParsedPRUrl | null {
     const ghMatch = url.match(GITHUB_PR_REGEX);
@@ -34,13 +35,24 @@ export function parsePullRequestUrl(url: string): ParsedPRUrl | null {
         };
     }
 
-    const glMatch = url.match(GITLAB_MR_REGEX);
+    // Parse pathname separately so the host is never included in the captured path.
+    let pathname: string;
+    try {
+        pathname = new URL(url).pathname;
+    } catch {
+        pathname = url; // fall back for non-standard URLs (e.g. during tests with partial strings)
+    }
+    const glMatch = pathname.match(GITLAB_MR_REGEX);
     if (glMatch) {
+        const fullPath = glMatch[1]; // e.g. "group/sub1/sub2/project"
+        const lastSlash = fullPath.lastIndexOf("/");
+        const owner = fullPath.slice(0, lastSlash);
+        const repo = fullPath.slice(lastSlash + 1);
         return {
             provider: SCMProvider.GITLAB,
-            owner: glMatch[1],
-            repo: glMatch[2],
-            prNumber: parseInt(glMatch[3], 10),
+            owner,
+            repo,
+            prNumber: parseInt(glMatch[2], 10),
         };
     }
 
@@ -48,5 +60,10 @@ export function parsePullRequestUrl(url: string): ParsedPRUrl | null {
 }
 
 export function isPullRequestUrl(url: string): boolean {
-    return GITHUB_PR_REGEX.test(url) || BITBUCKET_PR_REGEX.test(url) || GITLAB_MR_REGEX.test(url);
+    if (GITHUB_PR_REGEX.test(url) || BITBUCKET_PR_REGEX.test(url)) return true;
+    try {
+        return GITLAB_MR_REGEX.test(new URL(url).pathname);
+    } catch {
+        return GITLAB_MR_REGEX.test(url);
+    }
 }

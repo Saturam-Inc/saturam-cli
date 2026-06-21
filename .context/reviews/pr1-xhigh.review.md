@@ -7,6 +7,7 @@ This PR adds GitLab MR support to sat-cli, following the existing GitHub/Bitbuck
 ## Findings
 
 ### 1. Debug console.log in production code
+
 - **File**: `src/integrations/github/services/github.service.ts`
 - **Line**: 76 (new line in diff)
 - **Severity**: Major
@@ -14,6 +15,7 @@ This PR adds GitLab MR support to sat-cli, following the existing GitHub/Bitbuck
 - **Recommendation**: Remove this line entirely, or replace with `logger.debug(...)` if needed.
 
 ### 2. GitLab MR URL regex is too permissive
+
 - **File**: `src/integrations/github/utils/github-url.util.ts`
 - **Line**: 11 (new `GITLAB_MR_REGEX`)
 - **Severity**: Major
@@ -21,6 +23,7 @@ This PR adds GitLab MR support to sat-cli, following the existing GitHub/Bitbuck
 - **Recommendation**: The `/-/merge_requests/` path is GitLab-specific, so false positives are unlikely. But the regex should be checked AFTER GitHub and Bitbucket regexes (which it is), so this is acceptable. However, consider documenting why the regex is host-agnostic (self-hosted support).
 
 ### 3. GitLab inline comment failures are silently swallowed
+
 - **File**: `src/integrations/gitlab/services/gitlab.service.ts`
 - **Line**: 96 (`postDiscussion` method)
 - **Severity**: Major
@@ -28,6 +31,7 @@ This PR adds GitLab MR support to sat-cli, following the existing GitHub/Bitbuck
 - **Recommendation**: Track failed comments and report count to the user: "Posted 2/5 inline comments (3 failed)".
 
 ### 4. GitLab token printed in config summary
+
 - **File**: `src/commands/init-command.ts`
 - **Line**: 575 (`printCurrentConfig`)
 - **Severity**: Minor
@@ -35,6 +39,7 @@ This PR adds GitLab MR support to sat-cli, following the existing GitHub/Bitbuck
 - **Recommendation**: Just print "GitLab (configured, instance: gitlab.com)" like the other providers.
 
 ### 5. `changes_count` parsed with `parseInt` but is nullable string
+
 - **File**: `src/integrations/gitlab/services/gitlab-scm.service.ts`
 - **Line**: 28
 - **Severity**: Minor
