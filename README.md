@@ -16,7 +16,7 @@ sat-cli init
 
 This will configure:
 
-- AI provider (Anthropic, OpenAI, Gemini, Bedrock, Grok, DeepSeek, Ollama, Self Hosted LLM)
+- AI provider (Anthropic, OpenAI, Gemini, Bedrock, Grok, DeepSeek, Ollama, Self Hosted LLM, or OpenAI-compatible endpoints)
 - API keys
 - SCM provider (GitHub, Bitbucket, or GitLab)
 
@@ -173,6 +173,69 @@ For large reviews or slower models, increase the request timeout:
 SELF_HOSTED_TIMEOUT_MS=600000 sat-cli --model selfhosted-custom review 9 --self
 ```
 
+## Bitbucket
+
+`sat-cli` supports Bitbucket Cloud (`bitbucket.org`).
+
+### Authentication
+
+Bitbucket uses **API tokens** (App Passwords were deprecated on September 9, 2025 and will be fully disabled on June 9, 2026).
+
+API tokens use **Basic auth** with your **Atlassian account email** as the username. You need both your email and the token.
+
+**Step 1 — Create an API token:**
+
+1. Go to **[Atlassian account security](https://id.atlassian.com/manage-profile/security/api-tokens)** (not Bitbucket settings)
+2. Click **Create and manage API tokens**
+3. Click **Create API token with scopes**
+4. Give it a name, set an expiry date, click **Next**
+5. Select **Bitbucket** as the app, click **Next**
+6. Enable scopes: **Repositories** → Read, **Pull requests** → Read + Write
+7. Click **Create token** and copy it immediately (shown only once)
+
+**Step 2 — Set your credentials:**
+
+```bash
+export BITBUCKET_EMAIL=your-atlassian-email@example.com
+export BITBUCKET_TOKEN=your-api-token
+```
+
+**Verify it works:**
+
+```bash
+curl -s -o /dev/null -w "%{http_code}" \
+  -u "$BITBUCKET_EMAIL:$BITBUCKET_TOKEN" \
+  https://api.bitbucket.org/2.0/user
+# Should print: 200
+```
+
+Or save permanently via `sat-cli init` (select Bitbucket, enter your email and token when prompted).
+
+### Running a review
+
+```bash
+# Review by PR number (auto-detects workspace/repo from git remote)
+sat-cli review 42
+
+# Review by PR URL
+sat-cli review https://bitbucket.org/your-workspace/your-repo/pull-requests/42
+
+# Auto-post without confirmation
+sat-cli review 42 --post
+```
+
+### Persistent configuration
+
+Instead of env vars, save once via `sat-cli init`:
+
+```
+? Which source control platforms do you use? Bitbucket
+? Atlassian account email: you@example.com
+? Bitbucket API token: ••••••••
+```
+
+This writes to `~/.config/sateng/config.json` (Linux) or `%APPDATA%\sateng\config.json` (Windows).
+
 ## GitLab
 
 `sat-cli` supports both gitlab.com and self-hosted GitLab instances.
@@ -195,27 +258,65 @@ export GITLAB_INSTANCE_URL=https://git.example.com
 
 Without this, the CLI defaults to `https://gitlab.com`. This is required for any self-hosted instance.
 
-### Running a review
+## OpenRouter
 
-```bash
-# Review by MR number (detects repo and instance from current directory + env)
-sat-cli review 42
+`sat-cli` supports OpenRouter as an OpenAI-compatible provider, giving you access to a wide variety of models.
 
-# Review by MR URL
-sat-cli review https://git.example.com/namespace/repo/-/merge_requests/42
+### Configuration Steps
 
-# Auto-post without confirmation
-sat-cli review 42 --post
-```
+1. **Create an API key from OpenRouter**
+   - Visit [OpenRouter.ai](https://openrouter.ai) and sign up
+   - Generate an API key from your dashboard
+
+2. **Configure the OpenAI provider with OpenRouter settings:**
+
+   **Option A: Environment variables**
+   ```bash
+   export OPENAI_API_KEY=sk-or-v1-xxxxxxxxxxxxxxxxxxxx
+   export OPENAI_BASE_URL=https://openrouter.ai/api/v1
+   ```
+
+   **Option B: Interactive setup via `sat-cli init`**
+   ```
+   ? OpenAI API key: sk-or-v1-xxxxxxxxxxxxxxxxxxxx
+   ? OpenAI base URL (leave empty for default OpenAI API): https://openrouter.ai/api/v1
+   ```
+
+   **Note:**
+   - If you are using the official OpenAI API, use: `https://api.openai.com/v1`
+   - If you are using OpenRouter, use: `https://openrouter.ai/api/v1`
+
+3. **Select any of the supported free models listed below**
+
+### Available Free Models
+
+When using OpenRouter, you can access free models like:
+
+- `anthropic/claude-3.5-haiku`
+- `google/gemma-2-9b-it`
+- `meta-llama/llama-3.1-8b-instruct`
+- `microsoft/wizardlm-2-8x22b`
+- `qwen/qwen-2.5-7b-instruct`
+
+### Available Premium Models
+
+Premium models also available:
+
+- `anthropic/claude-3.5-sonnet`
+- `openai/gpt-4o`
+- `google/gemini-pro-1.5`
+- `meta-llama/llama-3.1-70b-instruct`
+- And many more from the OpenRouter model registry
+
+**Important:** Use the model name exactly as shown in OpenRouter's model list when configuring your default model.
 
 ### Persistent configuration
 
-Instead of env vars, you can save these values once via `sat-cli init`:
+Instead of env vars, you can save these values once via `sat-cli init` by selecting the OpenAI provider:
 
 ```
-? Which source control platforms do you use? GitLab
-? GitLab personal access token: glpat-...
-? GitLab instance URL (leave empty for gitlab.com): https://git.example.com
+? OpenAI API key: sk-or-v1-...
+? OpenAI base URL (leave empty for default OpenAI API): https://openrouter.ai/api/v1
 ```
 
 This writes to `~/Library/Application Support/sateng/config.json` (macOS) or `~/.config/sateng/config.json` (Linux).
@@ -238,6 +339,33 @@ To rebuild after changes:
 pnpm build
 ```
 
+### Running tests
+
+Tests use [Jest](https://jestjs.io/) with `ts-jest` — no build step needed.
+
+```bash
+# Run all tests
+pnpm test
+
+# Run a specific test file
+pnpm test -- tests/github/services/git.service.test.ts
+
+# Run tests matching a name pattern
+pnpm test -- --testNamePattern "GitLab"
+```
+
+**Example output:**
+
+```
+PASS tests/integrations/github/utils/github-url.util.test.ts
+PASS tests/github/services/git.service.test.ts
+
+Test Suites: 2 passed, 2 total
+Tests:       6 passed, 6 total
+```
+
+Test files live under `tests/`, mirroring the `src/` directory structure.
+
 ## Configuration
 
 Configuration is stored in `~/Library/Application Support/sateng/config.json` (macOS) or `~/.config/sateng/config.json` (Linux/Windows). Run `sat-cli init` to set it up interactively.
@@ -252,6 +380,7 @@ All settings can also be provided via environment variables, which take priority
 | -------------------------- | ------------------------------------------ |
 | `ANTHROPIC_API_KEY`        | Anthropic (Claude)                         |
 | `OPENAI_API_KEY`           | OpenAI (GPT)                               |
+| `OPENAI_BASE_URL`          | OpenAI-compatible API (e.g., OpenRouter)   |
 | `GOOGLE_API_KEY`           | Google (Gemini)                            |
 | `XAI_API_KEY`              | xAI (Grok)                                 |
 | `DEEPSEEK_API_KEY`         | DeepSeek                                   |
@@ -266,14 +395,13 @@ All settings can also be provided via environment variables, which take priority
 
 **SCM platforms**
 
-| Variable                 | Description                                                      |
-| ------------------------ | ---------------------------------------------------------------- |
-| `GITHUB_TOKEN`           | GitHub personal access token                                     |
-| `BITBUCKET_TOKEN`        | Bitbucket access token                                           |
-| `BITBUCKET_APP_PASSWORD` | Bitbucket app password                                           |
-| `BITBUCKET_USERNAME`     | Bitbucket username (required with app password)                  |
-| `GITLAB_TOKEN`           | GitLab personal access token (`api` scope required)              |
-| `GITLAB_INSTANCE_URL`    | Base URL for self-hosted GitLab (e.g. `https://git.example.com`) |
+| Variable              | Description                                                                     |
+| --------------------- | ------------------------------------------------------------------------------- |
+| `GITHUB_TOKEN`        | GitHub personal access token                                                    |
+| `BITBUCKET_EMAIL`     | Atlassian account email (used as username for Basic auth)                       |
+| `BITBUCKET_TOKEN`     | Bitbucket API token (create at Atlassian account → Security → API tokens)      |
+| `GITLAB_TOKEN`        | GitLab personal access token (`api` scope required)                             |
+| `GITLAB_INSTANCE_URL` | Base URL for self-hosted GitLab (e.g. `https://git.example.com`)                |
 
 ## License
 

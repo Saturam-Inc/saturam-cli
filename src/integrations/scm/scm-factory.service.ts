@@ -63,22 +63,15 @@ export class SCMFactory {
         if (remoteUrl.includes("bitbucket.org")) {
             return SCMProvider.BITBUCKET;
         }
-        // Default to GitHub for unknown remotes
+        if (remoteUrl.includes("gitlab.com")) {
+            return SCMProvider.GITLAB;
+        }
         throw new Error(
             `Could not detect SCM provider from remote URL: ${remoteUrl}. Supported: GitHub, Bitbucket, GitLab.`,
         );
     }
 
     public static parseRemoteUrl(remoteUrl: string): { owner: string; repo: string } {
-        // Handles:
-        //   git@github.com:owner/repo.git
-        //   https://github.com/owner/repo.git
-        //   git@bitbucket.org:workspace/repo.git
-        //   https://bitbucket.org/workspace/repo.git
-        const match = remoteUrl.match(/[:/]([^/]+)\/([^/.]+?)(?:\.git)?$/);
-        if (!match) {
-            throw new Error(`Could not parse owner/repo from remote URL: ${remoteUrl}`);
-        }
-        return { owner: match[1], repo: match[2] };
+        return GitService.parseOwnerAndRepo(remoteUrl);
     }
 }

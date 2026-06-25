@@ -14,7 +14,7 @@ export interface GitLabMR {
     web_url: string;
     author: { username: string; name: string };
     changes_count: string | null;
-    diff_refs: GitLabDiffRefs;
+    diff_refs: GitLabDiffRefs | null;
 }
 
 export interface GitLabDiscussionPosition {

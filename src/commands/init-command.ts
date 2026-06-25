@@ -48,6 +48,12 @@ const MODEL_DISPLAY_NAMES: Record<LLMModel, string> = {
     [LLMModel.OPENAI_GPT_4O]: "GPT-4o",
     [LLMModel.OPENAI_GPT_5]: "GPT-5",
     [LLMModel.OPENAI_O3_MINI]: "o3-mini",
+    [LLMModel.OPENAI_GPT_OSS_120B]: "GPT-OSS-120B",
+    [LLMModel.OPENAI_GPT_OSS_20B]: "GPT-OSS-20B",
+    [LLMModel.OPENAI_QWEN3_NEXT_80B_A3B_INSTRUCT]: "Qwen3 Next 80B",
+    [LLMModel.OPENAI_GEMMA_4_26B_A4B_IT]: "Gemma 4-26B-A4B-IT",
+    [LLMModel.OPENAI_GEMMA_4_31B_IT]: "Gemma 4-31B-IT",
+    [LLMModel.OPENAI_LLAMA_3_3_70B_INSTRUCT]: "Llama 3.3 70B Instruct",
     // Grok
     [LLMModel.GROK_2]: "Grok 2",
     // DeepSeek
@@ -199,6 +205,10 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
             return this.configureBedrockProvider(existing);
         }
 
+        if (provider === AIProvider.OPENAI) {
+            return this.configureOpenAIProvider(existing);
+        }
+
         if (provider === AIProvider.OLLAMA) {
             return this.configureOllamaProvider(existing);
         }
@@ -243,8 +253,25 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         };
     }
 
+    private async configureOpenAIProvider(existing?: ProviderConfig): Promise<ProviderConfig> {
+        const apiKey = await this.promptForApiKey(AIProvider.OPENAI, existing?.apiKey);
+
+        const currentUrl = existing?.baseUrl ?? process.env.OPENAI_BASE_URL;
+        const baseUrl = await input({
+            message: "OpenAI base URL (leave empty for default OpenAI API):",
+            default: currentUrl ?? "",
+        });
+
+        return {
+            enabled: true,
+            apiKey,
+            baseUrl: baseUrl.trim() || undefined,
+        };
+    }
+
     private async configureOllamaProvider(existing?: ProviderConfig): Promise<ProviderConfig> {
-        const defaultUrl = existing?.baseUrl ?? process.env.OLLAMA_BASE_URL ?? "http://localhost:11434";
+        const defaultUrl =
+            existing?.baseUrl ?? existing?.ollamaBaseUrl ?? process.env.OLLAMA_BASE_URL ?? "http://localhost:11434";
 
         const baseUrl = normalizeBaseUrl(
             await input({
@@ -286,6 +313,7 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         return {
             enabled: true,
             baseUrl,
+            ollamaBaseUrl: baseUrl,
             apiToken: apiToken || undefined,
             detectedModels: detectedModels.length > 0 ? detectedModels : undefined,
         };
@@ -498,11 +526,18 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
             if (useEnv) return envValue;
         }
 
-        const masked = existingKey ? `${existingKey.slice(0, 8)}...${existingKey.slice(-4)}` : undefined;
-        const hint = masked ? ` (current: ${masked})` : "";
+        // If we have an existing key, ask if user wants to keep it
+        if (existingKey) {
+            const masked = `${existingKey.slice(0, 8)}...${existingKey.slice(-4)}`;
+            const useExisting = await confirm({
+                message: `Use existing API key ${masked}?`,
+                default: true,
+            });
+            if (useExisting) return existingKey;
+        }
 
         const key = await password({
-            message: `${PROVIDER_DISPLAY_NAMES[provider]} API key${hint}:`,
+            message: `${PROVIDER_DISPLAY_NAMES[provider]} API key:`,
             mask: "*",
         });
 
@@ -516,7 +551,7 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
     ): Promise<
         Pick<
             PersonalConfiguration,
-            "githubToken" | "bitbucketToken" | "bitbucketUsername" | "gitlabToken" | "gitlabInstanceUrl"
+            "githubToken" | "bitbucketToken" | "bitbucketEmail" | "bitbucketUsername" | "gitlabToken" | "gitlabInstanceUrl"
         >
     > {
         logger.info("\n--- Source Control Platforms ---");
@@ -534,9 +569,9 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
             ? await this.resolveGitHubToken(existing)
             : existing.githubToken;
 
-        const { bitbucketToken, bitbucketUsername } = platforms.includes("bitbucket")
+        const { bitbucketToken, bitbucketEmail, bitbucketUsername } = platforms.includes("bitbucket")
             ? await this.resolveBitbucketAuth(existing)
-            : { bitbucketToken: existing.bitbucketToken, bitbucketUsername: existing.bitbucketUsername };
+            : { bitbucketToken: existing.bitbucketToken, bitbucketEmail: existing.bitbucketEmail, bitbucketUsername: existing.bitbucketUsername };
 
         const { gitlabToken, gitlabInstanceUrl } = platforms.includes("gitlab")
             ? await this.resolveGitLabAuth(existing)
@@ -545,6 +580,7 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         return {
             githubToken: githubToken || undefined,
             bitbucketToken: bitbucketToken || undefined,
+            bitbucketEmail: bitbucketEmail || undefined,
             bitbucketUsername: bitbucketUsername || undefined,
             gitlabToken: gitlabToken || undefined,
             gitlabInstanceUrl: gitlabInstanceUrl || undefined,
@@ -579,39 +615,27 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
 
     private async resolveBitbucketAuth(
         existing: PersonalConfiguration,
-    ): Promise<{ bitbucketToken: string | undefined; bitbucketUsername: string | undefined }> {
-        logger.info("\nBitbucket supports two auth methods:");
-        const authMethod = await select({
-            message: "How do you want to authenticate with Bitbucket?",
-            choices: [
-                { name: "App password (username + app password)", value: "app_password" as const },
-                { name: "Repository/OAuth access token", value: "token" as const },
-            ],
-        });
+    ): Promise<{ bitbucketToken: string | undefined; bitbucketEmail: string | undefined; bitbucketUsername: string | undefined }> {
+        logger.info("\nBitbucket API tokens replaced App Passwords as of September 2025.");
+        logger.info("Create one at: Atlassian account → Security → Create and manage API tokens");
+        logger.info("  → Select 'Bitbucket' as the app");
+        logger.info("  → Required scopes: Repositories (Read), Pull requests (Read + Write)");
+        logger.info("Your Atlassian account email is used together with the token for authentication.\n");
 
-        if (authMethod === "app_password") {
-            const bitbucketUsername = await input({
-                message: "Bitbucket username:",
-                default: existing.bitbucketUsername ?? process.env.BITBUCKET_USERNAME ?? "",
+        const bitbucketEmail = await (async (): Promise<string | undefined> => {
+            if (process.env.BITBUCKET_EMAIL) {
+                logger.info("Found BITBUCKET_EMAIL in environment.");
+                const save = await confirm({ message: "Save it to config?", default: true });
+                if (save) return process.env.BITBUCKET_EMAIL;
+                return existing.bitbucketEmail;
+            }
+            const existingEmail = existing.bitbucketEmail;
+            const email = await input({
+                message: `Atlassian account email${existingEmail ? ` (current: ${existingEmail})` : ""}:`,
+                default: existingEmail ?? "",
             });
-
-            const existingAppPw = existing.bitbucketToken;
-            const bitbucketToken = await (async (): Promise<string | undefined> => {
-                if (process.env.BITBUCKET_APP_PASSWORD) {
-                    logger.info("Found BITBUCKET_APP_PASSWORD in environment.");
-                    const save = await confirm({ message: "Save it to config?", default: true });
-                    if (save) return process.env.BITBUCKET_APP_PASSWORD;
-                    return existingAppPw;
-                }
-                const pw = await password({
-                    message: `Bitbucket app password${existingAppPw ? " (press enter to keep existing)" : ""}:`,
-                    mask: "*",
-                });
-                return pw || existingAppPw;
-            })();
-
-            return { bitbucketToken, bitbucketUsername };
-        }
+            return email || existingEmail;
+        })();
 
         const bitbucketToken = await (async (): Promise<string | undefined> => {
             if (process.env.BITBUCKET_TOKEN) {
@@ -622,13 +646,13 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
             }
             const existingToken = existing.bitbucketToken;
             const token = await password({
-                message: `Bitbucket access token${existingToken ? " (press enter to keep existing)" : ""}:`,
+                message: `Bitbucket API token${existingToken ? " (press enter to keep existing)" : ""}:`,
                 mask: "*",
             });
             return token || existingToken;
         })();
 
-        return { bitbucketToken, bitbucketUsername: undefined };
+        return { bitbucketToken, bitbucketEmail, bitbucketUsername: undefined };
     }
 
     private async resolveGitLabAuth(
@@ -712,9 +736,11 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
             scmPlatforms.push("GitHub (via gh CLI)");
         }
         if (config.bitbucketToken) {
-            const authType = config.bitbucketUsername
-                ? `app password, user: ${config.bitbucketUsername}`
-                : "access token";
+            const authType = config.bitbucketEmail
+                ? `API token, email: ${config.bitbucketEmail}`
+                : config.bitbucketUsername
+                  ? `legacy app password, user: ${config.bitbucketUsername}`
+                  : "API token (no email set — run 'sat-cli init' to add email)";
             scmPlatforms.push(`Bitbucket (${authType})`);
         }
         if (config.gitlabToken) {

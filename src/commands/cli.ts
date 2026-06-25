@@ -4,6 +4,12 @@ import { Service } from "typedi";
 import { z } from "zod";
 import { ConfigService, SessionConfigurationSchema } from "../services/config-service";
 import { CommandInputs, TOP_LEVEL_CATEGORIES, TypedCommand } from "./base";
+import { readFileSync } from "fs";
+import { join } from "path";
+
+// Read package.json for version
+const packageJson = JSON.parse(readFileSync(join(__dirname, "../../package.json"), "utf8"));
+const CLI_VERSION = packageJson.version;
 
 const logger = getLogger("Cli");
 
@@ -31,7 +37,7 @@ export class Cli {
         });
         this.program
             .name("sat-cli")
-            .version("1.0.0")
+            .version(CLI_VERSION)
             .description("Saturam Engineering CLI")
             .option("-d, --debug", "Enable debug logging")
             .option("-m, --model <model>", "The AI model to use")
@@ -93,6 +99,7 @@ export class Cli {
                         return acc;
                     }, {});
                 const globalOpts = this.program?.opts() ?? {};
+
                 const session = SessionConfigurationSchema.parse({ ...globalOpts, ...opts });
                 await this.configService.setSessionConfiguration(session);
                 await command.execute({ ...opts, ...argumentInputs });
