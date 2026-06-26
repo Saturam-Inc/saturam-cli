@@ -45,6 +45,9 @@ export enum LLMModel {
     DEEPSEEK_CHAT = "deepseek-chat",
     DEEPSEEK_REASONER = "deepseek-reasoner",
 
+    // Self-hosted (Ollama-compatible)
+    SELF_HOSTED_CUSTOM = "selfhosted-custom",
+
     // Ollama (local)
     OLLAMA_LLAMA3 = "llama3",
     OLLAMA_LLAMA3_1 = "llama3.1",
@@ -97,6 +100,8 @@ export const MODEL_CONTEXT_WINDOWS: Record<LLMModel, number> = {
     // DeepSeek
     [LLMModel.DEEPSEEK_CHAT]: 64000,
     [LLMModel.DEEPSEEK_REASONER]: 64000,
+    // Self-hosted
+    [LLMModel.SELF_HOSTED_CUSTOM]: 128000,
     // Ollama (varies by model, these are defaults)
     [LLMModel.OLLAMA_LLAMA3]: 8192,
     [LLMModel.OLLAMA_LLAMA3_1]: 131072,
@@ -147,6 +152,7 @@ const OPENAI_MODELS = new Set([
 ]);
 const GROK_MODELS = new Set([LLMModel.GROK_2]);
 const DEEPSEEK_MODELS = new Set([LLMModel.DEEPSEEK_CHAT, LLMModel.DEEPSEEK_REASONER]);
+const SELF_HOSTED_MODELS = new Set([LLMModel.SELF_HOSTED_CUSTOM]);
 const OLLAMA_MODELS = new Set([
     LLMModel.OLLAMA_LLAMA3,
     LLMModel.OLLAMA_LLAMA3_1,
@@ -187,4 +193,8 @@ export function isDeepSeekModel(model: LLMModel): boolean {
 
 export function isOllamaModel(model: LLMModel): boolean {
     return OLLAMA_MODELS.has(model);
+}
+
+export function isSelfHostedModel(model: LLMModel): boolean {
+    return SELF_HOSTED_MODELS.has(model);
 }
