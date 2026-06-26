@@ -56,9 +56,48 @@ function isAbortError(error: unknown): boolean {
     return error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError");
 }
 
+function getErrorMessage(error: unknown): string {
+    if (error instanceof Error) {
+        const cause = error.cause instanceof Error ? `: ${error.cause.message}` : "";
+        return `${error.message}${cause}`;
+    }
+    return String(error);
+}
+
+function parseOllamaChatResponse(text: string): string {
+    const trimmed = text.trim();
+    if (!trimmed) {
+        throw new Error("Self-hosted LLM returned an empty response.");
+    }
+
+    let content = "";
+    for (const line of trimmed.split(/\r?\n/)) {
+        if (!line.trim()) continue;
+
+        let data: unknown;
+        try {
+            data = JSON.parse(line);
+        } catch {
+            throw new Error("Self-hosted LLM returned an invalid JSON response.");
+        }
+
+        const messageContent = (data as { message?: { content?: unknown } }).message?.content;
+        if (typeof messageContent === "string") {
+            content += messageContent;
+        }
+    }
+
+    if (!content) {
+        throw new Error("Self-hosted LLM returned an invalid response: missing message.content.");
+    }
+
+    return content;
+}
+
 @Service()
 export class LlmService {
     private llms: Map<string, ChatModel> = new Map();
+    private selfHostedQueue = Promise.resolve();
 
     constructor(private readonly config: ConfigService) {}
 
@@ -244,57 +283,64 @@ export class LlmService {
             );
         }
 
-        return {
-            invoke: async (messages: BaseMessage[]) => {
-                const url = `${normalizeBaseUrl(endpoint)}/api/chat`;
-                const headers: Record<string, string> = { "Content-Type": "application/json" };
-                if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+        const invokeSelfHosted = async (messages: BaseMessage[]) => {
+            const url = `${normalizeBaseUrl(endpoint)}/api/chat`;
+            const headers: Record<string, string> = { "Content-Type": "application/json" };
+            if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
 
-                let response: Response;
-                try {
-                    response = await fetch(url, {
-                        method: "POST",
-                        headers,
-                        signal: AbortSignal.timeout(timeoutMs),
-                        body: JSON.stringify({
-                            model: modelName,
-                            stream: false,
-                            messages: toOllamaChatMessages(messages),
-                            options: { temperature: options?.temperature ?? 0 },
-                        }),
-                    });
-                } catch (error) {
-                    if (isAbortError(error)) {
-                        throw new Error(`Self-hosted LLM request timed out after ${timeoutMs}ms.`);
-                    }
-                    throw new Error(`Self-hosted LLM endpoint is not reachable at ${url}.`);
+            let response: Response;
+            try {
+                response = await fetch(url, {
+                    method: "POST",
+                    headers,
+                    signal: AbortSignal.timeout(timeoutMs),
+                    body: JSON.stringify({
+                        model: modelName,
+                        stream: true,
+                        messages: toOllamaChatMessages(messages),
+                        options: { temperature: options?.temperature ?? 0 },
+                    }),
+                });
+            } catch (error) {
+                if (isAbortError(error)) {
+                    throw new Error(`Self-hosted LLM request timed out after ${timeoutMs}ms.`);
                 }
+                throw new Error(`Self-hosted LLM endpoint is not reachable at ${url}: ${getErrorMessage(error)}`);
+            }
 
-                if (!response.ok) {
-                    const body = await response.text().catch(() => "");
-                    if (response.status === 404 || /model.*not found|not found.*model/i.test(body)) {
-                        throw new Error(
-                            `Self-hosted LLM model '${modelName}' was not found on ${normalizeBaseUrl(endpoint)}.`,
-                        );
-                    }
+            if (!response.ok) {
+                const body = await response.text().catch(() => "");
+                if (response.status === 404 || /model.*not found|not found.*model/i.test(body)) {
                     throw new Error(
-                        `Self-hosted LLM request failed with HTTP ${response.status}${body ? `: ${body}` : ""}`,
+                        `Self-hosted LLM model '${modelName}' was not found on ${normalizeBaseUrl(endpoint)}.`,
                     );
                 }
+                throw new Error(
+                    `Self-hosted LLM request failed with HTTP ${response.status}${body ? `: ${body}` : ""}`,
+                );
+            }
 
-                let data: unknown;
-                try {
-                    data = await response.json();
-                } catch {
-                    throw new Error("Self-hosted LLM returned an invalid JSON response.");
-                }
+            let body: string;
+            try {
+                body = await response.text();
+            } catch {
+                throw new Error("Self-hosted LLM response stream failed.");
+            }
 
-                const content = (data as { message?: { content?: unknown } }).message?.content;
-                if (typeof content !== "string") {
-                    throw new Error("Self-hosted LLM returned an invalid response: missing message.content.");
-                }
+            return { content: parseOllamaChatResponse(body) };
+        };
 
-                return { content };
+        return {
+            invoke: async (messages: BaseMessage[]) => {
+                const current = this.selfHostedQueue.then(
+                    () => invokeSelfHosted(messages),
+                    () => invokeSelfHosted(messages),
+                );
+                this.selfHostedQueue = current.then(
+                    () => undefined,
+                    () => undefined,
+                );
+                return current;
             },
         };
     }
