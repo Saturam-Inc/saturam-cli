@@ -16,7 +16,7 @@ sat-cli init
 
 This will configure:
 
-- AI provider (Anthropic, OpenAI, Gemini, Bedrock, Grok, DeepSeek, Ollama, Self Hosted LLM, or OpenAI-compatible endpoints)
+- AI provider (Anthropic, OpenAI, Gemini, Bedrock, Grok, DeepSeek, Ollama, Self Hosted LLM, OpenRouter)
 - API keys
 - SCM provider (GitHub, Bitbucket, or GitLab)
 

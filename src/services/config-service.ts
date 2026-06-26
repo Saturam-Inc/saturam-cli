@@ -140,7 +140,7 @@ export const PROVIDER_ENV_VARS: Record<AIProvider, string> = {
     [AIProvider.XAI]: "XAI_API_KEY",
     [AIProvider.DEEPSEEK]: "DEEPSEEK_API_KEY",
     [AIProvider.OLLAMA]: "OLLAMA_BASE_URL",
-    [AIProvider.SELF_HOSTED]: "SELF_HOSTED_API_KEY",
+    [AIProvider.SELF_HOSTED]: "SELF_HOSTED_ACCESS_TOKEN",
 };
 
 export const PROVIDER_BASE_URL_ENV_VARS: Record<AIProvider, string | undefined> = {
