@@ -17,6 +17,7 @@ export enum AIProvider {
     XAI = "xai",
     DEEPSEEK = "deepseek",
     OLLAMA = "ollama",
+    SELF_HOSTED = "self-hosted",
 }
 
 export const ProviderConfigSchema = z.object({
@@ -29,8 +30,16 @@ export const ProviderConfigSchema = z.object({
     baseUrl: z.string().optional().describe("Base URL for OpenAI API (for custom OpenAI-compatible endpoints)"),
     // Ollama-specific
     ollamaBaseUrl: z.string().optional().describe("Base URL for local model server (for Ollama)"),
-    customModel: z.string().optional().describe("Custom model name (for Ollama custom models)"),
+    apiToken: z.string().optional().describe("Bearer token for remote Ollama API gateways"),
+    model: z.string().optional().describe("Model name for Ollama API-compatible servers / self-hosted models"),
     detectedModels: z.array(z.string()).optional().describe("Models detected from the local Ollama instance"),
+    // Self-hosted-specific
+    endpoint: z.string().optional().describe("Self-hosted model endpoint URL"),
+    accessToken: z.string().optional().describe("Optional bearer token for self-hosted model server"),
+    
+    // Deprecated fields kept for backward compatibility (normalized on load)
+    selfHostedEndpoint: z.string().optional().describe("Deprecated: use endpoint instead"),
+    customModel: z.string().optional().describe("Deprecated: use model instead"),
 });
 
 export type ProviderConfig = z.infer<typeof ProviderConfigSchema>;
@@ -122,6 +131,7 @@ export const PROVIDER_MODELS: Record<AIProvider, LLMModel[]> = {
         LLMModel.OLLAMA_PHI3,
         LLMModel.OLLAMA_CUSTOM,
     ],
+    [AIProvider.SELF_HOSTED]: [LLMModel.SELF_HOSTED_CUSTOM],
 };
 
 export const PROVIDER_ENV_VARS: Record<AIProvider, string> = {
@@ -132,6 +142,7 @@ export const PROVIDER_ENV_VARS: Record<AIProvider, string> = {
     [AIProvider.XAI]: "XAI_API_KEY",
     [AIProvider.DEEPSEEK]: "DEEPSEEK_API_KEY",
     [AIProvider.OLLAMA]: "OLLAMA_BASE_URL",
+    [AIProvider.SELF_HOSTED]: "SELF_HOSTED_ACCESS_TOKEN",
 };
 
 export const PROVIDER_BASE_URL_ENV_VARS: Record<AIProvider, string | undefined> = {
@@ -142,6 +153,7 @@ export const PROVIDER_BASE_URL_ENV_VARS: Record<AIProvider, string | undefined> 
     [AIProvider.XAI]: undefined,
     [AIProvider.DEEPSEEK]: undefined,
     [AIProvider.OLLAMA]: "OLLAMA_BASE_URL",
+    [AIProvider.SELF_HOSTED]: "SELF_HOSTED_ENDPOINT",
 };
 
 export const PROVIDER_DEFAULT_KEY_PATHS: Record<AIProvider, string[]> = {
@@ -152,10 +164,11 @@ export const PROVIDER_DEFAULT_KEY_PATHS: Record<AIProvider, string[]> = {
     [AIProvider.XAI]: [],
     [AIProvider.DEEPSEEK]: [],
     [AIProvider.OLLAMA]: [],
+    [AIProvider.SELF_HOSTED]: [],
 };
 
-/** Providers that don't need an API key */
-export const KEYLESS_PROVIDERS = new Set([AIProvider.BEDROCK, AIProvider.OLLAMA]);
+/** Providers that don't need a mandatory API key */
+export const KEYLESS_PROVIDERS = new Set([AIProvider.BEDROCK, AIProvider.OLLAMA, AIProvider.SELF_HOSTED]);
 
 // --- Service ---
 
@@ -191,11 +204,115 @@ export class ConfigService {
         const configPath = this.getPersonalConfigPath();
         if (existsSync(configPath)) {
             const raw = await readFile(configPath, "utf8");
-            this.personalConfig = PersonalConfigurationSchema.parse(JSON.parse(raw));
+            this.personalConfig = PersonalConfigurationSchema.parse(this.normalizePersonalConfig(JSON.parse(raw)));
         } else {
             this.personalConfig = PersonalConfigurationSchema.parse({});
         }
         return this.personalConfig;
+    }
+
+    private normalizePersonalConfig(raw: unknown): unknown {
+        if (!raw || typeof raw !== "object") return raw;
+
+        const config = raw as Record<string, unknown>;
+        const providers = this.normalizeProviders(config.providers);
+
+        if (config.defaultProvider === "selfhosted") {
+            config.defaultProvider = AIProvider.SELF_HOSTED;
+        }
+        if (config.defaultModel === "selfhosted-custom" || config.defaultModel === "self-hosted-custom") {
+            config.defaultModel = LLMModel.SELF_HOSTED_CUSTOM;
+        }
+
+        if (config.provider === AIProvider.SELF_HOSTED || config.provider === "selfhosted") {
+            const selfHosted = config.selfHosted as Record<string, unknown> | undefined;
+            const providerConfig: ProviderConfig = { enabled: true };
+            if (typeof selfHosted?.endpoint === "string") providerConfig.endpoint = selfHosted.endpoint;
+            if (typeof selfHosted?.model === "string") providerConfig.model = selfHosted.model;
+            if (typeof selfHosted?.accessToken === "string") providerConfig.accessToken = selfHosted.accessToken;
+
+            return {
+                ...config,
+                defaultProvider: AIProvider.SELF_HOSTED,
+                defaultModel: LLMModel.SELF_HOSTED_CUSTOM,
+                providers: {
+                    ...providers,
+                    [AIProvider.SELF_HOSTED]: {
+                        ...(providers?.[AIProvider.SELF_HOSTED] ?? {}),
+                        ...providerConfig,
+                    },
+                },
+            };
+        }
+
+        if (config.provider !== AIProvider.OLLAMA) {
+            return providers === config.providers ? raw : { ...config, providers };
+        }
+
+        const providerConfig: ProviderConfig = { enabled: true };
+        if (typeof config.baseUrl === "string") providerConfig.baseUrl = config.baseUrl;
+        if (typeof config.apiToken === "string") providerConfig.apiToken = config.apiToken;
+        if (typeof config.model === "string") providerConfig.model = config.model;
+
+        return {
+            ...config,
+            defaultProvider: AIProvider.OLLAMA,
+            defaultModel: LLMModel.OLLAMA_CUSTOM,
+            providers: {
+                ...(providers ?? {}),
+                [AIProvider.OLLAMA]: {
+                    ...(providers?.[AIProvider.OLLAMA] ?? {}),
+                    ...providerConfig,
+                },
+            },
+        };
+    }
+
+    private normalizeProviders(rawProviders: unknown): PersonalConfiguration["providers"] | undefined {
+        if (!rawProviders || typeof rawProviders !== "object") return rawProviders as undefined;
+
+        const rawProvidersObj = rawProviders as Record<string, any>;
+        const providers: Record<string, any> = {};
+
+        for (const [key, rawConfig] of Object.entries(rawProvidersObj)) {
+            if (rawConfig && typeof rawConfig === "object") {
+                const config = { ...rawConfig };
+                
+                // Normalize selfHostedEndpoint to endpoint
+                if (config.selfHostedEndpoint && !config.endpoint) {
+                    config.endpoint = config.selfHostedEndpoint;
+                }
+                // Normalize customModel to model
+                if (config.customModel && !config.model) {
+                    config.model = config.customModel;
+                }
+
+                providers[key] = config;
+            } else {
+                providers[key] = rawConfig;
+            }
+        }
+
+        if (providers.selfhosted) {
+            providers[AIProvider.SELF_HOSTED] = {
+                ...providers.selfhosted,
+                ...providers[AIProvider.SELF_HOSTED],
+            };
+            delete providers.selfhosted;
+        }
+
+        // Apply same normalization for selfhosted after merge if needed
+        const shConfig = providers[AIProvider.SELF_HOSTED];
+        if (shConfig && typeof shConfig === "object") {
+            if (shConfig.selfHostedEndpoint && !shConfig.endpoint) {
+                shConfig.endpoint = shConfig.selfHostedEndpoint;
+            }
+            if (shConfig.customModel && !shConfig.model) {
+                shConfig.model = shConfig.customModel;
+            }
+        }
+
+        return providers as PersonalConfiguration["providers"];
     }
 
     public async savePersonalConfig(config: PersonalConfiguration): Promise<void> {

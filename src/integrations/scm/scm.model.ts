@@ -24,18 +24,23 @@ export interface InlineComment {
     body: string;
 }
 
+export interface SCMRequestContext {
+    instanceUrl?: string;
+}
+
 export interface SCMService {
     readonly provider: SCMProvider;
 
-    getPullRequest(owner: string, repo: string, prNumber: number): Promise<PullRequestInfo>;
-    getPullRequestDiff(owner: string, repo: string, prNumber: number): Promise<string>;
-    postReviewComment(owner: string, repo: string, prNumber: number, body: string): Promise<void>;
+    getPullRequest(owner: string, repo: string, prNumber: number, context?: SCMRequestContext): Promise<PullRequestInfo>;
+    getPullRequestDiff(owner: string, repo: string, prNumber: number, context?: SCMRequestContext): Promise<string>;
+    postReviewComment(owner: string, repo: string, prNumber: number, body: string, context?: SCMRequestContext): Promise<void>;
     postInlineReview(
         owner: string,
         repo: string,
         prNumber: number,
         body: string,
         comments: InlineComment[],
+        context?: SCMRequestContext,
     ): Promise<void>;
-    findPullRequestByBranch(owner: string, repo: string, branch: string): Promise<number | null>;
+    findPullRequestByBranch(owner: string, repo: string, branch: string, context?: SCMRequestContext): Promise<number | null>;
 }

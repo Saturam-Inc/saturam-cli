@@ -1,5 +1,6 @@
 import type { ChatAnthropic } from "@langchain/anthropic";
 import type { ChatBedrockConverse } from "@langchain/aws";
+import type { BaseMessage } from "@langchain/core/messages";
 import type { ChatGoogleGenerativeAI } from "@langchain/google-genai";
 import type { ChatOllama } from "@langchain/ollama";
 import type { ChatOpenAI } from "@langchain/openai";
@@ -45,6 +46,9 @@ export enum LLMModel {
     DEEPSEEK_CHAT = "deepseek-chat",
     DEEPSEEK_REASONER = "deepseek-reasoner",
 
+    // Self-hosted (Ollama-compatible)
+    SELF_HOSTED_CUSTOM = "selfhosted-custom",
+
     // Ollama (local)
     OLLAMA_LLAMA3 = "llama3",
     OLLAMA_LLAMA3_1 = "llama3.1",
@@ -59,13 +63,18 @@ export enum LLMModel {
     OLLAMA_CUSTOM = "ollama-custom",
 }
 
+export interface SelfHostedChatModel {
+    invoke(messages: BaseMessage[]): Promise<{ content: string }>;
+}
+
 export type ChatModel =
     | ChatAnthropic
     | ChatBedrockConverse
     | ChatGoogleGenerativeAI
     | ChatOpenAI
     | ChatXAI
-    | ChatOllama;
+    | ChatOllama
+    | SelfHostedChatModel;
 
 export const MODEL_CONTEXT_WINDOWS: Record<LLMModel, number> = {
     // Anthropic
@@ -97,6 +106,12 @@ export const MODEL_CONTEXT_WINDOWS: Record<LLMModel, number> = {
     // DeepSeek
     [LLMModel.DEEPSEEK_CHAT]: 64000,
     [LLMModel.DEEPSEEK_REASONER]: 64000,
+    // Self-hosted (defaults to 32000, configurable via SELF_HOSTED_CONTEXT_WINDOW)
+    [LLMModel.SELF_HOSTED_CUSTOM]: (() => {
+        const val = process.env.SELF_HOSTED_CONTEXT_WINDOW;
+        const num = val ? parseInt(val, 10) : NaN;
+        return isNaN(num) || num <= 0 ? 32000 : num;
+    })(),
     // Ollama (varies by model, these are defaults)
     [LLMModel.OLLAMA_LLAMA3]: 8192,
     [LLMModel.OLLAMA_LLAMA3_1]: 131072,
@@ -108,7 +123,11 @@ export const MODEL_CONTEXT_WINDOWS: Record<LLMModel, number> = {
     [LLMModel.OLLAMA_QWEN2_5_CODER]: 32768,
     [LLMModel.OLLAMA_GEMMA2]: 8192,
     [LLMModel.OLLAMA_PHI3]: 128000,
-    [LLMModel.OLLAMA_CUSTOM]: 8192,
+    [LLMModel.OLLAMA_CUSTOM]: (() => {
+        const val = process.env.OLLAMA_CONTEXT_WINDOW;
+        const num = val ? parseInt(val, 10) : NaN;
+        return isNaN(num) || num <= 0 ? 8192 : num;
+    })(),
 };
 
 export function getModelContextWindow(model: LLMModel): number {
@@ -147,6 +166,7 @@ const OPENAI_MODELS = new Set([
 ]);
 const GROK_MODELS = new Set([LLMModel.GROK_2]);
 const DEEPSEEK_MODELS = new Set([LLMModel.DEEPSEEK_CHAT, LLMModel.DEEPSEEK_REASONER]);
+const SELF_HOSTED_MODELS = new Set([LLMModel.SELF_HOSTED_CUSTOM]);
 const OLLAMA_MODELS = new Set([
     LLMModel.OLLAMA_LLAMA3,
     LLMModel.OLLAMA_LLAMA3_1,
@@ -187,4 +207,8 @@ export function isDeepSeekModel(model: LLMModel): boolean {
 
 export function isOllamaModel(model: LLMModel): boolean {
     return OLLAMA_MODELS.has(model);
+}
+
+export function isSelfHostedModel(model: LLMModel): boolean {
+    return SELF_HOSTED_MODELS.has(model);
 }

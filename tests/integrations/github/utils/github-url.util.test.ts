@@ -19,6 +19,18 @@ describe("parsePullRequestUrl", () => {
             owner: "group/subgroup1/subgroup2",
             repo: "project",
             prNumber: 5,
+            instanceUrl: "https://gitlab.com",
+        });
+    });
+
+    it("parses a self-hosted GitLab MR URL without including the host in the project path", () => {
+        const result = parsePullRequestUrl("https://git.example.com/group/subgroup/project/-/merge_requests/12");
+        expect(result).toEqual({
+            provider: SCMProvider.GITLAB,
+            owner: "group/subgroup",
+            repo: "project",
+            prNumber: 12,
+            instanceUrl: "https://git.example.com",
         });
     });
 });

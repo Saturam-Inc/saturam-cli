@@ -5,6 +5,7 @@ export interface ParsedPRUrl {
     owner: string;
     repo: string;
     prNumber: number;
+    instanceUrl?: string;
 }
 
 const GITHUB_PR_REGEX = /github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/;
@@ -12,7 +13,7 @@ const BITBUCKET_PR_REGEX = /bitbucket\.org\/([^/]+)\/([^/]+)\/pull-requests\/(\d
 // GitLab MR URLs are identified by the "/-/merge_requests/" path structure, which is GitLab-specific.
 // Matches against the URL pathname only (after the host) so the host is never captured.
 // Supports self-hosted instances and any depth of sub-group nesting.
-const GITLAB_MR_REGEX = /^\/([^?#]+)\/-\/merge_requests\/(\d+)/;
+const GITLAB_MR_REGEX = /^\/(.+\/[^/?#]+)\/-\/merge_requests\/(\d+)(?:[/?#]|$)/;
 
 export function parsePullRequestUrl(url: string): ParsedPRUrl | null {
     const ghMatch = url.match(GITHUB_PR_REGEX);
@@ -37,8 +38,11 @@ export function parsePullRequestUrl(url: string): ParsedPRUrl | null {
 
     // Parse pathname separately so the host is never included in the captured path.
     let pathname: string;
+    let instanceUrl: string | undefined;
     try {
-        pathname = new URL(url).pathname;
+        const parsedUrl = new URL(url);
+        pathname = parsedUrl.pathname;
+        instanceUrl = `${parsedUrl.protocol}//${parsedUrl.host}`;
     } catch {
         pathname = url; // fall back for non-standard URLs (e.g. during tests with partial strings)
     }
@@ -53,6 +57,7 @@ export function parsePullRequestUrl(url: string): ParsedPRUrl | null {
             owner,
             repo,
             prNumber: parseInt(glMatch[2], 10),
+            instanceUrl,
         };
     }
 
