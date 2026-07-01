@@ -310,11 +310,27 @@ Premium models also available:
 
 **Important:** Use the model name exactly as shown in OpenRouter's model list when configuring your default model.
 
+### Running a review
+
+```bash
+# Review by MR number (detects repo and instance from current directory + env)
+sat-cli review 42
+
+# Review by MR URL
+sat-cli review https://git.example.com/namespace/repo/-/merge_requests/42
+
+# Auto-post without confirmation
+sat-cli review 42 --post
+```
+
 ### Persistent configuration
 
 Instead of env vars, you can save these values once via `sat-cli init` by selecting the OpenAI provider:
 
 ```
+? Which source control platforms do you use? GitLab
+? GitLab personal access token: glpat-...
+? GitLab instance URL (leave empty for gitlab.com): https://git.example.com
 ? OpenAI API key: sk-or-v1-...
 ? OpenAI base URL (leave empty for default OpenAI API): https://openrouter.ai/api/v1
 ```
