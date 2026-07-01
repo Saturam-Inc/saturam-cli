@@ -1,7 +1,10 @@
+import { getLogger } from "log4js";
 import { Service } from "typedi";
 import { InlineComment, PullRequestInfo, SCMProvider, SCMRequestContext, SCMService } from "../../scm/scm.model";
 import { GitLabDiscussionPosition } from "../models/gitlab.model";
 import { GitLabService } from "./gitlab.service";
+
+const logger = getLogger("GitLabSCMService");
 
 @Service()
 export class GitLabSCMService implements SCMService {
@@ -69,7 +72,8 @@ export class GitLabSCMService implements SCMService {
         // Fetch diff_refs (base/start/head SHAs) required by the GitLab discussions position API
         const mr = await this.gitlab.getMergeRequest(namespace, repo, mrIid, context);
         if (!mr.diff_refs) {
-            throw new Error(`GitLab MR !${mrIid} is missing diff_refs; cannot post inline comments.`);
+            logger.warn(`GitLab MR !${mrIid} is missing diff_refs; skipping inline comments.`);
+            return;
         }
         const { base_sha, start_sha, head_sha } = mr.diff_refs;
 

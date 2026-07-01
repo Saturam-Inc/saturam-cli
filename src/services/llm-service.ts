@@ -250,7 +250,7 @@ export class LlmService {
         // For remote/custom Ollama deployments, prefer the exact configured model name.
         const modelName =
             providerConfig?.model ??
-            (model === LLMModel.OLLAMA_CUSTOM ? (providerConfig?.customModel ?? "llama3") : (model as string));
+            (model === LLMModel.OLLAMA_CUSTOM ? (providerConfig?.model ?? providerConfig?.customModel ?? "llama3") : (model as string));
         if (model === LLMModel.OLLAMA_CUSTOM) {
             logger.info(`Using custom Ollama model: ${modelName}`);
         }
@@ -272,16 +272,22 @@ export class LlmService {
         const modelName =
             providerConfig?.model ??
             providerConfig?.customModel ??
-            process.env.SELF_HOSTED_MODEL ??
-            "selfhosted-custom";
-        const accessToken = getSelfHostedAuthToken(providerConfig);
-        const timeoutMs = Number(process.env.SELF_HOSTED_TIMEOUT_MS ?? DEFAULT_SELF_HOSTED_TIMEOUT_MS);
+            process.env.SELF_HOSTED_MODEL;
 
         if (!endpoint) {
             throw new Error(
                 "Self-hosted model endpoint URL is required. Set SELF_HOSTED_ENDPOINT or run 'sat-cli init'.",
             );
         }
+
+        if (!modelName) {
+            throw new Error(
+                "Self-hosted model name is required. Set SELF_HOSTED_MODEL or run 'sat-cli init'.",
+            );
+        }
+
+        const accessToken = getSelfHostedAuthToken(providerConfig);
+        const timeoutMs = Number(process.env.SELF_HOSTED_TIMEOUT_MS ?? DEFAULT_SELF_HOSTED_TIMEOUT_MS);
 
         const invokeSelfHosted = async (messages: BaseMessage[]) => {
             const url = `${normalizeBaseUrl(endpoint)}/api/chat`;

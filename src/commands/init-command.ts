@@ -376,9 +376,7 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         return {
             enabled: true,
             endpoint,
-            selfHostedEndpoint: endpoint,
             model,
-            customModel: model,
             accessToken: resolvedAccessToken || undefined,
         };
     }
@@ -497,7 +495,6 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
             // Update provider config with the custom model name
             if (providerConfig) {
                 providerConfig.model = selected;
-                providerConfig.customModel = selected;
             }
             return LLMModel.OLLAMA_CUSTOM;
         }
@@ -506,7 +503,11 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
     }
 
     private async promptForOptionalOllamaApiToken(existingToken?: string): Promise<string | undefined> {
-        const masked = existingToken ? `${existingToken.slice(0, 8)}...${existingToken.slice(-4)}` : undefined;
+        const masked = existingToken
+            ? existingToken.length > 16
+                ? `${existingToken.slice(0, 8)}...${existingToken.slice(-4)}`
+                : "(configured)"
+            : undefined;
         const hint = masked ? ` (press enter to keep ${masked})` : " (leave empty if not required)";
         const token = await password({
             message: `Ollama API gateway bearer token${hint}:`,
@@ -529,7 +530,9 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
 
         // If we have an existing key, ask if user wants to keep it
         if (existingKey) {
-            const masked = `${existingKey.slice(0, 8)}...${existingKey.slice(-4)}`;
+            const masked = existingKey.length > 16
+                ? `${existingKey.slice(0, 8)}...${existingKey.slice(-4)}`
+                : "(configured)";
             const useExisting = await confirm({
                 message: `Use existing API key ${masked}?`,
                 default: true,
@@ -721,7 +724,11 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
                         `    ${PROVIDER_DISPLAY_NAMES[provider]}: endpoint=${endpoint}, model=${modelName}${auth}${isDefault}`,
                     );
                 } else {
-                    const masked = val.apiKey ? `${val.apiKey.slice(0, 8)}...${val.apiKey.slice(-4)}` : "not set";
+                    const masked = val.apiKey
+                        ? val.apiKey.length > 16
+                            ? `${val.apiKey.slice(0, 8)}...${val.apiKey.slice(-4)}`
+                            : "(configured)"
+                        : "not set";
                     logger.info(`    ${PROVIDER_DISPLAY_NAMES[provider]}: ${masked}${isDefault}`);
                 }
             }
@@ -732,7 +739,10 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         // SCM platforms
         const scmPlatforms: string[] = [];
         if (config.githubToken) {
-            scmPlatforms.push(`GitHub (token: ${config.githubToken.slice(0, 8)}...)`);
+            const masked = config.githubToken.length > 16
+                ? `${config.githubToken.slice(0, 8)}...`
+                : "(configured)";
+            scmPlatforms.push(`GitHub (token: ${masked})`);
         } else if (this.checkGhCli()) {
             scmPlatforms.push("GitHub (via gh CLI)");
         }
@@ -746,7 +756,10 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         }
         if (config.gitlabToken) {
             const instance = config.gitlabInstanceUrl ?? "gitlab.com";
-            scmPlatforms.push(`GitLab (token: ${config.gitlabToken.slice(0, 8)}..., instance: ${instance})`);
+            const masked = config.gitlabToken.length > 16
+                ? `${config.gitlabToken.slice(0, 8)}...`
+                : "(configured)";
+            scmPlatforms.push(`GitLab (token: ${masked}, instance: ${instance})`);
         }
         if (scmPlatforms.length > 0) {
             logger.info("  SCM platforms:");

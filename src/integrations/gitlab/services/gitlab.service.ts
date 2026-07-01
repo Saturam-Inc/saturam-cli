@@ -9,6 +9,8 @@ const logger = getLogger("GitLabService");
 
 @Service()
 export class GitLabService {
+    private diffsCache = new Map<string, Promise<Array<{ diff: string; new_path: string; old_path: string }>>>();
+
     constructor(private readonly config: ConfigService) {}
 
     private async getBaseUrl(context?: SCMRequestContext): Promise<string> {
@@ -57,16 +59,41 @@ export class GitLabService {
         mrIid: number,
         context?: SCMRequestContext,
     ): Promise<Array<{ diff: string; new_path: string; old_path: string }>> {
-        const baseUrl = await this.getBaseUrl(context);
-        const headers = await this.getHeaders();
-        const projectId = this.encodeProjectId(namespace, repo);
-        const response = await fetch(`${baseUrl}/projects/${projectId}/merge_requests/${mrIid}/diffs?unidiff=true`, {
-            headers,
-        });
-        if (!response.ok) {
-            throw new Error(`Failed to fetch GitLab MR diff !${mrIid}: ${response.status} ${response.statusText}`);
+        const cacheKey = `${namespace}/${repo}/${mrIid}`;
+        let promise = this.diffsCache.get(cacheKey);
+        if (!promise) {
+            promise = (async () => {
+                try {
+                    const baseUrl = await this.getBaseUrl(context);
+                    const headers = await this.getHeaders();
+                    const projectId = this.encodeProjectId(namespace, repo);
+                    const allDiffs: Array<{ diff: string; new_path: string; old_path: string }> = [];
+                    let page = 1;
+                    const perPage = 100;
+                    while (true) {
+                        const response = await fetch(
+                            `${baseUrl}/projects/${projectId}/merge_requests/${mrIid}/diffs?unidiff=true&per_page=${perPage}&page=${page}`,
+                            { headers },
+                        );
+                        if (!response.ok) {
+                            throw new Error(`Failed to fetch GitLab MR diff !${mrIid} (page ${page}): ${response.status} ${response.statusText}`);
+                        }
+                        const diffs = await (response.json() as Promise<Array<{ diff: string; new_path: string; old_path: string }>>);
+                        allDiffs.push(...diffs);
+                        if (diffs.length < perPage) {
+                            break;
+                        }
+                        page++;
+                    }
+                    return allDiffs;
+                } catch (error) {
+                    this.diffsCache.delete(cacheKey);
+                    throw error;
+                }
+            })();
+            this.diffsCache.set(cacheKey, promise);
         }
-        return response.json() as Promise<Array<{ diff: string; new_path: string; old_path: string }>>;
+        return promise;
     }
 
     public async getMergeRequestDiff(

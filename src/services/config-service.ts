@@ -31,13 +31,15 @@ export const ProviderConfigSchema = z.object({
     // Ollama-specific
     ollamaBaseUrl: z.string().optional().describe("Base URL for local model server (for Ollama)"),
     apiToken: z.string().optional().describe("Bearer token for remote Ollama API gateways"),
-    model: z.string().optional().describe("Model name for Ollama API-compatible servers"),
-    customModel: z.string().optional().describe("Custom model name (for Ollama custom models)"),
+    model: z.string().optional().describe("Model name for Ollama API-compatible servers / self-hosted models"),
     detectedModels: z.array(z.string()).optional().describe("Models detected from the local Ollama instance"),
     // Self-hosted-specific
     endpoint: z.string().optional().describe("Self-hosted model endpoint URL"),
     accessToken: z.string().optional().describe("Optional bearer token for self-hosted model server"),
-    selfHostedEndpoint: z.string().optional().describe("Self-hosted model endpoint URL"),
+    
+    // Deprecated fields kept for backward compatibility (normalized on load)
+    selfHostedEndpoint: z.string().optional().describe("Deprecated: use endpoint instead"),
+    customModel: z.string().optional().describe("Deprecated: use model instead"),
 });
 
 export type ProviderConfig = z.infer<typeof ProviderConfigSchema>;
@@ -269,7 +271,28 @@ export class ConfigService {
     private normalizeProviders(rawProviders: unknown): PersonalConfiguration["providers"] | undefined {
         if (!rawProviders || typeof rawProviders !== "object") return rawProviders as undefined;
 
-        const providers = { ...(rawProviders as Record<string, ProviderConfig>) };
+        const rawProvidersObj = rawProviders as Record<string, any>;
+        const providers: Record<string, any> = {};
+
+        for (const [key, rawConfig] of Object.entries(rawProvidersObj)) {
+            if (rawConfig && typeof rawConfig === "object") {
+                const config = { ...rawConfig };
+                
+                // Normalize selfHostedEndpoint to endpoint
+                if (config.selfHostedEndpoint && !config.endpoint) {
+                    config.endpoint = config.selfHostedEndpoint;
+                }
+                // Normalize customModel to model
+                if (config.customModel && !config.model) {
+                    config.model = config.customModel;
+                }
+
+                providers[key] = config;
+            } else {
+                providers[key] = rawConfig;
+            }
+        }
+
         if (providers.selfhosted) {
             providers[AIProvider.SELF_HOSTED] = {
                 ...providers.selfhosted,
@@ -277,6 +300,18 @@ export class ConfigService {
             };
             delete providers.selfhosted;
         }
+
+        // Apply same normalization for selfhosted after merge if needed
+        const shConfig = providers[AIProvider.SELF_HOSTED];
+        if (shConfig && typeof shConfig === "object") {
+            if (shConfig.selfHostedEndpoint && !shConfig.endpoint) {
+                shConfig.endpoint = shConfig.selfHostedEndpoint;
+            }
+            if (shConfig.customModel && !shConfig.model) {
+                shConfig.model = shConfig.customModel;
+            }
+        }
+
         return providers as PersonalConfiguration["providers"];
     }
 
