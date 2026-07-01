@@ -255,7 +255,8 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
 
     private async configureOpenAIProvider(existing?: ProviderConfig): Promise<ProviderConfig> {
         const apiKey = await this.promptForApiKey(AIProvider.OPENAI, existing?.apiKey);
-
+        
+        // Always ask for base URL, showing current/default value
         const currentUrl = existing?.baseUrl ?? process.env.OPENAI_BASE_URL;
         const baseUrl = await input({
             message: "OpenAI base URL (leave empty for default OpenAI API):",
