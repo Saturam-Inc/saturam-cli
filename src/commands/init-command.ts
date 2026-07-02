@@ -324,7 +324,7 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         const endpoint = normalizeBaseUrl(
             await input({
                 message: "Self-hosted LLM endpoint/base URL:",
-                default: existing?.endpoint ?? existing?.selfHostedEndpoint ?? process.env.SELF_HOSTED_ENDPOINT ?? "",
+                default: existing?.endpoint ?? process.env.SELF_HOSTED_ENDPOINT ?? "",
                 validate: (val) =>
                     val.startsWith("http://") || val.startsWith("https://") ? true : "Must be a valid HTTP/HTTPS URL",
             }),
@@ -333,7 +333,7 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         const model = await input({
             message: "Model name:",
             default:
-                existing?.model ?? existing?.customModel ?? process.env.SELF_HOSTED_MODEL ?? "qwen2.5-coder:latest",
+                existing?.model ?? process.env.SELF_HOSTED_MODEL ?? "qwen2.5-coder:latest",
             validate: (val) => (val.trim() ? true : "Model name is required"),
         });
 
@@ -712,13 +712,13 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
                     );
                 } else if (provider === AIProvider.OLLAMA) {
                     const url = val.baseUrl ?? "http://localhost:11434";
-                    const custom = val.customModel ?? val.model;
+                    const custom = val.model;
                     const customText = custom ? `, model=${custom}` : "";
                     const auth = val.apiToken ? ", auth=token set" : "";
                     logger.info(`    ${PROVIDER_DISPLAY_NAMES[provider]}: ${url}${customText}${auth}${isDefault}`);
                 } else if (provider === AIProvider.SELF_HOSTED) {
-                    const endpoint = val.endpoint ?? val.selfHostedEndpoint ?? "not set";
-                    const modelName = val.model ?? val.customModel ?? "selfhosted-custom";
+                    const endpoint = val.endpoint ?? "not set";
+                    const modelName = val.model ?? "selfhosted-custom";
                     const auth = (val.accessToken ?? val.apiToken ?? val.apiKey) ? ", auth=token set" : "";
                     logger.info(
                         `    ${PROVIDER_DISPLAY_NAMES[provider]}: endpoint=${endpoint}, model=${modelName}${auth}${isDefault}`,

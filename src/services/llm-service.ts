@@ -250,7 +250,7 @@ export class LlmService {
         // For remote/custom Ollama deployments, prefer the exact configured model name.
         const modelName =
             providerConfig?.model ??
-            (model === LLMModel.OLLAMA_CUSTOM ? (providerConfig?.model ?? providerConfig?.customModel ?? "llama3") : (model as string));
+            (model === LLMModel.OLLAMA_CUSTOM ? "llama3" : (model as string));
         if (model === LLMModel.OLLAMA_CUSTOM) {
             logger.info(`Using custom Ollama model: ${modelName}`);
         }
@@ -268,10 +268,9 @@ export class LlmService {
     private async createSelfHostedModel(model: LLMModel, options?: LLMOptions): Promise<ChatModel> {
         const providerConfig = await this.config.getProviderConfig(AIProvider.SELF_HOSTED);
         const endpoint =
-            providerConfig?.endpoint ?? providerConfig?.selfHostedEndpoint ?? process.env.SELF_HOSTED_ENDPOINT;
+            providerConfig?.endpoint ?? process.env.SELF_HOSTED_ENDPOINT;
         const modelName =
             providerConfig?.model ??
-            providerConfig?.customModel ??
             process.env.SELF_HOSTED_MODEL;
 
         if (!endpoint) {

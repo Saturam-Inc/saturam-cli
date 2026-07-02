@@ -36,10 +36,6 @@ export const ProviderConfigSchema = z.object({
     // Self-hosted-specific
     endpoint: z.string().optional().describe("Self-hosted model endpoint URL"),
     accessToken: z.string().optional().describe("Optional bearer token for self-hosted model server"),
-    
-    // Deprecated fields kept for backward compatibility (normalized on load)
-    selfHostedEndpoint: z.string().optional().describe("Deprecated: use endpoint instead"),
-    customModel: z.string().optional().describe("Deprecated: use model instead"),
 });
 
 export type ProviderConfig = z.infer<typeof ProviderConfigSchema>;
@@ -227,8 +223,10 @@ export class ConfigService {
         if (config.provider === AIProvider.SELF_HOSTED || config.provider === "selfhosted") {
             const selfHosted = config.selfHosted as Record<string, unknown> | undefined;
             const providerConfig: ProviderConfig = { enabled: true };
-            if (typeof selfHosted?.endpoint === "string") providerConfig.endpoint = selfHosted.endpoint;
-            if (typeof selfHosted?.model === "string") providerConfig.model = selfHosted.model;
+            const endpoint = selfHosted?.endpoint ?? selfHosted?.selfHostedEndpoint;
+            const model = selfHosted?.model ?? selfHosted?.customModel;
+            if (typeof endpoint === "string") providerConfig.endpoint = endpoint;
+            if (typeof model === "string") providerConfig.model = model;
             if (typeof selfHosted?.accessToken === "string") providerConfig.accessToken = selfHosted.accessToken;
 
             return {
@@ -279,12 +277,18 @@ export class ConfigService {
                 const config = { ...rawConfig };
                 
                 // Normalize selfHostedEndpoint to endpoint
-                if (config.selfHostedEndpoint && !config.endpoint) {
-                    config.endpoint = config.selfHostedEndpoint;
+                if (config.selfHostedEndpoint) {
+                    if (!config.endpoint) {
+                        config.endpoint = config.selfHostedEndpoint;
+                    }
+                    delete config.selfHostedEndpoint;
                 }
                 // Normalize customModel to model
-                if (config.customModel && !config.model) {
-                    config.model = config.customModel;
+                if (config.customModel) {
+                    if (!config.model) {
+                        config.model = config.customModel;
+                    }
+                    delete config.customModel;
                 }
 
                 providers[key] = config;
@@ -304,11 +308,17 @@ export class ConfigService {
         // Apply same normalization for selfhosted after merge if needed
         const shConfig = providers[AIProvider.SELF_HOSTED];
         if (shConfig && typeof shConfig === "object") {
-            if (shConfig.selfHostedEndpoint && !shConfig.endpoint) {
-                shConfig.endpoint = shConfig.selfHostedEndpoint;
+            if (shConfig.selfHostedEndpoint) {
+                if (!shConfig.endpoint) {
+                    shConfig.endpoint = shConfig.selfHostedEndpoint;
+                }
+                delete shConfig.selfHostedEndpoint;
             }
-            if (shConfig.customModel && !shConfig.model) {
-                shConfig.model = shConfig.customModel;
+            if (shConfig.customModel) {
+                if (!shConfig.model) {
+                    shConfig.model = shConfig.customModel;
+                }
+                delete shConfig.customModel;
             }
         }
 
