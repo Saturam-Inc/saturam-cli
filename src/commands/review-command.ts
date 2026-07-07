@@ -7,7 +7,7 @@ import { GitService } from "../integrations/github/services/git.service";
 import { GitHubDiffService } from "../integrations/github/services/github-diff.service";
 import { isPullRequestUrl, parsePullRequestUrl } from "../integrations/github/utils/github-url.util";
 import { SCMFactory } from "../integrations/scm/scm-factory.service";
-import { InlineComment, SCMService } from "../integrations/scm/scm.model";
+import { InlineComment, SCMRequestContext, SCMService } from "../integrations/scm/scm.model";
 import { ConfigService } from "../services/config-service";
 import { AuditResult, Finding } from "../services/review/finding-parser.service";
 import { MultiAgentReviewService } from "../services/review/multi-agent-review.service";
@@ -67,7 +67,7 @@ export class ReviewCommand implements TypedCommand<typeof INPUTS> {
     ) {}
 
     public async execute(inputs: TypedInputs<typeof INPUTS>): Promise<void> {
-        const { scm, owner, repo, prNumber } = await this.resolveTarget(inputs.target);
+        const { scm, owner, repo, prNumber, context } = await this.resolveTarget(inputs.target);
         const session = this.config.getSessionConfiguration();
         const autoMode = inputs.auto || session.ci;
 
@@ -75,8 +75,8 @@ export class ReviewCommand implements TypedCommand<typeof INPUTS> {
 
         // Phase 0: Gather context
         const [pr, rawDiff, ticketContext] = await Promise.all([
-            scm.getPullRequest(owner, repo, prNumber),
-            scm.getPullRequestDiff(owner, repo, prNumber),
+            scm.getPullRequest(owner, repo, prNumber, context),
+            scm.getPullRequestDiff(owner, repo, prNumber, context),
             this.resolveTicketContext(inputs.ticket),
         ]);
 
@@ -137,7 +137,7 @@ export class ReviewCommand implements TypedCommand<typeof INPUTS> {
                     });
 
             if (shouldPost) {
-                await this.postReview(scm, owner, repo, prNumber, audit, rawDiff);
+                await this.postReview(scm, owner, repo, prNumber, audit, rawDiff, context);
             } else if (!autoMode) {
                 logger.info(`Review not posted. Artifacts at: ${result.artifactsDir}`);
             } else {
@@ -160,10 +160,11 @@ export class ReviewCommand implements TypedCommand<typeof INPUTS> {
         prNumber: number,
         audit: AuditResult,
         rawDiff: string,
+        context?: SCMRequestContext,
     ): Promise<void> {
         if (audit.findings.length === 0) {
             const summary = this.multiAgent.findingParser.formatSummaryTable(audit, prNumber);
-            await scm.postReviewComment(owner, repo, prNumber, summary);
+            await scm.postReviewComment(owner, repo, prNumber, summary, context);
             logger.info("Summary posted (no inline findings).");
             return;
         }
@@ -179,12 +180,12 @@ export class ReviewCommand implements TypedCommand<typeof INPUTS> {
 
         logger.info(`\nPosting to ${scm.provider}: ${comments.length} inline + summary...`);
         try {
-            await scm.postInlineReview(owner, repo, prNumber, summary, comments);
+            await scm.postInlineReview(owner, repo, prNumber, summary, comments, context);
             logger.info("Review posted successfully.");
         } catch (e) {
             logger.error(`Inline review failed: ${(e as Error).message}`);
             logger.info("Falling back to single comment...");
-            await scm.postReviewComment(owner, repo, prNumber, audit.rawMarkdown || summary);
+            await scm.postReviewComment(owner, repo, prNumber, audit.rawMarkdown || summary, context);
             logger.info("Posted as single comment.");
         }
     }
@@ -203,7 +204,7 @@ export class ReviewCommand implements TypedCommand<typeof INPUTS> {
 
     private async resolveTarget(
         target?: string,
-    ): Promise<{ scm: SCMService; owner: string; repo: string; prNumber: number }> {
+    ): Promise<{ scm: SCMService; owner: string; repo: string; prNumber: number; context?: SCMRequestContext }> {
         if (target && isPullRequestUrl(target)) {
             const parsed = parsePullRequestUrl(target);
             if (!parsed) throw new Error(`Invalid PR URL: ${target}`);
@@ -212,6 +213,7 @@ export class ReviewCommand implements TypedCommand<typeof INPUTS> {
                 owner: parsed.owner,
                 repo: parsed.repo,
                 prNumber: parsed.prNumber,
+                context: parsed.instanceUrl ? { instanceUrl: parsed.instanceUrl } : undefined,
             };
         }
 

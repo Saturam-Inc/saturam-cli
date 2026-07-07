@@ -16,6 +16,7 @@ import { TypedCommand, TypedInputs } from "./base";
 const logger = getLogger("InitCommand");
 
 const INPUTS = [] as const;
+const SETUP_CONNECTIVITY_TIMEOUT_MS = 10000;
 
 const PROVIDER_DISPLAY_NAMES: Record<AIProvider, string> = {
     [AIProvider.ANTHROPIC]: "Anthropic (Claude)",
@@ -25,6 +26,7 @@ const PROVIDER_DISPLAY_NAMES: Record<AIProvider, string> = {
     [AIProvider.XAI]: "xAI (Grok)",
     [AIProvider.DEEPSEEK]: "DeepSeek",
     [AIProvider.OLLAMA]: "Ollama (local models)",
+    [AIProvider.SELF_HOSTED]: "Self Hosted LLM",
 };
 
 const MODEL_DISPLAY_NAMES: Record<LLMModel, string> = {
@@ -69,7 +71,29 @@ const MODEL_DISPLAY_NAMES: Record<LLMModel, string> = {
     [LLMModel.OLLAMA_GEMMA2]: "Gemma 2",
     [LLMModel.OLLAMA_PHI3]: "Phi-3 (128K context)",
     [LLMModel.OLLAMA_CUSTOM]: "Custom model (specify name)",
+    [LLMModel.SELF_HOSTED_CUSTOM]: "Self Hosted LLM",
 };
+
+function normalizeBaseUrl(baseUrl: string): string {
+    return baseUrl.replace(/\/+$/, "");
+}
+
+function isRemoteOllamaUrl(baseUrl: string): boolean {
+    try {
+        const hostname = new URL(baseUrl).hostname.toLowerCase();
+        return !["localhost", "127.0.0.1", "::1"].includes(hostname);
+    } catch {
+        return false;
+    }
+}
+
+function getOllamaAuthHeaders(apiToken?: string): Record<string, string> | undefined {
+    return apiToken ? { Authorization: `Bearer ${apiToken}` } : undefined;
+}
+
+function getBearerAuthHeaders(accessToken?: string): Record<string, string> | undefined {
+    return accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined;
+}
 
 @Service()
 export class InitCommand implements TypedCommand<typeof INPUTS> {
@@ -189,6 +213,10 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
             return this.configureOllamaProvider(existing);
         }
 
+        if (provider === AIProvider.SELF_HOSTED) {
+            return this.configureSelfHostedProvider(existing);
+        }
+
         // Standard API key provider
         const apiKey = await this.promptForApiKey(provider, existing?.apiKey);
         return { apiKey, enabled: true };
@@ -227,7 +255,7 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
 
     private async configureOpenAIProvider(existing?: ProviderConfig): Promise<ProviderConfig> {
         const apiKey = await this.promptForApiKey(AIProvider.OPENAI, existing?.apiKey);
-
+        
         // Always ask for base URL, showing current/default value
         const currentUrl = existing?.baseUrl ?? process.env.OPENAI_BASE_URL;
         const baseUrl = await input({
@@ -243,17 +271,27 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
     }
 
     private async configureOllamaProvider(existing?: ProviderConfig): Promise<ProviderConfig> {
-        const defaultUrl = existing?.ollamaBaseUrl ?? process.env.OLLAMA_BASE_URL ?? "http://localhost:11434";
+        const defaultUrl =
+            existing?.baseUrl ?? existing?.ollamaBaseUrl ?? process.env.OLLAMA_BASE_URL ?? "http://localhost:11434";
 
-        const ollamaBaseUrl = await input({
-            message: "Ollama server URL:",
-            default: defaultUrl,
-        });
+        const baseUrl = normalizeBaseUrl(
+            await input({
+                message: "Ollama server URL:",
+                default: defaultUrl,
+            }),
+        );
+
+        const envApiToken = process.env.OLLAMA_API_TOKEN;
+        const shouldPromptForToken = isRemoteOllamaUrl(baseUrl);
+        const apiToken = shouldPromptForToken
+            ? await this.promptForOptionalOllamaApiToken(existing?.apiToken ?? envApiToken)
+            : undefined;
+        const headers = getOllamaAuthHeaders(apiToken);
 
         // Detect locally available models
         const detectedModels: string[] = await (async () => {
             try {
-                const response = await fetch(`${ollamaBaseUrl}/api/tags`);
+                const response = await fetch(`${baseUrl}/api/tags`, { headers });
                 if (response.ok) {
                     const data = (await response.json()) as { models?: Array<{ name: string }> };
                     const models = (data.models ?? []).map((m) => m.name);
@@ -266,16 +304,80 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
                     }
                     return models;
                 }
+                logger.warn(`Warning: Ollama at ${baseUrl} returned HTTP ${response.status}.`);
             } catch {
-                logger.warn(`Warning: Could not connect to Ollama at ${ollamaBaseUrl}. Make sure it's running.`);
+                logger.warn(`Warning: Could not connect to Ollama at ${baseUrl}. Make sure it's running.`);
             }
             return [];
         })();
 
         return {
             enabled: true,
-            ollamaBaseUrl,
+            baseUrl,
+            ollamaBaseUrl: baseUrl,
+            apiToken: apiToken || undefined,
             detectedModels: detectedModels.length > 0 ? detectedModels : undefined,
+        };
+    }
+
+    private async configureSelfHostedProvider(existing?: ProviderConfig): Promise<ProviderConfig> {
+        const endpoint = normalizeBaseUrl(
+            await input({
+                message: "Self-hosted LLM endpoint/base URL:",
+                default: existing?.endpoint ?? process.env.SELF_HOSTED_ENDPOINT ?? "",
+                validate: (val) =>
+                    val.startsWith("http://") || val.startsWith("https://") ? true : "Must be a valid HTTP/HTTPS URL",
+            }),
+        );
+
+        const model = await input({
+            message: "Model name:",
+            default:
+                existing?.model ?? process.env.SELF_HOSTED_MODEL ?? "qwen2.5-coder:latest",
+            validate: (val) => (val.trim() ? true : "Model name is required"),
+        });
+
+        const existingAccessToken = existing?.accessToken ?? existing?.apiToken ?? existing?.apiKey;
+        const accessToken = await password({
+            message: `Optional access token${existingAccessToken ? " (press enter to keep existing)" : ""}:`,
+            mask: "*",
+        });
+        const resolvedAccessToken =
+            accessToken ||
+            existingAccessToken ||
+            process.env.SELF_HOSTED_ACCESS_TOKEN ||
+            process.env.SELF_HOSTED_API_KEY;
+        const headers = getBearerAuthHeaders(resolvedAccessToken);
+
+        try {
+            const response = await fetch(`${endpoint}/api/tags`, {
+                headers,
+                signal: AbortSignal.timeout(SETUP_CONNECTIVITY_TIMEOUT_MS),
+            });
+            if (response.ok) {
+                const data = (await response.json()) as { models?: Array<{ name: string }> };
+                const models = (data.models ?? []).map((m) => m.name);
+                if (models.length === 0) {
+                    logger.warn("Self-hosted endpoint is reachable but returned no models from /api/tags.");
+                } else if (models.includes(model)) {
+                    logger.info(`Self-hosted endpoint verified. Model '${model}' is available.`);
+                } else {
+                    logger.warn(
+                        `Warning: Self-hosted endpoint is reachable, but model '${model}' was not found. Available: ${models.join(", ")}`,
+                    );
+                }
+            } else {
+                logger.warn(`Warning: Self-hosted endpoint returned HTTP ${response.status} from /api/tags.`);
+            }
+        } catch {
+            logger.warn(`Warning: Could not connect to self-hosted endpoint at ${endpoint}.`);
+        }
+
+        return {
+            enabled: true,
+            endpoint,
+            model,
+            accessToken: resolvedAccessToken || undefined,
         };
     }
 
@@ -343,6 +445,9 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
     }
 
     private async promptForModel(provider: AIProvider, providerConfig?: ProviderConfig): Promise<LLMModel> {
+        if (provider === AIProvider.SELF_HOSTED) {
+            return LLMModel.SELF_HOSTED_CUSTOM;
+        }
         // For Ollama, build a smarter list
         if (provider === AIProvider.OLLAMA) {
             return this.promptForOllamaModel(providerConfig);
@@ -389,12 +494,26 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         if (!isPreset) {
             // Update provider config with the custom model name
             if (providerConfig) {
-                providerConfig.customModel = selected;
+                providerConfig.model = selected;
             }
             return LLMModel.OLLAMA_CUSTOM;
         }
 
         return selected as LLMModel;
+    }
+
+    private async promptForOptionalOllamaApiToken(existingToken?: string): Promise<string | undefined> {
+        const masked = existingToken
+            ? existingToken.length > 16
+                ? `${existingToken.slice(0, 8)}...${existingToken.slice(-4)}`
+                : "(configured)"
+            : undefined;
+        const hint = masked ? ` (press enter to keep ${masked})` : " (leave empty if not required)";
+        const token = await password({
+            message: `Ollama API gateway bearer token${hint}:`,
+            mask: "*",
+        });
+        return token || existingToken;
     }
 
     private async promptForApiKey(provider: AIProvider, existingKey?: string): Promise<string> {
@@ -411,7 +530,9 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
 
         // If we have an existing key, ask if user wants to keep it
         if (existingKey) {
-            const masked = `${existingKey.slice(0, 8)}...${existingKey.slice(-4)}`;
+            const masked = existingKey.length > 16
+                ? `${existingKey.slice(0, 8)}...${existingKey.slice(-4)}`
+                : "(configured)";
             const useExisting = await confirm({
                 message: `Use existing API key ${masked}?`,
                 default: true,
@@ -591,10 +712,23 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
                     );
                 } else if (provider === AIProvider.OLLAMA) {
                     const url = val.baseUrl ?? "http://localhost:11434";
-                    const custom = val.customModel ? `, custom=${val.customModel}` : "";
-                    logger.info(`    ${PROVIDER_DISPLAY_NAMES[provider]}: ${url}${custom}${isDefault}`);
+                    const custom = val.model;
+                    const customText = custom ? `, model=${custom}` : "";
+                    const auth = val.apiToken ? ", auth=token set" : "";
+                    logger.info(`    ${PROVIDER_DISPLAY_NAMES[provider]}: ${url}${customText}${auth}${isDefault}`);
+                } else if (provider === AIProvider.SELF_HOSTED) {
+                    const endpoint = val.endpoint ?? "not set";
+                    const modelName = val.model ?? "selfhosted-custom";
+                    const auth = (val.accessToken ?? val.apiToken ?? val.apiKey) ? ", auth=token set" : "";
+                    logger.info(
+                        `    ${PROVIDER_DISPLAY_NAMES[provider]}: endpoint=${endpoint}, model=${modelName}${auth}${isDefault}`,
+                    );
                 } else {
-                    const masked = val.apiKey ? `${val.apiKey.slice(0, 8)}...${val.apiKey.slice(-4)}` : "not set";
+                    const masked = val.apiKey
+                        ? val.apiKey.length > 16
+                            ? `${val.apiKey.slice(0, 8)}...${val.apiKey.slice(-4)}`
+                            : "(configured)"
+                        : "not set";
                     logger.info(`    ${PROVIDER_DISPLAY_NAMES[provider]}: ${masked}${isDefault}`);
                 }
             }
@@ -605,7 +739,10 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         // SCM platforms
         const scmPlatforms: string[] = [];
         if (config.githubToken) {
-            scmPlatforms.push(`GitHub (token: ${config.githubToken.slice(0, 8)}...)`);
+            const masked = config.githubToken.length > 16
+                ? `${config.githubToken.slice(0, 8)}...`
+                : "(configured)";
+            scmPlatforms.push(`GitHub (token: ${masked})`);
         } else if (this.checkGhCli()) {
             scmPlatforms.push("GitHub (via gh CLI)");
         }
@@ -619,7 +756,10 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         }
         if (config.gitlabToken) {
             const instance = config.gitlabInstanceUrl ?? "gitlab.com";
-            scmPlatforms.push(`GitLab (token: ${config.gitlabToken.slice(0, 8)}..., instance: ${instance})`);
+            const masked = config.gitlabToken.length > 16
+                ? `${config.gitlabToken.slice(0, 8)}...`
+                : "(configured)";
+            scmPlatforms.push(`GitLab (token: ${masked}, instance: ${instance})`);
         }
         if (scmPlatforms.length > 0) {
             logger.info("  SCM platforms:");

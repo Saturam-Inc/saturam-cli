@@ -16,7 +16,7 @@ sat-cli init
 
 This will configure:
 
-- AI provider (Anthropic, OpenAI, Gemini, Bedrock, Grok, DeepSeek, Ollama, OpenRouter)
+- AI provider (Anthropic, OpenAI, Gemini, Bedrock, Grok, DeepSeek, Ollama, Self Hosted LLM, OpenRouter)
 - API keys
 - SCM provider (GitHub, Bitbucket, or GitLab)
 
@@ -83,6 +83,94 @@ Initialize configuration for a project.
 
 ```bash
 sat-cli init
+```
+
+## Ollama
+
+`sat-cli` supports local Ollama and remote Ollama endpoints behind an API gateway.
+
+Local Ollama does not require a token:
+
+```json
+{
+    "providers": {
+        "ollama": {
+            "enabled": true,
+            "baseUrl": "http://localhost:11434",
+            "model": "qwen2.5-coder:latest"
+        }
+    },
+    "defaultProvider": "ollama",
+    "defaultModel": "ollama-custom"
+}
+```
+
+For a remote Ollama gateway, keep Ollama private and expose only the gateway URL. If the gateway requires bearer authentication, add `apiToken`; requests include `Authorization: Bearer <apiToken>`.
+
+```json
+{
+    "providers": {
+        "ollama": {
+            "enabled": true,
+            "baseUrl": "http://<VM_PUBLIC_IP>:8080",
+            "apiToken": "saturam-dev-token-123",
+            "model": "qwen2.5-coder:latest"
+        }
+    },
+    "defaultProvider": "ollama",
+    "defaultModel": "ollama-custom"
+}
+```
+
+During `sat-cli init`, the token prompt is shown only for non-local Ollama URLs.
+
+## Self Hosted LLM
+
+Use the Self Hosted LLM provider for an Ollama-compatible endpoint that should be configured separately from the built-in Ollama provider.
+
+```json
+{
+    "providers": {
+        "self-hosted": {
+            "enabled": true,
+            "endpoint": "http://<VM_PUBLIC_IP>:11434",
+            "model": "qwen2.5-coder:latest"
+        }
+    },
+    "defaultProvider": "self-hosted",
+    "defaultModel": "selfhosted-custom"
+}
+```
+
+If the endpoint requires bearer authentication, add `accessToken`:
+
+```json
+{
+    "providers": {
+        "self-hosted": {
+            "enabled": true,
+            "endpoint": "https://llm.example.com",
+            "model": "qwen2.5-coder:latest",
+            "accessToken": "your-token"
+        }
+    },
+    "defaultProvider": "self-hosted",
+    "defaultModel": "selfhosted-custom"
+}
+```
+
+Equivalent environment variables:
+
+```bash
+export SELF_HOSTED_ENDPOINT=http://<VM_PUBLIC_IP>:11434
+export SELF_HOSTED_MODEL=qwen2.5-coder:latest
+export SELF_HOSTED_ACCESS_TOKEN=your-token
+```
+
+For large reviews or slower models, increase the request timeout:
+
+```bash
+SELF_HOSTED_TIMEOUT_MS=600000 sat-cli --model selfhosted-custom review 9 --self
 ```
 
 ## Bitbucket
@@ -181,20 +269,20 @@ Without this, the CLI defaults to `https://gitlab.com`. This is required for any
    - Generate an API key from your dashboard
 
 2. **Configure the OpenAI provider with OpenRouter settings:**
-   
+
    **Option A: Environment variables**
    ```bash
    export OPENAI_API_KEY=sk-or-v1-xxxxxxxxxxxxxxxxxxxx
    export OPENAI_BASE_URL=https://openrouter.ai/api/v1
    ```
-   
+
    **Option B: Interactive setup via `sat-cli init`**
    ```
    ? OpenAI API key: sk-or-v1-xxxxxxxxxxxxxxxxxxxx
    ? OpenAI base URL (leave empty for default OpenAI API): https://openrouter.ai/api/v1
    ```
-   
-   **Note:** 
+
+   **Note:**
    - If you are using the official OpenAI API, use: `https://api.openai.com/v1`
    - If you are using OpenRouter, use: `https://openrouter.ai/api/v1`
 
@@ -239,10 +327,14 @@ sat-cli review 42 --post
 
 Instead of env vars, you can save these values once via `sat-cli init`:
 
+For example, by selecting the OpenAI provider:
+
 ```
 ? Which source control platforms do you use? GitLab
 ? GitLab personal access token: glpat-...
 ? GitLab instance URL (leave empty for gitlab.com): https://git.example.com
+? OpenAI API key: sk-or-v1-...
+? OpenAI base URL (leave empty for default OpenAI API): https://openrouter.ai/api/v1
 ```
 
 This writes to `~/Library/Application Support/sateng/config.json` (macOS) or `~/.config/sateng/config.json` (Linux).
@@ -302,17 +394,22 @@ All settings can also be provided via environment variables, which take priority
 
 **AI providers**
 
-| Variable            | Provider                                   |
-| ------------------- | ------------------------------------------ |
-| `ANTHROPIC_API_KEY` | Anthropic (Claude)                         |
-| `OPENAI_API_KEY`    | OpenAI (GPT)                               |
-| `OPENAI_BASE_URL`   | OpenAI-compatible API (e.g., OpenRouter)  |
-| `GOOGLE_API_KEY`    | Google (Gemini)                            |
-| `XAI_API_KEY`       | xAI (Grok)                                 |
-| `DEEPSEEK_API_KEY`  | DeepSeek                                   |
-| `AWS_PROFILE`       | AWS Bedrock                                |
-| `AWS_REGION`        | AWS Bedrock region (default: `us-east-1`)  |
-| `OLLAMA_BASE_URL`   | Ollama (default: `http://localhost:11434`) |
+| Variable                   | Provider / setting                         |
+| -------------------------- | ------------------------------------------ |
+| `ANTHROPIC_API_KEY`        | Anthropic (Claude)                         |
+| `OPENAI_API_KEY`           | OpenAI (GPT)                               |
+| `OPENAI_BASE_URL`          | OpenAI-compatible API (e.g., OpenRouter)   |
+| `GOOGLE_API_KEY`           | Google (Gemini)                            |
+| `XAI_API_KEY`              | xAI (Grok)                                 |
+| `DEEPSEEK_API_KEY`         | DeepSeek                                   |
+| `AWS_PROFILE`              | AWS Bedrock                                |
+| `AWS_REGION`               | AWS Bedrock region (default: `us-east-1`)  |
+| `OLLAMA_BASE_URL`          | Ollama (default: `http://localhost:11434`) |
+| `OLLAMA_API_TOKEN`         | Optional bearer token for remote Ollama    |
+| `SELF_HOSTED_ENDPOINT`     | Self Hosted LLM endpoint                   |
+| `SELF_HOSTED_MODEL`        | Self Hosted LLM model name                 |
+| `SELF_HOSTED_ACCESS_TOKEN` | Optional bearer token for Self Hosted LLM  |
+| `SELF_HOSTED_TIMEOUT_MS`   | Self Hosted LLM request timeout            |
 
 **SCM platforms**
 

@@ -90,22 +90,19 @@ export class Cli {
 
             cmd.action(async (...args) => {
                 const opts = cmd.opts();
+                const positionalArgs = args.slice(0, command.inputs.filter((input) => input.argument).length);
+                const argumentInputs = command.inputs
+                    .filter((input) => input.argument)
+                    .reduce<Record<string, unknown>>((acc, input, index) => {
+                        const value = positionalArgs[index];
+                        if (value !== undefined) acc[input.name] = value;
+                        return acc;
+                    }, {});
                 const globalOpts = this.program?.opts() ?? {};
-
-                // Inject positional arguments into opts by their declared name.
-                // Commander passes positional args as leading elements of ...args,
-                // followed by the options object and the command instance.
-                const argumentInputs = command.inputs.filter((i) => i.argument);
-                for (let i = 0; i < argumentInputs.length; i++) {
-                    const val = cmd.processedArgs[i];
-                    if (val !== undefined) {
-                        (opts as Record<string, unknown>)[argumentInputs[i].name] = val;
-                    }
-                }
 
                 const session = SessionConfigurationSchema.parse({ ...globalOpts, ...opts });
                 await this.configService.setSessionConfiguration(session);
-                await command.execute(opts);
+                await command.execute({ ...opts, ...argumentInputs });
             });
         }
     }

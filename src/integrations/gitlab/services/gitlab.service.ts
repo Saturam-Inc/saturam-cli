@@ -1,6 +1,7 @@
 import { getLogger } from "log4js";
 import { Service } from "typedi";
 import { ConfigService } from "../../../services/config-service";
+import { SCMRequestContext } from "../../scm/scm.model";
 import { GITLAB_API_BASE_URL, GITLAB_API_PATH } from "../constants/gitlab.constant";
 import { GitLabDiscussionPosition, GitLabMR } from "../models/gitlab.model";
 
@@ -8,9 +9,14 @@ const logger = getLogger("GitLabService");
 
 @Service()
 export class GitLabService {
+    private diffsCache = new Map<string, Promise<Array<{ diff: string; new_path: string; old_path: string }>>>();
+
     constructor(private readonly config: ConfigService) {}
 
-    private async getBaseUrl(): Promise<string> {
+    private async getBaseUrl(context?: SCMRequestContext): Promise<string> {
+        if (context?.instanceUrl) {
+            return context.instanceUrl.replace(/\/$/, "") + GITLAB_API_PATH;
+        }
         const instanceUrl = await this.config.getGitLabInstanceUrl();
         if (instanceUrl) {
             return instanceUrl.replace(/\/$/, "") + GITLAB_API_PATH;
@@ -31,8 +37,13 @@ export class GitLabService {
         return encodeURIComponent(`${namespace}/${repo}`);
     }
 
-    public async getMergeRequest(namespace: string, repo: string, mrIid: number): Promise<GitLabMR> {
-        const baseUrl = await this.getBaseUrl();
+    public async getMergeRequest(
+        namespace: string,
+        repo: string,
+        mrIid: number,
+        context?: SCMRequestContext,
+    ): Promise<GitLabMR> {
+        const baseUrl = await this.getBaseUrl(context);
         const headers = await this.getHeaders();
         const projectId = this.encodeProjectId(namespace, repo);
         const response = await fetch(`${baseUrl}/projects/${projectId}/merge_requests/${mrIid}`, { headers });
@@ -42,24 +53,89 @@ export class GitLabService {
         return response.json() as Promise<GitLabMR>;
     }
 
-    public async getMergeRequestDiff(namespace: string, repo: string, mrIid: number): Promise<string> {
-        const baseUrl = await this.getBaseUrl();
-        const headers = await this.getHeaders();
-        const projectId = this.encodeProjectId(namespace, repo);
-        // unidiff=true returns unified diff compatible with the existing diff parser
-        const response = await fetch(`${baseUrl}/projects/${projectId}/merge_requests/${mrIid}/diffs?unidiff=true`, {
-            headers,
-        });
-        if (!response.ok) {
-            throw new Error(`Failed to fetch GitLab MR diff !${mrIid}: ${response.status} ${response.statusText}`);
+    private async getMergeRequestDiffs(
+        namespace: string,
+        repo: string,
+        mrIid: number,
+        context?: SCMRequestContext,
+    ): Promise<Array<{ diff: string; new_path: string; old_path: string }>> {
+        const cacheKey = `${namespace}/${repo}/${mrIid}`;
+        let promise = this.diffsCache.get(cacheKey);
+        if (!promise) {
+            promise = (async () => {
+                try {
+                    const baseUrl = await this.getBaseUrl(context);
+                    const headers = await this.getHeaders();
+                    const projectId = this.encodeProjectId(namespace, repo);
+                    const allDiffs: Array<{ diff: string; new_path: string; old_path: string }> = [];
+                    let page = 1;
+                    const perPage = 100;
+                    while (true) {
+                        const response = await fetch(
+                            `${baseUrl}/projects/${projectId}/merge_requests/${mrIid}/diffs?unidiff=true&per_page=${perPage}&page=${page}`,
+                            { headers },
+                        );
+                        if (!response.ok) {
+                            throw new Error(`Failed to fetch GitLab MR diff !${mrIid} (page ${page}): ${response.status} ${response.statusText}`);
+                        }
+                        const diffs = await (response.json() as Promise<Array<{ diff: string; new_path: string; old_path: string }>>);
+                        allDiffs.push(...diffs);
+                        if (diffs.length < perPage) {
+                            break;
+                        }
+                        page++;
+                    }
+                    return allDiffs;
+                } catch (error) {
+                    this.diffsCache.delete(cacheKey);
+                    throw error;
+                }
+            })();
+            this.diffsCache.set(cacheKey, promise);
         }
-        const diffs = (await response.json()) as Array<{ diff: string; new_path: string; old_path: string }>;
+        return promise;
+    }
+
+    public async getMergeRequestDiff(
+        namespace: string,
+        repo: string,
+        mrIid: number,
+        context?: SCMRequestContext,
+    ): Promise<string> {
+        // unidiff=true returns unified diff compatible with the existing diff parser
+        const diffs = await this.getMergeRequestDiffs(namespace, repo, mrIid, context);
         // Re-assemble individual file diffs into a single unified diff string
         return diffs.map((d) => `diff --git a/${d.old_path} b/${d.new_path}\n${d.diff}`).join("\n");
     }
 
-    public async findMergeRequestByBranch(namespace: string, repo: string, branch: string): Promise<number | null> {
-        const baseUrl = await this.getBaseUrl();
+    public async getMergeRequestDiffStats(
+        namespace: string,
+        repo: string,
+        mrIid: number,
+        context?: SCMRequestContext,
+    ): Promise<{ changedFiles: number; additions: number; deletions: number }> {
+        const diffs = await this.getMergeRequestDiffs(namespace, repo, mrIid, context);
+        let additions = 0;
+        let deletions = 0;
+
+        for (const file of diffs) {
+            for (const line of file.diff.split("\n")) {
+                if (line.startsWith("+++") || line.startsWith("---")) continue;
+                if (line.startsWith("+")) additions++;
+                if (line.startsWith("-")) deletions++;
+            }
+        }
+
+        return { changedFiles: diffs.length, additions, deletions };
+    }
+
+    public async findMergeRequestByBranch(
+        namespace: string,
+        repo: string,
+        branch: string,
+        context?: SCMRequestContext,
+    ): Promise<number | null> {
+        const baseUrl = await this.getBaseUrl(context);
         const headers = await this.getHeaders();
         const projectId = this.encodeProjectId(namespace, repo);
         const response = await fetch(
@@ -74,8 +150,14 @@ export class GitLabService {
         return mrs.length > 0 ? mrs[0].iid : null;
     }
 
-    public async postComment(namespace: string, repo: string, mrIid: number, body: string): Promise<void> {
-        const baseUrl = await this.getBaseUrl();
+    public async postComment(
+        namespace: string,
+        repo: string,
+        mrIid: number,
+        body: string,
+        context?: SCMRequestContext,
+    ): Promise<void> {
+        const baseUrl = await this.getBaseUrl(context);
         const headers = await this.getHeaders();
         const projectId = this.encodeProjectId(namespace, repo);
         const response = await fetch(`${baseUrl}/projects/${projectId}/merge_requests/${mrIid}/notes`, {
@@ -94,8 +176,9 @@ export class GitLabService {
         mrIid: number,
         body: string,
         position: GitLabDiscussionPosition,
+        context?: SCMRequestContext,
     ): Promise<void> {
-        const baseUrl = await this.getBaseUrl();
+        const baseUrl = await this.getBaseUrl(context);
         const headers = await this.getHeaders();
         const projectId = this.encodeProjectId(namespace, repo);
         const response = await fetch(`${baseUrl}/projects/${projectId}/merge_requests/${mrIid}/discussions`, {
