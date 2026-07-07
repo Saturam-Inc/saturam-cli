@@ -325,7 +325,9 @@ sat-cli review 42 --post
 
 ### Persistent configuration
 
-Instead of env vars, you can save these values once via `sat-cli init` by selecting the OpenAI provider:
+Instead of env vars, you can save these values once via `sat-cli init`:
+
+For example, by selecting the OpenAI provider:
 
 ```
 ? Which source control platforms do you use? GitLab
