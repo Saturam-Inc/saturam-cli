@@ -57,13 +57,14 @@ export class SCMFactory {
     }
 
     public static detectProvider(remoteUrl: string): SCMProvider {
-        if (remoteUrl.includes("github.com")) {
+        const lowerUrl = remoteUrl.toLowerCase();
+        if (lowerUrl.includes("github.com")) {
             return SCMProvider.GITHUB;
         }
-        if (remoteUrl.includes("bitbucket.org")) {
+        if (lowerUrl.includes("bitbucket.org")) {
             return SCMProvider.BITBUCKET;
         }
-        if (remoteUrl.includes("gitlab.com")) {
+        if (lowerUrl.includes("gitlab.com") || lowerUrl.includes("gitlab")) {
             return SCMProvider.GITLAB;
         }
         throw new Error(
