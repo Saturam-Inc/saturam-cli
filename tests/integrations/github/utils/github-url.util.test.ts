@@ -33,4 +33,14 @@ describe("parsePullRequestUrl", () => {
             instanceUrl: "https://git.example.com",
         });
     });
+
+    it("parses a GitHub PR URL without protocol", () => {
+        const result = parsePullRequestUrl("github.com/owner/repo/pull/42");
+        expect(result).toEqual({ provider: SCMProvider.GITHUB, owner: "owner", repo: "repo", prNumber: 42 });
+    });
+
+    it("parses a Bitbucket PR URL without protocol", () => {
+        const result = parsePullRequestUrl("bitbucket.org/workspace/repo/pull-requests/7");
+        expect(result).toEqual({ provider: SCMProvider.BITBUCKET, owner: "workspace", repo: "repo", prNumber: 7 });
+    });
 });

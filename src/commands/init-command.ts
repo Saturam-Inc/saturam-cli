@@ -560,10 +560,11 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
     > {
         logger.info("\n--- Source Control Platforms ---");
 
+        const isFirstRun = !existing.githubToken && !existing.bitbucketToken && !existing.gitlabToken;
         const platforms = await checkbox({
             message: "Which source control platforms do you use?",
             choices: [
-                { name: "GitHub", value: "github" as const, checked: !!existing.githubToken || this.checkGhCli() },
+                { name: "GitHub", value: "github" as const, checked: isFirstRun ? this.checkGhCli() : !!existing.githubToken },
                 { name: "Bitbucket", value: "bitbucket" as const, checked: !!existing.bitbucketToken },
                 { name: "GitLab", value: "gitlab" as const, checked: !!existing.gitlabToken },
             ],
@@ -571,15 +572,15 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
 
         const githubToken = platforms.includes("github")
             ? await this.resolveGitHubToken(existing)
-            : existing.githubToken;
+            : undefined;
 
         const { bitbucketToken, bitbucketEmail, bitbucketUsername } = platforms.includes("bitbucket")
             ? await this.resolveBitbucketAuth(existing)
-            : { bitbucketToken: existing.bitbucketToken, bitbucketEmail: existing.bitbucketEmail, bitbucketUsername: existing.bitbucketUsername };
+            : { bitbucketToken: undefined, bitbucketEmail: undefined, bitbucketUsername: undefined };
 
         const { gitlabToken, gitlabInstanceUrl } = platforms.includes("gitlab")
             ? await this.resolveGitLabAuth(existing)
-            : { gitlabToken: existing.gitlabToken, gitlabInstanceUrl: existing.gitlabInstanceUrl };
+            : { gitlabToken: undefined, gitlabInstanceUrl: undefined };
 
         return {
             githubToken: githubToken || undefined,

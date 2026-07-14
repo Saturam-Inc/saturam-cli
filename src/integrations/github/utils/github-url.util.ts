@@ -15,8 +15,17 @@ const BITBUCKET_PR_REGEX = /bitbucket\.org\/([^/]+)\/([^/]+)\/pull-requests\/(\d
 // Supports self-hosted instances and any depth of sub-group nesting.
 const GITLAB_MR_REGEX = /^\/(.+\/[^/?#]+)\/-\/merge_requests\/(\d+)(?:[/?#]|$)/;
 
+function normalizeUrl(url: string): string {
+    const trimmed = url.trim();
+    if (!/^[a-zA-Z]+:\/\//.test(trimmed)) {
+        return "https://" + trimmed;
+    }
+    return trimmed;
+}
+
 export function parsePullRequestUrl(url: string): ParsedPRUrl | null {
-    const ghMatch = url.match(GITHUB_PR_REGEX);
+    const normalized = normalizeUrl(url);
+    const ghMatch = normalized.match(GITHUB_PR_REGEX);
     if (ghMatch) {
         return {
             provider: SCMProvider.GITHUB,
@@ -26,7 +35,7 @@ export function parsePullRequestUrl(url: string): ParsedPRUrl | null {
         };
     }
 
-    const bbMatch = url.match(BITBUCKET_PR_REGEX);
+    const bbMatch = normalized.match(BITBUCKET_PR_REGEX);
     if (bbMatch) {
         return {
             provider: SCMProvider.BITBUCKET,
@@ -40,11 +49,11 @@ export function parsePullRequestUrl(url: string): ParsedPRUrl | null {
     let pathname: string;
     let instanceUrl: string | undefined;
     try {
-        const parsedUrl = new URL(url);
+        const parsedUrl = new URL(normalized);
         pathname = parsedUrl.pathname;
         instanceUrl = `${parsedUrl.protocol}//${parsedUrl.host}`;
     } catch {
-        pathname = url; // fall back for non-standard URLs (e.g. during tests with partial strings)
+        pathname = normalized; // fall back for non-standard URLs (e.g. during tests with partial strings)
     }
     const glMatch = pathname.match(GITLAB_MR_REGEX);
     if (glMatch) {
@@ -65,10 +74,11 @@ export function parsePullRequestUrl(url: string): ParsedPRUrl | null {
 }
 
 export function isPullRequestUrl(url: string): boolean {
-    if (GITHUB_PR_REGEX.test(url) || BITBUCKET_PR_REGEX.test(url)) return true;
+    const normalized = normalizeUrl(url);
+    if (GITHUB_PR_REGEX.test(normalized) || BITBUCKET_PR_REGEX.test(normalized)) return true;
     try {
-        return GITLAB_MR_REGEX.test(new URL(url).pathname);
+        return GITLAB_MR_REGEX.test(new URL(normalized).pathname);
     } catch {
-        return GITLAB_MR_REGEX.test(url);
+        return GITLAB_MR_REGEX.test(normalized);
     }
 }
