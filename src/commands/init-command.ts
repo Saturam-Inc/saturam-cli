@@ -79,10 +79,73 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
     readonly aliases = ["i", "setup"];
     readonly inputs = INPUTS;
 
-    constructor(private readonly config: ConfigService) {}
+    constructor(private readonly config: ConfigService) { }
 
     public async execute(_inputs: TypedInputs<typeof INPUTS>): Promise<void> {
         logger.info("Welcome to Saturam Engineering CLI setup!\n");
+
+        const setupType = await select({
+            message: "What would you like to configure?",
+            choices: [
+                { name: "Code Review", value: "code_review" },
+                { name: "Onboarding (Jira, Confluence & Google Drive syncing)", value: "onboarding" },
+            ],
+        });
+
+        if (setupType === "onboarding") {
+            const platform = await select({
+                message: "Which onboarding source would you like to configure?",
+                choices: [
+                    { name: "Atlassian (Jira & Confluence)", value: "atlassian" },
+                    { name: "Google Drive (Docs & Sheets)", value: "google" },
+                ],
+            });
+
+            if (platform === "atlassian") {
+                const existingPersonal = await this.config.loadPersonalConfig();
+
+                const email = await input({
+                    message: "Atlassian account email ID:",
+                    default: existingPersonal.atlassianEmail ?? "",
+                });
+
+                const token = await password({
+                    message: "Atlassian API token:",
+                    mask: "*",
+                });
+
+                await this.config.savePersonalConfig({
+                    ...existingPersonal,
+                    atlassianEmail: email.trim() || undefined,
+                    atlassianToken: token.trim() || existingPersonal.atlassianToken,
+                });
+
+                logger.info(`\nOnboarding Atlassian credentials saved to: ${this.config.getPersonalConfigPath()}`);
+            } else if (platform === "google") {
+                const existingPersonal = await this.config.loadPersonalConfig();
+
+                logger.info("\nTo sync Google Drive files (Docs, Sheets & DOCX), you will need a Google Access Token.");
+                logger.info("You can generate one using the Google OAuth 2.0 Playground:");
+                logger.info("1. Go to: https://developers.google.com/oauthplayground/");
+                logger.info("2. Select/paste scope: https://www.googleapis.com/auth/drive.readonly");
+                logger.info("3. Click 'Authorize APIs' and log in with your Google account.");
+                logger.info("4. Click 'Exchange authorization code for tokens'.");
+                logger.info("5. Copy the generated Access Token (starts with 'ya29...').\n");
+
+                const googleToken = await password({
+                    message: "Google Access Token:",
+                    mask: "*",
+                });
+
+                await this.config.savePersonalConfig({
+                    ...existingPersonal,
+                    googleAccessToken: googleToken.trim() || existingPersonal.googleAccessToken,
+                });
+
+                logger.info(`\nOnboarding Google credentials saved to: ${this.config.getPersonalConfigPath()}`);
+            }
+            return;
+        }
 
         const existing = await this.config.loadPersonalConfig();
         const hasExisting = Object.keys(existing.providers ?? {}).length > 0;
@@ -154,12 +217,12 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
             selectedProviders.length === 1
                 ? selectedProviders[0]
                 : await select({
-                      message: "Which provider should be the default?",
-                      choices: selectedProviders.map((p) => ({
-                          name: PROVIDER_DISPLAY_NAMES[p],
-                          value: p,
-                      })),
-                  });
+                    message: "Which provider should be the default?",
+                    choices: selectedProviders.map((p) => ({
+                        name: PROVIDER_DISPLAY_NAMES[p],
+                        value: p,
+                    })),
+                });
 
         const defaultModel = await this.promptForModel(defaultProvider, providers[defaultProvider]);
 
@@ -325,12 +388,12 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
             configuredProviders.length === 1
                 ? configuredProviders[0]
                 : await select({
-                      message: "Select the provider:",
-                      choices: configuredProviders.map((p) => ({
-                          name: PROVIDER_DISPLAY_NAMES[p],
-                          value: p,
-                      })),
-                  });
+                    message: "Select the provider:",
+                    choices: configuredProviders.map((p) => ({
+                        name: PROVIDER_DISPLAY_NAMES[p],
+                        value: p,
+                    })),
+                });
 
         const model = await this.promptForModel(provider, existing.providers?.[provider]);
         const config: PersonalConfiguration = {
@@ -613,8 +676,8 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
             const authType = config.bitbucketEmail
                 ? `API token, email: ${config.bitbucketEmail}`
                 : config.bitbucketUsername
-                  ? `legacy app password, user: ${config.bitbucketUsername}`
-                  : "API token (no email set — run 'sat-cli init' to add email)";
+                    ? `legacy app password, user: ${config.bitbucketUsername}`
+                    : "API token (no email set — run 'sat-cli init' to add email)";
             scmPlatforms.push(`Bitbucket (${authType})`);
         }
         if (config.gitlabToken) {

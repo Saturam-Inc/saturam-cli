@@ -4,8 +4,11 @@ import { homedir } from "os";
 import { dirname, join } from "path";
 import { Service } from "typedi";
 import { z } from "zod";
+import { getLogger } from "log4js";
 import { LLMModel } from "../constants/llm-models";
 import { WorkingDirectory } from "../utils/working-directory";
+
+const logger = getLogger("ConfigService");
 
 // --- Schemas ---
 
@@ -35,8 +38,7 @@ export const ProviderConfigSchema = z.object({
 
 export type ProviderConfig = z.infer<typeof ProviderConfigSchema>;
 
-const migrateModelId = (val: unknown) =>
-    typeof val === "string" ? val.replace(/^(us|eu|ap)\./, "") : val;
+const migrateModelId = (val: unknown) => (typeof val === "string" ? val.replace(/^(us|eu|ap)\./, "") : val);
 const modelField = z.preprocess(migrateModelId, z.nativeEnum(LLMModel).optional());
 
 export const PersonalConfigurationSchema = z.object({
@@ -56,6 +58,9 @@ export const PersonalConfigurationSchema = z.object({
         .string()
         .optional()
         .describe("GitLab instance base URL (for self-hosted, e.g. https://gitlab.example.com)"),
+    atlassianEmail: z.string().optional().describe("Atlassian account email for onboarding sync"),
+    atlassianToken: z.string().optional().describe("Atlassian API token for onboarding sync"),
+    googleAccessToken: z.string().optional().describe("Google OAuth Access Token for onboarding sync"),
 });
 
 export type PersonalConfiguration = z.infer<typeof PersonalConfigurationSchema>;
@@ -324,6 +329,66 @@ export class ConfigService {
         if (process.env.GITLAB_INSTANCE_URL) return process.env.GITLAB_INSTANCE_URL;
         const config = await this.loadPersonalConfig();
         return config.gitlabInstanceUrl;
+    }
+
+    // --- Google Token Management ---
+
+    public async getGoogleAccessToken(): Promise<string> {
+        if (process.env.GOOGLE_ACCESS_TOKEN) return process.env.GOOGLE_ACCESS_TOKEN;
+
+        const personalConfig = await this.loadPersonalConfig();
+        if (personalConfig.googleAccessToken) {
+            return personalConfig.googleAccessToken;
+        }
+
+        throw new Error(
+            "No Google Access Token found. Please run 'sat-cli init', choose 'Onboarding → Google Drive', and paste your OAuth 2.0 Playground access token. Or set the GOOGLE_ACCESS_TOKEN environment variable.",
+        );
+    }
+
+    // --- Atlassian Credentials Helper ---
+
+    public async getAtlassianCredentials(): Promise<{ email?: string; token: string }> {
+        if (process.env.ATLASSIAN_TOKEN) {
+            return {
+                email: process.env.ATLASSIAN_EMAIL,
+                token: process.env.ATLASSIAN_TOKEN,
+            };
+        }
+
+        if (process.env.CONFLUENCE_TOKEN) {
+            return {
+                email: process.env.CONFLUENCE_EMAIL,
+                token: process.env.CONFLUENCE_TOKEN,
+            };
+        }
+
+        if (process.env.JIRA_TOKEN) {
+            return {
+                email: process.env.JIRA_EMAIL,
+                token: process.env.JIRA_TOKEN,
+            };
+        }
+
+        const personalConfig = await this.loadPersonalConfig();
+        if (personalConfig.atlassianToken) {
+            return {
+                email: personalConfig.atlassianEmail,
+                token: personalConfig.atlassianToken,
+            };
+        }
+
+        throw new Error(
+            "No Atlassian credentials found. Please set ATLASSIAN_TOKEN (and optionally ATLASSIAN_EMAIL) env vars or run 'sat-cli init' and select 'onboarding'.",
+        );
+    }
+
+    public async getConfluenceCredentials(): Promise<{ email?: string; token: string }> {
+        return this.getAtlassianCredentials();
+    }
+
+    public async getJiraCredentials(): Promise<{ email?: string; token: string }> {
+        return this.getAtlassianCredentials();
     }
 
     // --- Static helpers ---
