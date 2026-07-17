@@ -1,5 +1,8 @@
+import { getLogger } from "log4js";
 import { Service } from "typedi";
 import { JiraAdfMark, JiraAdfNode } from "../../integrations/jira/models/jira.model";
+
+const logger = getLogger("AdfNormalizerService");
 
 @Service()
 export class AdfNormalizerService {
@@ -74,6 +77,7 @@ export class AdfNormalizerService {
             }
 
             default:
+                logger.warn(`Unhandled ADF node type encountered: ${node.type}`);
                 return node.content ? this.renderChildren(node.content) : "";
         }
     }

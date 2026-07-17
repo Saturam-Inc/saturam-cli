@@ -1,4 +1,4 @@
-import { existsSync } from "fs";
+import { existsSync, statSync } from "fs";
 import { mkdir, readFile, writeFile } from "fs/promises";
 import { homedir } from "os";
 import { dirname, join } from "path";
@@ -219,6 +219,11 @@ export class ConfigService {
     public async loadProjectConfig(): Promise<ProjectConfiguration | null> {
         const configPath = this.getProjectConfigPath();
         if (!existsSync(configPath)) return null;
+        try {
+            if (statSync(configPath).isDirectory()) return null;
+        } catch {
+            return null;
+        }
         const raw = await readFile(configPath, "utf8");
         return ProjectConfigurationSchema.parse(JSON.parse(raw));
     }
@@ -349,24 +354,14 @@ export class ConfigService {
     // --- Atlassian Credentials Helper ---
 
     public async getAtlassianCredentials(): Promise<{ email?: string; token: string }> {
+        return this.getGenericAtlassianCredentials();
+    }
+
+    public async getGenericAtlassianCredentials(): Promise<{ email?: string; token: string }> {
         if (process.env.ATLASSIAN_TOKEN) {
             return {
                 email: process.env.ATLASSIAN_EMAIL,
                 token: process.env.ATLASSIAN_TOKEN,
-            };
-        }
-
-        if (process.env.CONFLUENCE_TOKEN) {
-            return {
-                email: process.env.CONFLUENCE_EMAIL,
-                token: process.env.CONFLUENCE_TOKEN,
-            };
-        }
-
-        if (process.env.JIRA_TOKEN) {
-            return {
-                email: process.env.JIRA_EMAIL,
-                token: process.env.JIRA_TOKEN,
             };
         }
 
@@ -384,11 +379,23 @@ export class ConfigService {
     }
 
     public async getConfluenceCredentials(): Promise<{ email?: string; token: string }> {
-        return this.getAtlassianCredentials();
+        if (process.env.CONFLUENCE_TOKEN) {
+            return {
+                email: process.env.CONFLUENCE_EMAIL,
+                token: process.env.CONFLUENCE_TOKEN,
+            };
+        }
+        return this.getGenericAtlassianCredentials();
     }
 
     public async getJiraCredentials(): Promise<{ email?: string; token: string }> {
-        return this.getAtlassianCredentials();
+        if (process.env.JIRA_TOKEN) {
+            return {
+                email: process.env.JIRA_EMAIL,
+                token: process.env.JIRA_TOKEN,
+            };
+        }
+        return this.getGenericAtlassianCredentials();
     }
 
     // --- Static helpers ---

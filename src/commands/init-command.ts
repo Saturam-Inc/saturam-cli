@@ -116,7 +116,7 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
 
                 await this.config.savePersonalConfig({
                     ...existingPersonal,
-                    atlassianEmail: email.trim() || undefined,
+                    atlassianEmail: email.trim() || existingPersonal.atlassianEmail,
                     atlassianToken: token.trim() || existingPersonal.atlassianToken,
                 });
 

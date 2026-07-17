@@ -138,10 +138,9 @@ export class GoogleDriveService {
         options?: { limit?: number; pageToken?: string; mimeType?: string },
     ): Promise<GoogleDriveFileListApiResponse> {
         const limit = options?.limit ?? 100;
-        let query = `'${folderId}' in parents and trashed = false`;
-        if (options?.mimeType) {
-            query += ` and mimeType = '${options.mimeType}'`;
-        }
+        const query = options?.mimeType
+            ? `'${folderId}' in parents and trashed = false and mimeType = '${options.mimeType}'`
+            : `'${folderId}' in parents and trashed = false`;
 
         const fields = "nextPageToken,files(id,name,mimeType,modifiedTime,owners,webViewLink,size)";
         const params = new URLSearchParams({

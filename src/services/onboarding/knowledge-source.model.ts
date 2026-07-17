@@ -12,5 +12,5 @@ export interface KnowledgeDocument {
 }
 
 export interface KnowledgeSource {
-    fetch(id: string, options?: Record<string, any>): Promise<KnowledgeDocument>;
+    fetch(id: string, options?: Record<string, unknown>): Promise<KnowledgeDocument>;
 }
