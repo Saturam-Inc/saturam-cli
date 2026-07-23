@@ -2,6 +2,7 @@ import { getLogger } from "log4js";
 import { Service } from "typedi";
 import { ConfigService } from "../../../services/config-service";
 import { JIRA_API_PATH } from "../constants/jira.constant";
+import { fetchWithTimeout } from "../../../utils/fetch-with-timeout";
 import {
     JiraBoardsApiResponse,
     JiraIssueApiResponse,
@@ -49,7 +50,7 @@ export class JiraService {
 
         logger.debug(`Fetching Jira issue ${issueKey} from: ${url}`);
 
-        const response = await fetch(url, { headers: await this.getHeaders() });
+        const response = await fetchWithTimeout(url, { headers: await this.getHeaders() });
         if (!response.ok) {
             const text = await response.text();
             throw new Error(`Failed to fetch Jira issue ${issueKey}: ${response.status} ${response.statusText} - ${text}`);
@@ -68,7 +69,7 @@ export class JiraService {
 
         logger.debug(`Fetching metadata for Jira issue ${issueKey} from: ${url}`);
 
-        const response = await fetch(url, { headers: await this.getHeaders() });
+        const response = await fetchWithTimeout(url, { headers: await this.getHeaders() });
         if (!response.ok) {
             const text = await response.text();
             throw new Error(`Failed to fetch Jira issue metadata ${issueKey}: ${response.status} ${response.statusText} - ${text}`);
@@ -94,7 +95,7 @@ export class JiraService {
 
         logger.debug(`Searching Jira issues via JQL: ${jql}`);
 
-        const response = await fetch(url, { headers: await this.getHeaders() });
+        const response = await fetchWithTimeout(url, { headers: await this.getHeaders() });
         if (!response.ok) {
             const text = await response.text();
             throw new Error(`Failed to run Jira JQL search: ${response.status} ${response.statusText} - ${text}`);
@@ -111,6 +112,43 @@ export class JiraService {
         return (result.issues ?? []).map((issue) => issue.key);
     }
 
+    /**
+     * Convenience helper — fetches ALL issue keys matching a JQL query by auto-paginating searchIssues().
+     */
+    public async listAllIssuesByJql(baseUrl: string, jql: string): Promise<string[]> {
+        const maxResults = 100;
+        const MAX_PAGES = 100;
+
+        const fetchIssueKeys = async (
+            startAt: number,
+            pageCount: number,
+            accumulatedKeys: string[],
+        ): Promise<string[]> => {
+            if (pageCount >= MAX_PAGES) {
+                logger.error(`listAllIssuesByJql: exceeded MAX_PAGES (${MAX_PAGES}) for JQL "${jql}". Partial results returned.`);
+                return accumulatedKeys;
+            }
+
+            const result = await this.searchIssues(baseUrl, jql, { startAt, maxResults });
+            const issues = result.issues || [];
+            if (issues.length === 0) {
+                return accumulatedKeys;
+            }
+
+            const nextAccumulated = [...accumulatedKeys, ...issues.map((issue) => issue.key)];
+            if (result.total && startAt + issues.length >= result.total) {
+                return nextAccumulated;
+            }
+            if (issues.length < maxResults) {
+                return nextAccumulated;
+            }
+
+            return fetchIssueKeys(startAt + maxResults, pageCount + 1, nextAccumulated);
+        };
+
+        return fetchIssueKeys(0, 0, []);
+    }
+
     // --- Project operations ---
 
     /**
@@ -122,7 +160,7 @@ export class JiraService {
 
         logger.debug(`Fetching Jira projects from: ${url}`);
 
-        const response = await fetch(url, { headers: await this.getHeaders() });
+        const response = await fetchWithTimeout(url, { headers: await this.getHeaders() });
         if (!response.ok) {
             const text = await response.text();
             throw new Error(`Failed to fetch Jira projects: ${response.status} ${response.statusText} - ${text}`);
@@ -143,7 +181,7 @@ export class JiraService {
 
         logger.debug(`Fetching Jira boards from: ${url}`);
 
-        const response = await fetch(url, { headers: await this.getHeaders() });
+        const response = await fetchWithTimeout(url, { headers: await this.getHeaders() });
         if (!response.ok) {
             const text = await response.text();
             throw new Error(`Failed to fetch Jira boards: ${response.status} ${response.statusText} - ${text}`);
@@ -161,7 +199,7 @@ export class JiraService {
 
         logger.debug(`Fetching backlog issues for board ${boardId} from: ${url}`);
 
-        const response = await fetch(url, { headers: await this.getHeaders() });
+        const response = await fetchWithTimeout(url, { headers: await this.getHeaders() });
         if (!response.ok) {
             const text = await response.text();
             throw new Error(

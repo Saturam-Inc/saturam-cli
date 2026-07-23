@@ -10,7 +10,7 @@ jest.mock("@inquirer/prompts", () => ({
     checkbox: jest.fn(),
 }));
 
-describe("InitCommand Onboarding Config Flow", () => {
+describe("InitCommand Platform Config Flow", () => {
     let command: InitCommand;
     let mockConfig: jest.Mocked<ConfigService>;
 
@@ -25,15 +25,15 @@ describe("InitCommand Onboarding Config Flow", () => {
         command = new InitCommand(mockConfig);
     });
 
-    it("should configure Atlassian onboarding credentials", async () => {
-        (select as jest.Mock).mockResolvedValueOnce("onboarding"); // Config type
-        (select as jest.Mock).mockResolvedValueOnce("atlassian");  // Onboarding source
+    it("should configure Atlassian credentials from top-level menu", async () => {
+        // New UX: single select → "atlassian" (no nested Onboarding submenu)
+        (select as jest.Mock).mockResolvedValueOnce("atlassian");
         (input as jest.Mock).mockResolvedValueOnce("test@example.com");
         (password as jest.Mock).mockResolvedValueOnce("secret_api_token");
 
         await command.execute({});
 
-        expect(select).toHaveBeenCalledTimes(2);
+        expect(select).toHaveBeenCalledTimes(1);
         expect(input).toHaveBeenCalled();
         expect(password).toHaveBeenCalled();
         expect(mockConfig.savePersonalConfig).toHaveBeenCalledWith({
@@ -42,14 +42,14 @@ describe("InitCommand Onboarding Config Flow", () => {
         });
     });
 
-    it("should configure Google onboarding credentials", async () => {
-        (select as jest.Mock).mockResolvedValueOnce("onboarding"); // Config type
-        (select as jest.Mock).mockResolvedValueOnce("google");      // Onboarding source
+    it("should configure Google credentials from top-level menu", async () => {
+        // New UX: single select → "google" (no nested Onboarding submenu)
+        (select as jest.Mock).mockResolvedValueOnce("google");
         (password as jest.Mock).mockResolvedValueOnce("ya29.google_token");
 
         await command.execute({});
 
-        expect(select).toHaveBeenCalledTimes(2);
+        expect(select).toHaveBeenCalledTimes(1);
         expect(password).toHaveBeenCalled();
         expect(mockConfig.savePersonalConfig).toHaveBeenCalledWith({
             googleAccessToken: "ya29.google_token",

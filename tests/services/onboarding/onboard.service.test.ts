@@ -3,15 +3,27 @@ import { ConfluenceService } from "../../../src/integrations/confluence/services
 import { JiraService } from "../../../src/integrations/jira/services/jira.service";
 import { GoogleDriveService } from "../../../src/integrations/google-drive/services/google-drive.service";
 import { ConfigService } from "../../../src/services/config-service";
-import { AdfNormalizerService } from "../../../src/services/onboarding/adf-normalizer.service";
-import { HtmlNormalizerService } from "../../../src/services/onboarding/html-normalizer.service";
+import { JiraKnowledgeSource } from "../../../src/services/knowledge/jira-knowledge.source";
+import { ConfluenceKnowledgeSource } from "../../../src/services/knowledge/confluence-knowledge.source";
+import { GoogleDriveKnowledgeSource } from "../../../src/services/knowledge/google-drive-knowledge.source";
+import { KnowledgeDocument } from "../../../src/services/knowledge/knowledge-source.model";
 import { mkdir, writeFile } from "fs/promises";
-import { KnowledgeDocument } from "../../../src/services/onboarding/knowledge-source.model";
 
 jest.mock("fs/promises", () => ({
     mkdir: jest.fn().mockResolvedValue(undefined),
     writeFile: jest.fn().mockResolvedValue(undefined),
 }));
+
+// Helpers to build minimal KnowledgeDocuments in tests
+const makeDoc = (overrides: Partial<KnowledgeDocument> = {}): KnowledgeDocument => ({
+    id: "test-id",
+    source: "jira",
+    title: "Test Doc",
+    content: "# Test Doc\n",
+    url: "https://example.com/browse/TEST-1",
+    metadata: { updatedAt: "2026-07-01", author: "Alice", labels: [] },
+    ...overrides,
+});
 
 describe("OnboardService", () => {
     let service: OnboardService;
@@ -19,8 +31,9 @@ describe("OnboardService", () => {
     let mockJira: jest.Mocked<JiraService>;
     let mockGoogleDrive: jest.Mocked<GoogleDriveService>;
     let mockConfig: jest.Mocked<ConfigService>;
-    let adfNormalizer: AdfNormalizerService;
-    let htmlNormalizer: HtmlNormalizerService;
+    let mockJiraSource: jest.Mocked<JiraKnowledgeSource>;
+    let mockConfluenceSource: jest.Mocked<ConfluenceKnowledgeSource>;
+    let mockGoogleDriveSource: jest.Mocked<GoogleDriveKnowledgeSource>;
 
     beforeEach(() => {
         jest.clearAllMocks();
@@ -31,18 +44,22 @@ describe("OnboardService", () => {
             listChildPages: jest.fn(),
             listSpaces: jest.fn(),
             listPagesInSpace: jest.fn(),
+            listAllPagesInSpace: jest.fn(),
             searchContent: jest.fn(),
         } as any;
+
         mockJira = {
             getIssue: jest.fn(),
             getIssueMetadata: jest.fn(),
             searchIssueKeys: jest.fn(),
             searchIssues: jest.fn(),
+            listAllIssuesByJql: jest.fn(),
             listChildIssues: jest.fn(),
             listProjects: jest.fn(),
             listBoards: jest.fn(),
             getBoardBacklogIssues: jest.fn(),
         } as any;
+
         mockGoogleDrive = {
             getFileMetadata: jest.fn(),
             getGoogleDoc: jest.fn(),
@@ -55,19 +72,24 @@ describe("OnboardService", () => {
             getSpreadsheetMetadata: jest.fn(),
             batchGetSpreadsheetValues: jest.fn(),
         } as any;
+
         mockConfig = {
             getPersonalConfigPath: jest.fn().mockReturnValue("/mock/personal/config.json"),
         } as any;
-        adfNormalizer = new AdfNormalizerService();
-        htmlNormalizer = new HtmlNormalizerService();
+
+        // Adapter mocks — these are what OnboardService now calls for fetch+normalize
+        mockJiraSource = { fetch: jest.fn() } as any;
+        mockConfluenceSource = { fetch: jest.fn() } as any;
+        mockGoogleDriveSource = { fetch: jest.fn() } as any;
 
         service = new OnboardService(
             mockConfluence,
             mockJira,
             mockGoogleDrive,
             mockConfig,
-            adfNormalizer,
-            htmlNormalizer,
+            mockJiraSource,
+            mockConfluenceSource,
+            mockGoogleDriveSource,
         );
     });
 
@@ -76,32 +98,31 @@ describe("OnboardService", () => {
     });
 
     describe("sync Confluence pages", () => {
-        it("should call confluence.getPage and save content", async () => {
+        it("should call confluenceSource.fetch and persist docs", async () => {
             const config = {
                 confluence: {
                     baseUrl: "https://confluence.example.com",
                     pages: ["123"],
                 },
             };
-            const mockPage = {
+
+            const doc = makeDoc({
                 id: "123",
+                source: "confluence",
                 title: "Test Confluence Page",
-                body: {
-                    storage: { value: "<p>Hello World</p>" },
-                },
-                version: { number: 1, when: "2026-07-16T00:00:00Z" },
-                space: { key: "TST" },
-            };
-            mockConfluence.getPage.mockResolvedValue(mockPage);
+                content: "# Test Confluence Page\n",
+                url: "https://confluence.example.com/wiki/spaces/TST/pages/123",
+            });
+            mockConfluenceSource.fetch.mockResolvedValue(doc);
 
             await service.sync(config, "/mock/cwd");
 
-            expect(mockConfluence.getPage).toHaveBeenCalledWith("https://confluence.example.com", "123");
+            expect(mockConfluenceSource.fetch).toHaveBeenCalledWith("123", { baseUrl: "https://confluence.example.com" });
             expect(mkdir).toHaveBeenCalled();
             expect(writeFile).toHaveBeenCalled();
         });
 
-        it("should paginate confluence.listPagesInSpace when resolving space pages", async () => {
+        it("should use listAllPagesInSpace to resolve space pages (no inline while loop)", async () => {
             const config = {
                 confluence: {
                     baseUrl: "https://confluence.example.com",
@@ -109,72 +130,73 @@ describe("OnboardService", () => {
                 },
             };
 
-            const firstResult = {
-                results: Array.from({ length: 100 }, (_, i) => ({ id: `id-${i}` })),
-            };
-            const secondResult = {
-                results: [],
-            };
-            mockConfluence.listPagesInSpace
-                .mockResolvedValueOnce(firstResult as any)
-                .mockResolvedValueOnce(secondResult as any);
+            const pages = Array.from({ length: 5 }, (_, i) => ({ id: `id-${i}` }));
+            mockConfluence.listAllPagesInSpace.mockResolvedValue(pages as any);
 
-            mockConfluence.getPage.mockResolvedValue({
-                id: "id-0",
-                title: "Mocked Page",
-                body: { storage: { value: "Hello" } },
-                version: { number: 1 },
-                space: { key: "TST" },
-            } as any);
+            const doc = makeDoc({ source: "confluence", title: "Mocked Page" });
+            mockConfluenceSource.fetch.mockResolvedValue(doc);
 
             await service.sync(config, "/mock/cwd");
 
-            expect(mockConfluence.listPagesInSpace).toHaveBeenCalledTimes(2);
-            expect(mockConfluence.listPagesInSpace).toHaveBeenNthCalledWith(
-                1,
+            // Should delegate pagination to the service helper, not call listPagesInSpace directly
+            expect(mockConfluence.listAllPagesInSpace).toHaveBeenCalledWith(
                 "https://confluence.example.com",
                 "TST",
-                { start: 0, limit: 100 }
             );
-            expect(mockConfluence.listPagesInSpace).toHaveBeenNthCalledWith(
-                2,
+            expect(mockConfluenceSource.fetch).toHaveBeenCalledTimes(5);
+        });
+
+        it("should use listAllPagesInSpace for project-level space config", async () => {
+            const config = {
+                projects: {
+                    "my-project": {
+                        confluence: {
+                            baseUrl: "https://confluence.example.com",
+                            space: "PROJ",
+                        },
+                    },
+                },
+            };
+
+            mockConfluence.listAllPagesInSpace.mockResolvedValue([{ id: "page-1" }] as any);
+            const doc = makeDoc({ source: "confluence", title: "Project Page" });
+            mockConfluenceSource.fetch.mockResolvedValue(doc);
+
+            await service.sync(config, "/mock/cwd");
+
+            expect(mockConfluence.listAllPagesInSpace).toHaveBeenCalledWith(
                 "https://confluence.example.com",
-                "TST",
-                { start: 100, limit: 100 }
+                "PROJ",
             );
+            expect(mockConfluenceSource.fetch).toHaveBeenCalledTimes(1);
         });
     });
 
     describe("sync Jira tickets", () => {
-        it("should call jira.getIssue and save content", async () => {
+        it("should call jiraSource.fetch and persist docs", async () => {
             const config = {
                 jira: {
                     baseUrl: "https://jira.example.com",
                     tickets: ["TST-101"],
                 },
             };
-            const mockIssue = {
-                id: "1000",
-                key: "TST-101",
-                fields: {
-                    summary: "Jira Ticket Summary",
-                    status: { name: "To Do" },
-                    description: {
-                        type: "doc",
-                        content: [{ type: "paragraph", content: [{ type: "text", text: "Ticket details" }] }],
-                    },
-                },
-            };
-            mockJira.getIssue.mockResolvedValue(mockIssue);
+
+            const doc = makeDoc({
+                id: "TST-101",
+                source: "jira",
+                title: "Jira Ticket Summary",
+                url: "https://jira.example.com/browse/TST-101",
+            });
+            mockJiraSource.fetch.mockResolvedValue(doc);
 
             await service.sync(config, "/mock/cwd");
 
-            expect(mockJira.getIssue).toHaveBeenCalledWith("https://jira.example.com", "TST-101");
+            expect(mockJiraSource.fetch).toHaveBeenCalledWith("TST-101", { baseUrl: "https://jira.example.com" });
             expect(mkdir).toHaveBeenCalled();
             expect(writeFile).toHaveBeenCalled();
         });
 
-        it("should paginate jira.searchIssues when resolving JQL query tickets", async () => {
+        it("should use listAllIssuesByJql to resolve JQL tickets (no inline while loop)", async () => {
             const config = {
                 projects: {
                     "my-project": {
@@ -186,66 +208,43 @@ describe("OnboardService", () => {
                 },
             };
 
-            const firstResult = {
-                total: 150,
-                issues: Array.from({ length: 100 }, (_, i) => ({ key: `TST-${i}` })),
-            };
-            const secondResult = {
-                total: 150,
-                issues: Array.from({ length: 50 }, (_, i) => ({ key: `TST-${100 + i}` })),
-            };
+            const keys = ["TST-0", "TST-1", "TST-2"];
+            mockJira.listAllIssuesByJql.mockResolvedValue(keys);
 
-            mockJira.searchIssues
-                .mockResolvedValueOnce(firstResult as any)
-                .mockResolvedValueOnce(secondResult as any);
-
-            mockJira.getIssue.mockResolvedValue({
-                id: "1000",
-                key: "TST-0",
-                fields: {
-                    summary: "Jira Ticket",
-                    status: { name: "To Do" },
-                },
-            } as any);
+            const doc = makeDoc({ source: "jira", title: "Jira Ticket" });
+            mockJiraSource.fetch.mockResolvedValue(doc);
 
             await service.sync(config as any, "/mock/cwd");
 
-            expect(mockJira.searchIssues).toHaveBeenCalledTimes(2);
-            expect(mockJira.searchIssues).toHaveBeenNthCalledWith(
-                1,
+            // Should delegate pagination to the service helper, not call searchIssues directly
+            expect(mockJira.listAllIssuesByJql).toHaveBeenCalledWith(
                 "https://jira.example.com",
                 "project = TST",
-                { startAt: 0, maxResults: 100 }
             );
-            expect(mockJira.searchIssues).toHaveBeenNthCalledWith(
-                2,
-                "https://jira.example.com",
-                "project = TST",
-                { startAt: 100, maxResults: 100 }
-            );
+            expect(mockJiraSource.fetch).toHaveBeenCalledTimes(3);
         });
     });
 
     describe("sync Google Docs", () => {
-        it("should fetch native Google Doc and save exported markdown", async () => {
+        it("should call googleDriveSource.fetch and persist docs", async () => {
             const config = {
                 googleDocs: {
                     docs: ["doc-id-xyz"],
                 },
             };
-            const mockMeta = {
-                name: "Google Doc Title",
-                mimeType: "application/vnd.google-apps.document",
-                modifiedTime: "2026-07-16T00:00:00Z",
-                owners: [{ displayName: "Test User" }],
-            };
-            mockGoogleDrive.getFileMetadata.mockResolvedValue(mockMeta);
-            mockGoogleDrive.exportGoogleDocAsMarkdown.mockResolvedValue("# Document Content");
+
+            const doc = makeDoc({
+                id: "doc-id-xyz",
+                source: "googleDocs",
+                title: "Google Doc Title",
+                content: "# Document Content\n",
+                url: "https://docs.google.com/document/d/doc-id-xyz/edit",
+            });
+            mockGoogleDriveSource.fetch.mockResolvedValue(doc);
 
             await service.sync(config, "/mock/cwd");
 
-            expect(mockGoogleDrive.getFileMetadata).toHaveBeenCalledWith("doc-id-xyz");
-            expect(mockGoogleDrive.exportGoogleDocAsMarkdown).toHaveBeenCalledWith("doc-id-xyz");
+            expect(mockGoogleDriveSource.fetch).toHaveBeenCalledWith("doc-id-xyz");
             expect(mkdir).toHaveBeenCalled();
             expect(writeFile).toHaveBeenCalled();
         });

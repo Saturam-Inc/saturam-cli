@@ -58,9 +58,9 @@ export const PersonalConfigurationSchema = z.object({
         .string()
         .optional()
         .describe("GitLab instance base URL (for self-hosted, e.g. https://gitlab.example.com)"),
-    atlassianEmail: z.string().optional().describe("Atlassian account email for onboarding sync"),
-    atlassianToken: z.string().optional().describe("Atlassian API token for onboarding sync"),
-    googleAccessToken: z.string().optional().describe("Google OAuth Access Token for onboarding sync"),
+    atlassianEmail: z.string().optional().describe("Atlassian account email (Jira & Confluence)"),
+    atlassianToken: z.string().optional().describe("Atlassian API token (Jira & Confluence)"),
+    googleAccessToken: z.string().optional().describe("Google OAuth access token (Drive / Docs / Sheets)"),
 });
 
 export type PersonalConfiguration = z.infer<typeof PersonalConfigurationSchema>;
@@ -347,7 +347,7 @@ export class ConfigService {
         }
 
         throw new Error(
-            "No Google Access Token found. Please run 'sat-cli init', choose 'Onboarding → Google Drive', and paste your OAuth 2.0 Playground access token. Or set the GOOGLE_ACCESS_TOKEN environment variable.",
+            "No Google Access Token found. Set GOOGLE_ACCESS_TOKEN, or run 'sat-cli init' and select 'Google (Drive / Docs / Sheets)' to configure credentials.",
         );
     }
 
@@ -374,7 +374,7 @@ export class ConfigService {
         }
 
         throw new Error(
-            "No Atlassian credentials found. Please set ATLASSIAN_TOKEN (and optionally ATLASSIAN_EMAIL) env vars or run 'sat-cli init' and select 'onboarding'.",
+            "No Atlassian credentials found. Set ATLASSIAN_TOKEN (and optionally ATLASSIAN_EMAIL) env vars, or run 'sat-cli init' and select 'Atlassian (Jira & Confluence)'.",
         );
     }
 

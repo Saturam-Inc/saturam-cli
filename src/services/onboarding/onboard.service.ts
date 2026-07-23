@@ -1,20 +1,21 @@
 import { mkdir, writeFile } from "fs/promises";
 import { getLogger } from "log4js";
 import { dirname, join, resolve } from "path";
+import pLimit from "p-limit";
 import { Service } from "typedi";
 import { z } from "zod";
-import * as mammoth from "mammoth";
 import { ConfluenceService } from "../../integrations/confluence/services/confluence.service";
-import { ConfluencePageApiResponse } from "../../integrations/confluence/models/confluence.model";
 import { JiraService } from "../../integrations/jira/services/jira.service";
-import { JiraComment } from "../../integrations/jira/models/jira.model";
 import { GoogleDriveService } from "../../integrations/google-drive/services/google-drive.service";
 import { ConfigService } from "../config-service";
-import { AdfNormalizerService } from "./adf-normalizer.service";
-import { HtmlNormalizerService } from "./html-normalizer.service";
-import { KnowledgeDocument } from "./knowledge-source.model";
+import { JiraKnowledgeSource } from "../knowledge/jira-knowledge.source";
+import { ConfluenceKnowledgeSource } from "../knowledge/confluence-knowledge.source";
+import { GoogleDriveKnowledgeSource } from "../knowledge/google-drive-knowledge.source";
+import { KnowledgeDocument } from "../knowledge/knowledge-source.model";
 
 const logger = getLogger("OnboardService");
+
+// --- Config Schemas ---
 
 export const OnboardPageSchema = z.union([
     z.string(),
@@ -111,16 +112,41 @@ export interface GoogleDocTask {
     projectName?: string;
 }
 
+// --- Internal mapped task types (after URL parsing) ---
+
+interface MappedConfluenceTask {
+    id: string;
+    baseUrl?: string;
+    projectName?: string;
+    outputPath?: string;
+}
+
+interface MappedJiraTask {
+    id: string;
+    baseUrl?: string;
+    projectName?: string;
+    outputPath?: string;
+}
+
+interface MappedGoogleDocTask {
+    id: string;
+    projectName?: string;
+    outputPath?: string;
+}
+
 @Service()
 export class OnboardService {
     constructor(
+        // Integration services — needed for Google Sheets (not covered by KnowledgeSource adapters)
         private readonly confluence: ConfluenceService,
         private readonly jira: JiraService,
         private readonly googleDrive: GoogleDriveService,
         private readonly config: ConfigService,
-        private readonly adfNormalizer: AdfNormalizerService,
-        private readonly htmlNormalizer: HtmlNormalizerService,
-    ) {}
+        // KnowledgeSource adapters — own the fetch → normalize → KnowledgeDocument mapping
+        private readonly jiraSource: JiraKnowledgeSource,
+        private readonly confluenceSource: ConfluenceKnowledgeSource,
+        private readonly googleDriveSource: GoogleDriveKnowledgeSource,
+    ) { }
 
     public async sync(config: OnboardConfig, cwd: string): Promise<void> {
         // Collect Confluence tasks
@@ -140,16 +166,7 @@ export class OnboardService {
                 }
                 try {
                     logger.info(`Resolving pages for global space: ${spaceKey}...`);
-                    let start = 0;
-                    const limit = 100;
-                    const pages: ConfluencePageApiResponse[] = [];
-                    while (true) {
-                        const result = await this.confluence.listPagesInSpace(targetBaseUrl, spaceKey, { start, limit });
-                        const results = result.results || [];
-                        pages.push(...results);
-                        if (results.length < limit) break;
-                        start += limit;
-                    }
+                    const pages = await this.confluence.listAllPagesInSpace(targetBaseUrl, spaceKey);
                     const spaceTasks = pages.map((page) => ({
                         pageEntry: { id: page.id! },
                         projectName: spaceKey,
@@ -179,16 +196,7 @@ export class OnboardService {
                     }
                     try {
                         logger.info(`Resolving pages for project ${projectName} from space ${confProj.space}...`);
-                        let start = 0;
-                        const limit = 100;
-                        const pages: ConfluencePageApiResponse[] = [];
-                        while (true) {
-                            const result = await this.confluence.listPagesInSpace(baseUrl, confProj.space, { start, limit });
-                            const results = result.results || [];
-                            pages.push(...results);
-                            if (results.length < limit) break;
-                            start += limit;
-                        }
+                        const pages = await this.confluence.listAllPagesInSpace(baseUrl, confProj.space);
                         return pages.map((page) => ({
                             pageEntry: { id: page.id! },
                             projectName,
@@ -242,18 +250,7 @@ export class OnboardService {
                     }
                     try {
                         logger.info(`Resolving Jira tickets for project ${projectName} via JQL: ${jiraProj.jql}...`);
-                        let startAt = 0;
-                        const maxResults = 100;
-                        const ticketKeys: string[] = [];
-                        while (true) {
-                            const result = await this.jira.searchIssues(baseUrl, jiraProj.jql, { startAt, maxResults });
-                            const issues = result.issues || [];
-                            ticketKeys.push(...issues.map(issue => issue.key));
-                            if (startAt + issues.length >= (result.total ?? 0) || issues.length < maxResults) {
-                                break;
-                            }
-                            startAt += maxResults;
-                        }
+                        const ticketKeys = await this.jira.listAllIssuesByJql(baseUrl, jiraProj.jql);
                         return ticketKeys.map((key) => ({
                             ticketEntry: { key },
                             projectName,
@@ -292,7 +289,7 @@ export class OnboardService {
             const mappedTasks = confluenceTasks.map((t) => {
                 const urlParsed =
                     typeof t.pageEntry === "string" &&
-                    (t.pageEntry.startsWith("http://") || t.pageEntry.startsWith("https://"))
+                        (t.pageEntry.startsWith("http://") || t.pageEntry.startsWith("https://"))
                         ? this.parseConfluenceUrl(t.pageEntry)
                         : null;
                 return {
@@ -309,15 +306,15 @@ export class OnboardService {
             const mappedTasks = jiraTasks.map((t) => {
                 const urlParsed =
                     typeof t.ticketEntry === "string" &&
-                    (t.ticketEntry.startsWith("http://") || t.ticketEntry.startsWith("https://"))
+                        (t.ticketEntry.startsWith("http://") || t.ticketEntry.startsWith("https://"))
                         ? this.parseJiraUrl(t.ticketEntry)
                         : null;
                 return {
                     id: urlParsed
                         ? urlParsed.ticketKey
                         : typeof t.ticketEntry === "string"
-                          ? t.ticketEntry
-                          : t.ticketEntry.key,
+                            ? t.ticketEntry
+                            : t.ticketEntry.key,
                     baseUrl: urlParsed ? urlParsed.baseUrl : t.baseUrl,
                     projectName: t.projectName,
                     outputPath: typeof t.ticketEntry === "string" ? undefined : t.ticketEntry.outputPath,
@@ -330,7 +327,7 @@ export class OnboardService {
             const mappedTasks = googleTasks.map((t) => {
                 const urlParsed =
                     typeof t.docEntry === "string" &&
-                    (t.docEntry.startsWith("http://") || t.docEntry.startsWith("https://"))
+                        (t.docEntry.startsWith("http://") || t.docEntry.startsWith("https://"))
                         ? this.parseGoogleDocUrl(t.docEntry)
                         : null;
                 return {
@@ -364,339 +361,130 @@ export class OnboardService {
         }
     }
 
-    // --- Confluence-specific task executor (uses raw API + HtmlNormalizer directly) ---
+    // --- Confluence orchestration (thin: delegate to adapter → writeDoc) ---
 
     private async executeConfluenceTasks(
-        tasks: Array<{ id: string; outputPath?: string; projectName?: string; baseUrl?: string }>,
+        tasks: MappedConfluenceTask[],
         cwd: string,
         defaultBaseUrl?: string,
     ): Promise<void> {
         logger.info(`Found ${tasks.length} Confluence page(s) to fetch...`);
         const baseOnboardDir = this.resolveBaseOnboardDir();
+        const limit = pLimit(5);
+        const usedPaths = new Set<string>();
 
         const results = await Promise.allSettled(
-            tasks.map(async (task) => {
-                const { id, outputPath, projectName, baseUrl } = task;
-                const targetBaseUrl = baseUrl || defaultBaseUrl || "";
+            tasks.map((task) =>
+                limit(async () => {
+                    const { id, outputPath, projectName, baseUrl } = task;
+                    const targetBaseUrl = baseUrl || defaultBaseUrl || "";
 
-                if (!id) {
-                    throw new Error("Confluence page ID is missing or invalid.");
-                }
+                    // Delegate fetch + normalize to the adapter
+                    const doc = await this.confluenceSource.fetch(id, { baseUrl: targetBaseUrl });
 
-                if (!targetBaseUrl) {
-                    throw new Error(`No base URL configured for Confluence page: ${id}`);
-                }
+                    // Determine output path
+                    const safeTitle = this.getSafeTitle(doc.title, id);
+                    const sanitizedProj = this.sanitizeProjectName(projectName);
+                    const candidatePath = outputPath
+                        ? resolve(cwd, outputPath)
+                        : sanitizedProj
+                            ? join(baseOnboardDir, "confluence", sanitizedProj, `${safeTitle}.md`)
+                            : join(baseOnboardDir, "confluence", `${safeTitle}.md`);
 
-                logger.info(`Fetching Confluence page ${id} from ${targetBaseUrl}...`);
+                    const absoluteOutputPath = this.getUniqueOutputPath(candidatePath, usedPaths);
+                    usedPaths.add(absoluteOutputPath);
 
-                // 1. Fetch raw API response from integration layer
-                const data = await this.confluence.getPage(targetBaseUrl, id);
-
-                // 2. Extract plain metadata fields
-                const title = data.title || `Page ${id}`;
-                const spaceKey = data.space?.key || "";
-                const version = data.version?.number ?? 1;
-                const updatedAt = data.version?.when || data.history?.createdDate || "";
-                const author =
-                    data.version?.by?.displayName ||
-                    data.history?.lastUpdated?.by?.displayName ||
-                    data.history?.createdBy?.displayName ||
-                    "Unknown";
-                const labels = data.metadata?.labels?.results?.map((l) => l.name) || [];
-
-                // 3. HtmlNormalizer converts Confluence Storage Format → Markdown (orchestration layer's job)
-                const rawHtml = data.body?.storage?.value || "";
-                if (!rawHtml) {
-                    logger.warn(`Fetched Confluence page ${id} ("${title}") contains no content.`);
-                }
-                const contentMarkdown = rawHtml
-                    ? this.htmlNormalizer.convertHtmlToMarkdown(rawHtml)
-                    : "_No Content_";
-
-                // 4. Build final Markdown content
-                const baseOrigin = new URL(targetBaseUrl).origin;
-                const docUrl = `${baseOrigin}/wiki/spaces/${spaceKey}/pages/${id}`;
-
-                const content =
-                    `# ${title}
-
-| Field | Value |
-| :--- | :--- |
-| **Space** | ${spaceKey} |
-| **Version** | ${version} |
-| **Author** | ${author} |
-| **Updated** | ${updatedAt} |
-| **Labels** | ${labels.length > 0 ? labels.join(", ") : "_none_"} |
-| **Link** | [Open in Confluence](${docUrl}) |
-
-## Content
-${contentMarkdown}
-`.trim() + "\n";
-
-                // 5. Build KnowledgeDocument
-                const doc: KnowledgeDocument = {
-                    id,
-                    source: "confluence",
-                    title,
-                    content,
-                    url: docUrl,
-                    metadata: {
-                        updatedAt,
-                        author,
-                        labels,
-                    },
-                };
-
-                // 6. Persist .md and .json side-car files
-                const safeTitle = this.getSafeTitle(title, id);
-                const sanitizedProj = this.sanitizeProjectName(projectName);
-
-                const absoluteOutputPath = outputPath
-                    ? resolve(cwd, outputPath)
-                    : sanitizedProj
-                      ? join(baseOnboardDir, "confluence", sanitizedProj, `${safeTitle}.md`)
-                      : join(baseOnboardDir, "confluence", `${safeTitle}.md`);
-
-                const absoluteJsonPath = absoluteOutputPath.replace(/\.md$/, ".json");
-                const { content: _content, ...metadataOnly } = doc;
-
-                await mkdir(dirname(absoluteOutputPath), { recursive: true });
-                await writeFile(absoluteOutputPath, content, "utf8");
-                await writeFile(absoluteJsonPath, JSON.stringify(metadataOnly, null, 4), "utf8");
-
-                logger.info(`✓ Saved Confluence page "${title}" to: ${absoluteOutputPath} (and JSON metadata)`);
-            })
+                    await this.writeDoc(doc, absoluteOutputPath);
+                    logger.info(`✓ Saved Confluence page "${doc.title}" to: ${absoluteOutputPath} (and JSON metadata)`);
+                })
+            )
         );
 
-        results.forEach((res) => {
-            if (res.status === "rejected") {
-                logger.error(`✗ Confluence sync task failed: ${res.reason.message}`);
-            }
-        });
-
-        const fetchedCount = results.filter((r) => r.status === "fulfilled").length;
-        const failedCount = results.filter((r) => r.status === "rejected").length;
-
-        logger.info(`\nConfluence sync completed: ${fetchedCount} page(s) fetched, ${failedCount} failed.`);
+        this.logResults(results, "Confluence", "page(s)");
     }
 
-    // --- Jira-specific task executor (uses raw API + normalizer directly) ---
+    // --- Jira orchestration (thin: delegate to adapter → writeDoc) ---
 
     private async executeJiraTasks(
-        tasks: Array<{ id: string; outputPath?: string; projectName?: string; baseUrl?: string }>,
+        tasks: MappedJiraTask[],
         cwd: string,
         defaultBaseUrl?: string,
     ): Promise<void> {
         logger.info(`Found ${tasks.length} Jira ticket(s) to fetch...`);
         const baseOnboardDir = this.resolveBaseOnboardDir();
+        const limit = pLimit(5);
+        const usedPaths = new Set<string>();
 
         const results = await Promise.allSettled(
-            tasks.map(async (task) => {
-                const { id, outputPath, projectName, baseUrl } = task;
-                const targetBaseUrl = baseUrl || defaultBaseUrl || "";
+            tasks.map((task) =>
+                limit(async () => {
+                    const { id, outputPath, projectName, baseUrl } = task;
+                    const targetBaseUrl = baseUrl || defaultBaseUrl || "";
 
-                if (!id) {
-                    throw new Error("Jira ticket key is missing or invalid.");
-                }
+                    // Delegate fetch + normalize to the adapter
+                    const doc = await this.jiraSource.fetch(id, { baseUrl: targetBaseUrl });
 
-                if (!targetBaseUrl) {
-                    throw new Error(`No base URL configured for Jira ticket: ${id}`);
-                }
+                    // Determine output path
+                    const safeTitle = this.getSafeTitle(doc.title, id);
+                    const sanitizedProj = this.sanitizeProjectName(projectName);
+                    const candidatePath = outputPath
+                        ? resolve(cwd, outputPath)
+                        : sanitizedProj
+                            ? join(baseOnboardDir, "jira", sanitizedProj, `${safeTitle}.md`)
+                            : join(baseOnboardDir, "jira", `${safeTitle}.md`);
 
-                logger.info(`Fetching Jira ticket ${id} from ${targetBaseUrl}...`);
+                    // Deduplicate colliding output paths
+                    const absoluteOutputPath = this.getUniqueOutputPath(candidatePath, usedPaths);
+                    usedPaths.add(absoluteOutputPath);
 
-                // 1. Fetch raw API response from integration layer
-                const data = await this.jira.getIssue(targetBaseUrl, id);
-                const fields = data.fields;
-
-                // 2. Extract plain metadata fields
-                const summary = fields?.summary || "No Summary";
-                const status = fields?.status?.name || "Unknown";
-                const assignee = fields?.assignee?.displayName || "Unassigned";
-                const reporter = fields?.reporter?.displayName || "Unassigned";
-                const priority = fields?.priority?.name || "Medium";
-                const issueType = fields?.issuetype?.name || "Task";
-                const created = fields?.created || "";
-                const updated = fields?.updated || "";
-                const labels = fields?.labels || [];
-
-                // 3. Normalizer converts ADF → Markdown (orchestration layer's job)
-                const description = fields?.description
-                    ? this.adfNormalizer.renderAdfNode(fields.description)
-                    : "";
-
-                const rawComments: JiraComment[] = fields?.comment?.comments || [];
-                const commentsMarkdown = rawComments.map((c) => {
-                    const author = c.author?.displayName || "User";
-                    const date = c.created ? new Date(c.created).toLocaleString() : "";
-                    const body = c.body ? this.adfNormalizer.renderAdfNode(c.body) : "";
-                    return `**Comment by ${author}** (${date}):\n${body}\n`;
-                });
-
-                // 4. Build final Markdown content
-                const docUrl = `${targetBaseUrl.replace(/\/$/, "")}/browse/${id}`;
-                const content =
-                    `
-# [${id}] ${summary}
-
-| Field | Value |
-| :--- | :--- |
-| **Type** | ${issueType} |
-| **Status** | ${status} |
-| **Priority** | ${priority} |
-| **Assignee** | ${assignee} |
-| **Reporter** | ${reporter} |
-| **Created** | ${created} |
-| **Updated** | ${updated} |
-| **Link** | [Open in Jira](${docUrl}) |
-
-## Description
-${description || "_No Description_"}
-
-${commentsMarkdown.length > 0 ? `## Comments\n\n${commentsMarkdown.join("\n")}` : ""}
-`.trim() + "\n";
-
-                // 5. Build KnowledgeDocument
-                const doc: KnowledgeDocument = {
-                    id,
-                    source: "jira",
-                    title: summary,
-                    content,
-                    url: docUrl,
-                    metadata: {
-                        updatedAt: updated,
-                        author: reporter !== "Unassigned" ? reporter : assignee,
-                        labels,
-                    },
-                };
-
-                // 6. Persist .md and .json side-car files
-                const safeTitle = this.getSafeTitle(summary, id);
-                const sanitizedProj = this.sanitizeProjectName(projectName);
-
-                const absoluteOutputPath = outputPath
-                    ? resolve(cwd, outputPath)
-                    : sanitizedProj
-                      ? join(baseOnboardDir, "jira", sanitizedProj, `${safeTitle}.md`)
-                      : join(baseOnboardDir, "jira", `${safeTitle}.md`);
-
-                const absoluteJsonPath = absoluteOutputPath.replace(/\.md$/, ".json");
-                const { content: _content, ...metadataOnly } = doc;
-
-                await mkdir(dirname(absoluteOutputPath), { recursive: true });
-                await writeFile(absoluteOutputPath, content, "utf8");
-                await writeFile(absoluteJsonPath, JSON.stringify(metadataOnly, null, 4), "utf8");
-
-                logger.info(`✓ Saved Jira ticket "${summary}" to: ${absoluteOutputPath} (and JSON metadata)`);
-            })
+                    await this.writeDoc(doc, absoluteOutputPath);
+                    logger.info(`✓ Saved Jira ticket "${doc.title}" to: ${absoluteOutputPath} (and JSON metadata)`);
+                })
+            )
         );
 
-        results.forEach((res) => {
-            if (res.status === "rejected") {
-                logger.error(`✗ Jira sync task failed: ${res.reason.message}`);
-            }
-        });
-
-        const fetchedCount = results.filter((r) => r.status === "fulfilled").length;
-        const failedCount = results.filter((r) => r.status === "rejected").length;
-
-        logger.info(`\nJira sync completed: ${fetchedCount} ticket(s) fetched, ${failedCount} failed.`);
+        this.logResults(results, "Jira", "ticket(s)");
     }
 
-    // --- Google Docs dedicated task executor ---
+    // --- Google Docs orchestration (thin: delegate to adapter → writeDoc) ---
 
     private async executeGoogleDocsTasks(
-        tasks: Array<{ id: string; outputPath?: string; projectName?: string }>,
+        tasks: MappedGoogleDocTask[],
         cwd: string,
     ): Promise<void> {
         logger.info(`Found ${tasks.length} Google Document(s) to fetch...`);
         const baseOnboardDir = this.resolveBaseOnboardDir();
-
-        const NATIVE_DOC_MIME = "application/vnd.google-apps.document";
+        const limit = pLimit(5);
+        const usedPaths = new Set<string>();
 
         const results = await Promise.allSettled(
-            tasks.map(async (task) => {
-                const { id, outputPath, projectName } = task;
+            tasks.map((task) =>
+                limit(async () => {
+                    const { id, outputPath, projectName } = task;
 
-                if (!id) {
-                    throw new Error("Google Document ID is missing or invalid.");
-                }
+                    // Delegate fetch + normalize to the adapter
+                    const doc = await this.googleDriveSource.fetch(id);
 
-                logger.info(`Fetching Google Document ${id}...`);
+                    // Determine output path
+                    const safeTitle = this.getSafeTitle(doc.title, id);
+                    const sanitizedProj = this.sanitizeProjectName(projectName);
+                    const candidatePath = outputPath
+                        ? resolve(cwd, outputPath)
+                        : sanitizedProj
+                            ? join(baseOnboardDir, "google-docs", sanitizedProj, `${safeTitle}.md`)
+                            : join(baseOnboardDir, "google-docs", `${safeTitle}.md`);
 
-                // 1. Fetch raw metadata to get title and mimeType
-                const metadata = await this.googleDrive.getFileMetadata(id);
-                const title = metadata.name ?? id;
-                const mimeType = metadata.mimeType ?? "";
+                    // Deduplicate colliding output paths
+                    const absoluteOutputPath = this.getUniqueOutputPath(candidatePath, usedPaths);
+                    usedPaths.add(absoluteOutputPath);
 
-                // 2. Fetch content — route based on mimeType
-                const markdownContent = await (async () => {
-                    if (mimeType === NATIVE_DOC_MIME) {
-                        // Native Google Doc: Drive exports Markdown directly — no conversion needed
-                        return await this.googleDrive.exportGoogleDocAsMarkdown(id);
-                    } else if (
-                        mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
-                        title.endsWith(".docx")
-                    ) {
-                        // Non-native Word docx: download raw binary, parse via mammoth, convert HTML to Markdown
-                        logger.info(`Downloading binary Word document (${title}) and parsing locally...`);
-                        const arrayBuffer = await this.googleDrive.getFileBinary(id);
-                        const buffer = Buffer.from(arrayBuffer);
-                        const result = await mammoth.convertToHtml({ buffer });
-                        return this.htmlNormalizer.convertHtmlToMarkdown(result.value);
-                    } else {
-                        throw new Error(
-                            `Unsupported file type: ${mimeType || "unknown"}. Only native Google Docs or Word .docx files are supported.`
-                        );
-                    }
-                })();
-
-                if (!markdownContent) {
-                    logger.warn(`Fetched Google Document ${id} ("${title}") contains no content.`);
-                }
-
-                // 3. Build KnowledgeDocument and write files
-                const safeTitle = this.getSafeTitle(title, id);
-                const sanitizedProj = this.sanitizeProjectName(projectName);
-
-                const absoluteOutputPath = outputPath
-                    ? resolve(cwd, outputPath)
-                    : sanitizedProj
-                      ? join(baseOnboardDir, "google-docs", sanitizedProj, `${safeTitle}.md`)
-                      : join(baseOnboardDir, "google-docs", `${safeTitle}.md`);
-
-                const absoluteJsonPath = absoluteOutputPath.replace(/\.md$/, ".json");
-                const metadataOnly: KnowledgeDocument = {
-                    id,
-                    source: "googleDocs",
-                    title,
-                    content: "",
-                    url: `https://docs.google.com/document/d/${id}/edit`,
-                    metadata: {
-                        updatedAt: metadata.modifiedTime,
-                        author: metadata.owners?.[0]?.displayName,
-                        labels: [],
-                    },
-                };
-
-                await mkdir(dirname(absoluteOutputPath), { recursive: true });
-                await writeFile(absoluteOutputPath, markdownContent, "utf8");
-                await writeFile(absoluteJsonPath, JSON.stringify({ ...metadataOnly, content: undefined }, null, 4), "utf8");
-
-                logger.info(`✓ Saved Google Document "${title}" to: ${absoluteOutputPath}`);
-            })
+                    await this.writeDoc(doc, absoluteOutputPath);
+                    logger.info(`✓ Saved Google Document "${doc.title}" to: ${absoluteOutputPath}`);
+                })
+            )
         );
 
-        results.forEach((res) => {
-            if (res.status === "rejected") {
-                logger.error(`✗ Google Docs sync task failed: ${res.reason.message}`);
-            }
-        });
-
-        const fetchedCount = results.filter((r) => r.status === "fulfilled").length;
-        const failedCount = results.filter((r) => r.status === "rejected").length;
-
-        logger.info(`\nGoogle Docs sync completed: ${fetchedCount} document(s) fetched, ${failedCount} failed.`);
+        this.logResults(results, "Google Docs", "document(s)");
     }
 
     // --- Google Sheets dedicated task executor ---
@@ -761,6 +549,41 @@ ${commentsMarkdown.length > 0 ? `## Comments\n\n${commentsMarkdown.join("\n")}` 
         }
     }
 
+    // --- Shared persistence helper ---
+
+    /**
+     * Writes a KnowledgeDocument to disk:
+     *   - <absoluteOutputPath>       — Markdown content
+     *   - <absoluteOutputPath>.json  — JSON metadata sidecar (no content field)
+     */
+    private async writeDoc(doc: KnowledgeDocument, absoluteOutputPath: string): Promise<void> {
+        const absoluteJsonPath = absoluteOutputPath.replace(/\.md$/, ".json");
+        const { content: _content, ...metadataOnly } = doc;
+
+        await mkdir(dirname(absoluteOutputPath), { recursive: true });
+        await writeFile(absoluteOutputPath, doc.content, "utf8");
+        await writeFile(absoluteJsonPath, JSON.stringify(metadataOnly, null, 4), "utf8");
+    }
+
+    // --- Logging helper ---
+
+    private logResults(
+        results: PromiseSettledResult<void>[],
+        label: string,
+        unit: string,
+    ): void {
+        results.forEach((res) => {
+            if (res.status === "rejected") {
+                logger.error(`✗ ${label} sync task failed: ${res.reason.message}`);
+            }
+        });
+        const fetchedCount = results.filter((r) => r.status === "fulfilled").length;
+        const failedCount = results.filter((r) => r.status === "rejected").length;
+        logger.info(`\n${label} sync completed: ${fetchedCount} ${unit} fetched, ${failedCount} failed.`);
+    }
+
+    // --- Private utilities ---
+
     private getSafeTitle(title: string, fallbackId: string): string {
         return title
             .toLowerCase()
@@ -779,6 +602,15 @@ ${commentsMarkdown.length > 0 ? `## Comments\n\n${commentsMarkdown.join("\n")}` 
             .toLowerCase()
             .replace(/[^a-z0-9]+/g, "-")
             .replace(/(^-|-$)/g, "") || "default";
+    }
+
+    private getUniqueOutputPath(basePath: string, usedPaths: Set<string>): string {
+        const getUnique = (path: string, suffix: number): string => {
+            if (!usedPaths.has(path)) return path;
+            const nextPath = path.replace(/(-\d+)?\.md$/, `-${suffix}.md`);
+            return getUnique(nextPath, suffix + 1);
+        };
+        return getUnique(basePath, 2);
     }
 
     private parseConfluenceUrl(urlStr: string): { baseUrl: string; pageId: string } | null {

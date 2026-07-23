@@ -87,66 +87,32 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         const setupType = await select({
             message: "What would you like to configure?",
             choices: [
-                { name: "Code Review", value: "code_review" },
-                { name: "Onboarding (Jira, Confluence & Google Drive syncing)", value: "onboarding" },
+                { name: "AI / LLM providers", value: "ai_providers" },
+                { name: "SCM (GitHub / GitLab / Bitbucket)", value: "scm" },
+                { name: "Atlassian (Jira & Confluence)", value: "atlassian" },
+                { name: "Google (Drive / Docs / Sheets)", value: "google" },
             ],
         });
 
-        if (setupType === "onboarding") {
-            const platform = await select({
-                message: "Which onboarding source would you like to configure?",
-                choices: [
-                    { name: "Atlassian (Jira & Confluence)", value: "atlassian" },
-                    { name: "Google Drive (Docs & Sheets)", value: "google" },
-                ],
-            });
-
-            if (platform === "atlassian") {
-                const existingPersonal = await this.config.loadPersonalConfig();
-
-                const email = await input({
-                    message: "Atlassian account email ID:",
-                    default: existingPersonal.atlassianEmail ?? "",
-                });
-
-                const token = await password({
-                    message: "Atlassian API token:",
-                    mask: "*",
-                });
-
-                await this.config.savePersonalConfig({
-                    ...existingPersonal,
-                    atlassianEmail: email.trim() || existingPersonal.atlassianEmail,
-                    atlassianToken: token.trim() || existingPersonal.atlassianToken,
-                });
-
-                logger.info(`\nOnboarding Atlassian credentials saved to: ${this.config.getPersonalConfigPath()}`);
-            } else if (platform === "google") {
-                const existingPersonal = await this.config.loadPersonalConfig();
-
-                logger.info("\nTo sync Google Drive files (Docs, Sheets & DOCX), you will need a Google Access Token.");
-                logger.info("You can generate one using the Google OAuth 2.0 Playground:");
-                logger.info("1. Go to: https://developers.google.com/oauthplayground/");
-                logger.info("2. Select/paste scope: https://www.googleapis.com/auth/drive.readonly");
-                logger.info("3. Click 'Authorize APIs' and log in with your Google account.");
-                logger.info("4. Click 'Exchange authorization code for tokens'.");
-                logger.info("5. Copy the generated Access Token (starts with 'ya29...').\n");
-
-                const googleToken = await password({
-                    message: "Google Access Token:",
-                    mask: "*",
-                });
-
-                await this.config.savePersonalConfig({
-                    ...existingPersonal,
-                    googleAccessToken: googleToken.trim() || existingPersonal.googleAccessToken,
-                });
-
-                logger.info(`\nOnboarding Google credentials saved to: ${this.config.getPersonalConfigPath()}`);
-            }
+        if (setupType === "atlassian") {
+            await this.configureAtlassianCredentials();
             return;
         }
 
+        if (setupType === "google") {
+            await this.configureGoogleCredentials();
+            return;
+        }
+
+        if (setupType === "scm") {
+            const existing = await this.config.loadPersonalConfig();
+            const scmConfig = await this.configureSCMPlatforms(existing);
+            await this.config.savePersonalConfig({ ...existing, ...scmConfig });
+            logger.info("\nSCM configuration saved.");
+            return;
+        }
+
+        // ai_providers — fall through to full AI setup
         const existing = await this.config.loadPersonalConfig();
         const hasExisting = Object.keys(existing.providers ?? {}).length > 0;
 
@@ -162,6 +128,8 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
                     { name: "Add/update an AI provider", value: "add" },
                     { name: "Change default model", value: "model" },
                     { name: "Configure SCM platforms (GitHub/Bitbucket/GitLab)", value: "scm" },
+                    { name: "Configure Atlassian (Jira & Confluence)", value: "atlassian" },
+                    { name: "Configure Google (Drive / Docs / Sheets)", value: "google" },
                     { name: "Exit", value: "exit" },
                 ],
             });
@@ -181,6 +149,14 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
                 logger.info("\nSCM configuration saved.");
                 return;
             }
+            if (action === "atlassian") {
+                await this.configureAtlassianCredentials();
+                return;
+            }
+            if (action === "google") {
+                await this.configureGoogleCredentials();
+                return;
+            }
             // reconfigure falls through
         }
 
@@ -192,6 +168,54 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         logger.info(`Config file: ${this.config.getPersonalConfigPath()}`);
         this.printCurrentConfig(config);
         logger.info("\nRun 'sat-cli review' to try it out!");
+    }
+
+    private async configureAtlassianCredentials(): Promise<void> {
+        logger.info("\n--- Atlassian (Jira & Confluence) ---");
+        const existingPersonal = await this.config.loadPersonalConfig();
+
+        const email = await input({
+            message: "Atlassian account email:",
+            default: existingPersonal.atlassianEmail ?? "",
+        });
+
+        const token = await password({
+            message: "Atlassian API token:",
+            mask: "*",
+        });
+
+        await this.config.savePersonalConfig({
+            ...existingPersonal,
+            atlassianEmail: email.trim() || existingPersonal.atlassianEmail,
+            atlassianToken: token.trim() || existingPersonal.atlassianToken,
+        });
+
+        logger.info(`\nAtlassian credentials saved to: ${this.config.getPersonalConfigPath()}`);
+    }
+
+    private async configureGoogleCredentials(): Promise<void> {
+        logger.info("\n--- Google (Drive / Docs / Sheets) ---");
+        logger.info("\nTo access Google Drive files (Docs, Sheets & DOCX), you need a Google Access Token.");
+        logger.info("You can generate one using the Google OAuth 2.0 Playground:");
+        logger.info("1. Go to: https://developers.google.com/oauthplayground/");
+        logger.info("2. Select/paste scope: https://www.googleapis.com/auth/drive.readonly");
+        logger.info("3. Click 'Authorize APIs' and log in with your Google account.");
+        logger.info("4. Click 'Exchange authorization code for tokens'.");
+        logger.info("5. Copy the generated Access Token (starts with 'ya29...').\n");
+
+        const existingPersonal = await this.config.loadPersonalConfig();
+
+        const googleToken = await password({
+            message: "Google Access Token:",
+            mask: "*",
+        });
+
+        await this.config.savePersonalConfig({
+            ...existingPersonal,
+            googleAccessToken: googleToken.trim() || existingPersonal.googleAccessToken,
+        });
+
+        logger.info(`\nGoogle credentials saved to: ${this.config.getPersonalConfigPath()}`);
     }
 
     private async fullSetup(existing: PersonalConfiguration): Promise<PersonalConfiguration> {

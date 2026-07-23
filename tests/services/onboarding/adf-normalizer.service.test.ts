@@ -1,4 +1,4 @@
-import { AdfNormalizerService } from "../../../src/services/onboarding/adf-normalizer.service";
+import { AdfNormalizerService } from "../../../src/services/normalizers/adf-normalizer.service";
 
 describe("AdfNormalizerService", () => {
     let adfNormalizer: AdfNormalizerService;

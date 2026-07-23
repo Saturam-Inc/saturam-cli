@@ -2,6 +2,7 @@ import { getLogger } from "log4js";
 import { Service } from "typedi";
 import { ConfigService } from "../../../services/config-service";
 import { CONFLUENCE_API_PATH } from "../constants/confluence.constant";
+import { fetchWithTimeout } from "../../../utils/fetch-with-timeout";
 import {
     ConfluenceChildPagesApiResponse,
     ConfluenceContentListApiResponse,
@@ -60,7 +61,7 @@ export class ConfluenceService {
 
         logger.debug(`Fetching Confluence page ${pageId} from: ${url}`);
 
-        const response = await fetch(url, { headers: await this.getHeaders() });
+        const response = await fetchWithTimeout(url, { headers: await this.getHeaders() });
         if (!response.ok) {
             const text = await response.text();
             throw new Error(
@@ -80,7 +81,7 @@ export class ConfluenceService {
 
         logger.debug(`Fetching Confluence page metadata ${pageId} from: ${url}`);
 
-        const response = await fetch(url, { headers: await this.getHeaders() });
+        const response = await fetchWithTimeout(url, { headers: await this.getHeaders() });
         if (!response.ok) {
             const text = await response.text();
             throw new Error(
@@ -105,7 +106,7 @@ export class ConfluenceService {
 
         logger.debug(`Fetching child pages for Confluence page ${pageId} from: ${url}`);
 
-        const response = await fetch(url, { headers: await this.getHeaders() });
+        const response = await fetchWithTimeout(url, { headers: await this.getHeaders() });
         if (!response.ok) {
             const text = await response.text();
             throw new Error(
@@ -131,7 +132,7 @@ export class ConfluenceService {
 
         logger.debug(`Fetching Confluence spaces from: ${url}`);
 
-        const response = await fetch(url, { headers: await this.getHeaders() });
+        const response = await fetchWithTimeout(url, { headers: await this.getHeaders() });
         if (!response.ok) {
             const text = await response.text();
             throw new Error(
@@ -156,7 +157,7 @@ export class ConfluenceService {
 
         logger.debug(`Fetching pages in Confluence space ${spaceKey} from: ${url}`);
 
-        const response = await fetch(url, { headers: await this.getHeaders() });
+        const response = await fetchWithTimeout(url, { headers: await this.getHeaders() });
         if (!response.ok) {
             const text = await response.text();
             throw new Error(
@@ -164,6 +165,40 @@ export class ConfluenceService {
             );
         }
         return response.json() as Promise<ConfluenceContentListApiResponse>;
+    }
+
+    /**
+     * Convenience helper — fetches ALL pages in a space by auto-paginating listPagesInSpace().
+     */
+    public async listAllPagesInSpace(baseUrl: string, spaceKey: string): Promise<ConfluencePageApiResponse[]> {
+        const limit = 100;
+        const MAX_ITERATIONS = 1000;
+
+        const fetchPageBatch = async (
+            start: number,
+            iterations: number,
+            accumulatedPages: ConfluencePageApiResponse[],
+        ): Promise<ConfluencePageApiResponse[]> => {
+            if (iterations >= MAX_ITERATIONS) {
+                logger.error(`listAllPagesInSpace: exceeded MAX_ITERATIONS (${MAX_ITERATIONS}) for space "${spaceKey}". Partial results returned.`);
+                return accumulatedPages;
+            }
+
+            const result = await this.listPagesInSpace(baseUrl, spaceKey, { start, limit });
+            const results = result.results || [];
+            if (results.length === 0) {
+                return accumulatedPages;
+            }
+
+            const nextAccumulated = [...accumulatedPages, ...results];
+            if (results.length < limit) {
+                return nextAccumulated;
+            }
+
+            return fetchPageBatch(start + limit, iterations + 1, nextAccumulated);
+        };
+
+        return fetchPageBatch(0, 0, []);
     }
 
     /**
@@ -190,7 +225,7 @@ export class ConfluenceService {
 
         logger.debug(`Searching Confluence content via CQL: ${cql}`);
 
-        const response = await fetch(url, { headers: await this.getHeaders() });
+        const response = await fetchWithTimeout(url, { headers: await this.getHeaders() });
         if (!response.ok) {
             const text = await response.text();
             throw new Error(

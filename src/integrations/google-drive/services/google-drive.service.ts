@@ -2,6 +2,7 @@ import { getLogger } from "log4js";
 import { Service } from "typedi";
 import { ConfigService } from "../../../services/config-service";
 import { GOOGLE_DOCS_API, GOOGLE_DRIVE_API, GOOGLE_SHEETS_API } from "../constants/google-drive.constant";
+import { fetchWithTimeout } from "../../../utils/fetch-with-timeout";
 import {
     GoogleDocApiResponse,
     GoogleDriveFileListApiResponse,
@@ -37,7 +38,7 @@ export class GoogleDriveService {
 
         logger.debug(`Fetching file metadata for ${fileId}: ${url}`);
 
-        const response = await fetch(url, { headers: await this.getHeaders() });
+        const response = await fetchWithTimeout(url, { headers: await this.getHeaders() });
         if (!response.ok) {
             const text = await response.text();
             throw new Error(
@@ -58,7 +59,7 @@ export class GoogleDriveService {
 
         logger.debug(`Fetching Google Doc structured JSON for ${documentId}: ${url}`);
 
-        const response = await fetch(url, { headers: await this.getHeaders() });
+        const response = await fetchWithTimeout(url, { headers: await this.getHeaders() });
         if (!response.ok) {
             const text = await response.text();
             throw new Error(
@@ -77,7 +78,7 @@ export class GoogleDriveService {
 
         logger.debug(`Exporting file ${documentId} as Markdown: ${url}`);
 
-        const response = await fetch(url, { headers: await this.getHeaders() });
+        const response = await fetchWithTimeout(url, { headers: await this.getHeaders() });
         if (!response.ok) {
             const text = await response.text();
             throw new Error(
@@ -96,7 +97,7 @@ export class GoogleDriveService {
 
         logger.debug(`Exporting file ${documentId} as HTML: ${url}`);
 
-        const response = await fetch(url, { headers: await this.getHeaders() });
+        const response = await fetchWithTimeout(url, { headers: await this.getHeaders() });
         if (!response.ok) {
             const text = await response.text();
             throw new Error(
@@ -115,7 +116,7 @@ export class GoogleDriveService {
 
         logger.debug(`Fetching binary content for file ${fileId} from Drive: ${url}`);
 
-        const response = await fetch(url, { headers: await this.getHeaders() });
+        const response = await fetchWithTimeout(url, { headers: await this.getHeaders() });
         if (!response.ok) {
             const text = await response.text();
             throw new Error(
@@ -156,7 +157,7 @@ export class GoogleDriveService {
 
         logger.debug(`Listing files in Drive folder ${folderId}: ${url}`);
 
-        const response = await fetch(url, { headers: await this.getHeaders() });
+        const response = await fetchWithTimeout(url, { headers: await this.getHeaders() });
         if (!response.ok) {
             const text = await response.text();
             throw new Error(
@@ -194,7 +195,7 @@ export class GoogleDriveService {
 
         logger.debug(`Searching files with query "${query}": ${url}`);
 
-        const response = await fetch(url, { headers: await this.getHeaders() });
+        const response = await fetchWithTimeout(url, { headers: await this.getHeaders() });
         if (!response.ok) {
             const text = await response.text();
             throw new Error(
@@ -272,7 +273,7 @@ export class GoogleDriveService {
 
         logger.debug(`Fetching complete spreadsheet ${spreadsheetId}: ${url}`);
 
-        const response = await fetch(url, { headers: await this.getHeaders() });
+        const response = await fetchWithTimeout(url, { headers: await this.getHeaders() });
         if (!response.ok) {
             const text = await response.text();
             throw new Error(
@@ -301,7 +302,7 @@ export class GoogleDriveService {
 
         logger.debug(`Batch fetching ${ranges.length} range(s) from spreadsheet ${spreadsheetId}: ${url}`);
 
-        const response = await fetch(url, { headers: await this.getHeaders() });
+        const response = await fetchWithTimeout(url, { headers: await this.getHeaders() });
         if (!response.ok) {
             const text = await response.text();
             throw new Error(
