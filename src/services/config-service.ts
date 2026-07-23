@@ -1,11 +1,14 @@
-import { existsSync } from "fs";
+import { existsSync, statSync } from "fs";
 import { mkdir, readFile, writeFile } from "fs/promises";
 import { homedir } from "os";
 import { dirname, join } from "path";
 import { Service } from "typedi";
 import { z } from "zod";
+import { getLogger } from "log4js";
 import { LLMModel } from "../constants/llm-models";
 import { WorkingDirectory } from "../utils/working-directory";
+
+const logger = getLogger("ConfigService");
 
 // --- Schemas ---
 
@@ -40,8 +43,7 @@ export const ProviderConfigSchema = z.object({
 
 export type ProviderConfig = z.infer<typeof ProviderConfigSchema>;
 
-const migrateModelId = (val: unknown) =>
-    typeof val === "string" ? val.replace(/^(us|eu|ap)\./, "") : val;
+const migrateModelId = (val: unknown) => (typeof val === "string" ? val.replace(/^(us|eu|ap)\./, "") : val);
 const modelField = z.preprocess(migrateModelId, z.nativeEnum(LLMModel).optional());
 
 export const PersonalConfigurationSchema = z.object({
@@ -61,6 +63,9 @@ export const PersonalConfigurationSchema = z.object({
         .string()
         .optional()
         .describe("GitLab instance base URL (for self-hosted, e.g. https://gitlab.example.com)"),
+    atlassianEmail: z.string().optional().describe("Atlassian account email (Jira & Confluence)"),
+    atlassianToken: z.string().optional().describe("Atlassian API token (Jira & Confluence)"),
+    googleAccessToken: z.string().optional().describe("Google OAuth access token (Drive / Docs / Sheets)"),
 });
 
 export type PersonalConfiguration = z.infer<typeof PersonalConfigurationSchema>;
@@ -341,6 +346,11 @@ export class ConfigService {
     public async loadProjectConfig(): Promise<ProjectConfiguration | null> {
         const configPath = this.getProjectConfigPath();
         if (!existsSync(configPath)) return null;
+        try {
+            if (statSync(configPath).isDirectory()) return null;
+        } catch {
+            return null;
+        }
         const raw = await readFile(configPath, "utf8");
         return ProjectConfigurationSchema.parse(JSON.parse(raw));
     }
@@ -451,6 +461,68 @@ export class ConfigService {
         if (process.env.GITLAB_INSTANCE_URL) return process.env.GITLAB_INSTANCE_URL;
         const config = await this.loadPersonalConfig();
         return config.gitlabInstanceUrl;
+    }
+
+    // --- Google Token Management ---
+
+    public async getGoogleAccessToken(): Promise<string> {
+        if (process.env.GOOGLE_ACCESS_TOKEN) return process.env.GOOGLE_ACCESS_TOKEN;
+
+        const personalConfig = await this.loadPersonalConfig();
+        if (personalConfig.googleAccessToken) {
+            return personalConfig.googleAccessToken;
+        }
+
+        throw new Error(
+            "No Google Access Token found. Set GOOGLE_ACCESS_TOKEN, or run 'sat-cli init' and select 'Google (Drive / Docs / Sheets)' to configure credentials.",
+        );
+    }
+
+    // --- Atlassian Credentials Helper ---
+
+    public async getAtlassianCredentials(): Promise<{ email?: string; token: string }> {
+        return this.getGenericAtlassianCredentials();
+    }
+
+    public async getGenericAtlassianCredentials(): Promise<{ email?: string; token: string }> {
+        if (process.env.ATLASSIAN_TOKEN) {
+            return {
+                email: process.env.ATLASSIAN_EMAIL,
+                token: process.env.ATLASSIAN_TOKEN,
+            };
+        }
+
+        const personalConfig = await this.loadPersonalConfig();
+        if (personalConfig.atlassianToken) {
+            return {
+                email: personalConfig.atlassianEmail,
+                token: personalConfig.atlassianToken,
+            };
+        }
+
+        throw new Error(
+            "No Atlassian credentials found. Set ATLASSIAN_TOKEN (and optionally ATLASSIAN_EMAIL) env vars, or run 'sat-cli init' and select 'Atlassian (Jira & Confluence)'.",
+        );
+    }
+
+    public async getConfluenceCredentials(): Promise<{ email?: string; token: string }> {
+        if (process.env.CONFLUENCE_TOKEN) {
+            return {
+                email: process.env.CONFLUENCE_EMAIL,
+                token: process.env.CONFLUENCE_TOKEN,
+            };
+        }
+        return this.getGenericAtlassianCredentials();
+    }
+
+    public async getJiraCredentials(): Promise<{ email?: string; token: string }> {
+        if (process.env.JIRA_TOKEN) {
+            return {
+                email: process.env.JIRA_EMAIL,
+                token: process.env.JIRA_TOKEN,
+            };
+        }
+        return this.getGenericAtlassianCredentials();
     }
 
     // --- Static helpers ---

@@ -1,0 +1,34 @@
+{
+    "_comment": "This is a configuration template for project onboarding.",
+    "confluence": {
+        "baseUrl": "https://saturam.atlassian.net"
+    },
+    "jira": {
+        "baseUrl": "https://saturam.atlassian.net"
+    },
+    "projects": {
+        "ProjectA": {
+            "confluence": {
+                "pages": [
+                    "231145593"
+                ],
+                "space": "Alkem"
+            },
+            "jira": {
+                "tickets": [
+                    "DB-826"
+                ]
+            },
+            "googleDocs": {
+                "docs": [
+                    "1FZv2bZ1KIVTGRWtK63w3oC25sr1UiPSN",
+                    "1eZNRa26LEjxWhYvMhAnHwUMUZYG9OxXfX5p6jCKsM0w"
+                ]
+            },
+            "googleSheets": {
+                "spreadsheetId": "1JIUzDWt7QghYyaNTY_KyDBe1GB7iV_TzNnFBjA3oawg",
+                "range": "Team Onboarding"
+            }
+        }
+    }
+}
