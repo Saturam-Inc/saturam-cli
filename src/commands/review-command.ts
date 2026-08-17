@@ -11,6 +11,7 @@ import { InlineComment, SCMRequestContext, SCMService } from "../integrations/sc
 import { ConfigService } from "../services/config-service";
 import { AuditResult, Finding } from "../services/review/finding-parser.service";
 import { MultiAgentReviewService } from "../services/review/multi-agent-review.service";
+import { UsageSummary } from "../services/token-usage-tracker";
 // Line numbers are resolved by the finding parser using diff content directly
 import { TypedCommand, TypedInputs } from "./base";
 
@@ -145,6 +146,9 @@ export class ReviewCommand implements TypedCommand<typeof INPUTS> {
             }
         }
 
+        // Token usage footer — always printed regardless of exit path
+        this.printUsageSummary(result.usage);
+
         // Phase 6: Cleanup
         if (!inputs["keep-artifacts"]) {
             await this.multiAgent.cleanup(result.artifactsDir);
@@ -232,5 +236,30 @@ export class ReviewCommand implements TypedCommand<typeof INPUTS> {
         const prNumber = await scm.findPullRequestByBranch(owner, repo, branch);
         if (!prNumber) throw new Error(`No open PR for branch '${branch}'.`);
         return { scm, owner, repo, prNumber };
+    }
+
+    private printUsageSummary(usage: UsageSummary): void {
+        const formatTokens = (count: number | null): string => {
+            if (count === null) return "n/a";
+            return count.toLocaleString();
+        };
+
+        logger.info("");
+        logger.info("─── Token Usage ───");
+        logger.info(`Provider:  ${usage.provider}`);
+        logger.info(`Model:     ${usage.model}`);
+        logger.info("");
+
+        for (const call of usage.calls) {
+            const inp = formatTokens(call.inputTokens);
+            const out = formatTokens(call.outputTokens);
+            logger.info(`  ${call.label.padEnd(24)} ${inp.padStart(8)} in / ${out.padStart(6)} out`);
+        }
+
+        logger.info("───────────────────────────────────────");
+        const totalIn = formatTokens(usage.totalInput);
+        const totalOut = formatTokens(usage.totalOutput);
+        logger.info(`  ${"TOTAL".padEnd(24)} ${totalIn.padStart(8)} in / ${totalOut.padStart(6)} out`);
+        logger.info("");
     }
 }

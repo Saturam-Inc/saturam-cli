@@ -11,6 +11,7 @@ import {
 } from "../../prompts/review.prompt";
 import { WorkingDirectory } from "../../utils/working-directory";
 import { LlmService } from "../llm-service";
+import { TokenUsageTracker, UsageSummary } from "../token-usage-tracker";
 import { AuditResult, FindingParser } from "./finding-parser.service";
 
 const logger = getLogger("MultiAgentReview");
@@ -34,6 +35,7 @@ export interface ReviewContext {
 export interface ReviewResult {
     audit: AuditResult;
     artifactsDir: string;
+    usage: UsageSummary;
 }
 
 @Service()
@@ -49,11 +51,17 @@ export class MultiAgentReviewService {
         await mkdir(artifactsDir, { recursive: true });
         const base = `pr${context.prNumber}`;
 
+        // Initialize token usage tracking
+        const tracker = new TokenUsageTracker();
+        const resolvedModel = await this.llm.resolveModel();
+        const resolvedProvider = this.llm.resolveProvider(resolvedModel);
+        tracker.setProviderInfo(resolvedProvider, resolvedModel);
+
         // --- Phase 1: Dual Independent Review ---
         logger.info("Phase 1: Running 2 reviewers in parallel...");
         const [rawReviewA, rawReviewB] = await Promise.all([
-            this.runReviewer(context, "architecture", TEMP_REVIEWER_A),
-            this.runReviewer(context, "data-flow", TEMP_REVIEWER_B),
+            this.runReviewer(context, "architecture", TEMP_REVIEWER_A, tracker),
+            this.runReviewer(context, "data-flow", TEMP_REVIEWER_B, tracker),
         ]);
 
         await Promise.all([
@@ -68,12 +76,12 @@ export class MultiAgentReviewService {
 
         // --- Phase 2: Audit ---
         logger.info("Phase 2: Auditor cross-validating findings...");
-        const rawAudit = await this.runAuditor(context, rawReviewA, rawReviewB);
+        const rawAudit = await this.runAuditor(context, rawReviewA, rawReviewB, tracker);
         await writeFile(join(artifactsDir, `${base}-audit.md`), rawAudit, "utf8");
 
         // --- Extract structured findings via LLM ---
         logger.info("Extracting structured findings...");
-        const rawJson = await this.extractFindings(rawAudit, context.diff);
+        const rawJson = await this.extractFindings(rawAudit, context.diff, tracker);
         await writeFile(join(artifactsDir, `${base}-findings.json`), rawJson, "utf8");
 
         const initialAudit = this.findingParser.parseJsonFindings(rawJson, rawAudit, context.diff);
@@ -84,8 +92,8 @@ export class MultiAgentReviewService {
             ? await (async () => {
                   logger.info("Phase 3: Large PR — running 2 second-round auditors...");
                   const [rawSecondA, rawSecondB] = await Promise.all([
-                      this.runSecondAuditor(context, rawAudit, TEMP_SECOND_AUDITOR_A),
-                      this.runSecondAuditor(context, rawAudit, TEMP_SECOND_AUDITOR_B),
+                      this.runSecondAuditor(context, rawAudit, TEMP_SECOND_AUDITOR_A, tracker),
+                      this.runSecondAuditor(context, rawAudit, TEMP_SECOND_AUDITOR_B, tracker),
                   ]);
 
                   await Promise.all([
@@ -102,7 +110,7 @@ export class MultiAgentReviewService {
               })()
             : initialAudit;
 
-        return { audit, artifactsDir };
+        return { audit, artifactsDir, usage: tracker.getSummary() };
     }
 
     public async cleanup(artifactsDir: string): Promise<void> {
@@ -113,6 +121,7 @@ export class MultiAgentReviewService {
         context: ReviewContext,
         approach: "architecture" | "data-flow",
         temperature: number,
+        tracker: TokenUsageTracker,
     ): Promise<string> {
         const { system, user } = getReviewerMessages({
             prNumber: context.prNumber,
@@ -122,10 +131,18 @@ export class MultiAgentReviewService {
             ticketContext: context.ticketContext,
             approach,
         });
-        return this.llm.prompt([system, user], undefined, { temperature });
+        return this.llm.prompt([system, user], undefined, { temperature }, {
+            tracker,
+            label: `reviewer:${approach}`,
+        });
     }
 
-    private async runAuditor(context: ReviewContext, reviewA: string, reviewB: string): Promise<string> {
+    private async runAuditor(
+        context: ReviewContext,
+        reviewA: string,
+        reviewB: string,
+        tracker: TokenUsageTracker,
+    ): Promise<string> {
         const { system, user } = getAuditMessages({
             prNumber: context.prNumber,
             prTitle: context.pr.title,
@@ -133,21 +150,36 @@ export class MultiAgentReviewService {
             reviewB,
             diff: context.diff,
         });
-        return this.llm.prompt([system, user], undefined, { temperature: TEMP_AUDITOR });
+        return this.llm.prompt([system, user], undefined, { temperature: TEMP_AUDITOR }, {
+            tracker,
+            label: "auditor",
+        });
     }
 
-    private async extractFindings(audit: string, diff: string): Promise<string> {
+    private async extractFindings(audit: string, diff: string, tracker: TokenUsageTracker): Promise<string> {
         const { system, user } = getExtractFindingsMessages({ audit, diff });
-        return this.llm.prompt([system, user], undefined, { temperature: 0 });
+        return this.llm.prompt([system, user], undefined, { temperature: 0 }, {
+            tracker,
+            label: "extract-findings",
+        });
     }
 
-    private async runSecondAuditor(context: ReviewContext, audit: string, temperature: number): Promise<string> {
+    private async runSecondAuditor(
+        context: ReviewContext,
+        audit: string,
+        temperature: number,
+        tracker: TokenUsageTracker,
+    ): Promise<string> {
         const { system, user } = getSecondAuditMessages({
             prNumber: context.prNumber,
             audit,
             diff: context.diff,
         });
-        return this.llm.prompt([system, user], undefined, { temperature });
+        const label = temperature === TEMP_SECOND_AUDITOR_A ? "second-audit:a" : "second-audit:b";
+        return this.llm.prompt([system, user], undefined, { temperature }, {
+            tracker,
+            label,
+        });
     }
 
     private shouldRunSecondAudit(context: ReviewContext): boolean {

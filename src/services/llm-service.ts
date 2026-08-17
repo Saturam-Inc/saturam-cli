@@ -15,6 +15,7 @@ import {
     isSelfHostedModel,
 } from "../constants/llm-models";
 import { AIProvider, ConfigService, ProviderConfig } from "./config-service";
+import { TokenUsageTracker } from "./token-usage-tracker";
 
 const logger = getLogger("LlmService");
 
@@ -114,10 +115,49 @@ export class LlmService {
         return llm;
     }
 
-    public async prompt(messages: BaseMessage[], model?: LLMModel, options?: LLMOptions): Promise<string> {
+    public async prompt(
+        messages: BaseMessage[],
+        model?: LLMModel,
+        options?: LLMOptions,
+        tracking?: { tracker: TokenUsageTracker; label: string },
+    ): Promise<string> {
         const llm = await this.getModel(model, options);
         const response = await llm.invoke(messages);
+
+        // Extract and record token usage if tracking is enabled
+        if (tracking) {
+            const usageMeta = (response as any).usage_metadata as
+                | { input_tokens?: number; output_tokens?: number }
+                | undefined;
+            tracking.tracker.record(tracking.label, {
+                inputTokens: usageMeta?.input_tokens ?? null,
+                outputTokens: usageMeta?.output_tokens ?? null,
+            });
+        }
+
         return typeof response.content === "string" ? response.content : JSON.stringify(response.content);
+    }
+
+    /**
+     * Resolves the AIProvider enum value for a given model.
+     */
+    public resolveProvider(model: LLMModel): AIProvider {
+        if (isAnthropicModel(model)) return AIProvider.ANTHROPIC;
+        if (isBedrockModel(model)) return AIProvider.BEDROCK;
+        if (isGeminiModel(model)) return AIProvider.GOOGLE;
+        if (isOpenAIModel(model)) return AIProvider.OPENAI;
+        if (isGrokModel(model)) return AIProvider.XAI;
+        if (isDeepSeekModel(model)) return AIProvider.DEEPSEEK;
+        if (isOllamaModel(model)) return AIProvider.OLLAMA;
+        if (isSelfHostedModel(model)) return AIProvider.OLLAMA;
+        return AIProvider.ANTHROPIC;
+    }
+
+    /**
+     * Resolves the model that will actually be used (respecting config fallback chain).
+     */
+    public async resolveModel(model?: LLMModel): Promise<LLMModel> {
+        return model ?? (await this.config.getModel());
     }
 
     private async createModel(model: LLMModel, options?: LLMOptions): Promise<ChatModel> {
