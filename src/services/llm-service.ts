@@ -15,6 +15,7 @@ import {
     isSelfHostedModel,
 } from "../constants/llm-models";
 import { AIProvider, ConfigService, ProviderConfig } from "./config-service";
+import { RemoteCredentialService } from "./remote-credential.service";
 
 const logger = getLogger("LlmService");
 
@@ -99,7 +100,10 @@ export class LlmService {
     private llms: Map<string, ChatModel> = new Map();
     private selfHostedQueue = Promise.resolve();
 
-    constructor(private readonly config: ConfigService) {}
+    constructor(
+        private readonly config: ConfigService,
+        private readonly remoteCredentials: RemoteCredentialService,
+    ) {}
 
     public async getModel(model?: LLMModel, options?: LLMOptions): Promise<ChatModel> {
         const selectedModel = model ?? (await this.config.getModel());
@@ -153,9 +157,19 @@ export class LlmService {
         const region = providerConfig?.awsRegion ?? process.env.AWS_REGION ?? "us-east-1";
         const profile = providerConfig?.awsProfile ?? process.env.AWS_PROFILE;
 
-        const credentials: any = profile
-            ? (await import("@aws-sdk/credential-providers")).fromIni({ profile })
-            : undefined;
+        // Remote mode: fetch AWS credentials from the configured endpoint so no
+        // local AWS credentials are required. Falls back to the existing local
+        // profile / default credential chain when remote mode is not configured.
+        const remote = await this.config.getRemoteConfig();
+        let credentials: any;
+        if (remote) {
+            logger.info("Using remote AWS credentials for Bedrock.");
+            credentials = await this.remoteCredentials.getCredentials();
+        } else if (profile) {
+            credentials = (await import("@aws-sdk/credential-providers")).fromIni({ profile });
+        } else {
+            credentials = undefined;
+        }
 
         const regionPrefix = region.startsWith("eu") ? "eu" : region.startsWith("ap") ? "ap" : "us";
         const resolvedModel = model.startsWith("anthropic.") ? `${regionPrefix}.${model}` : model;

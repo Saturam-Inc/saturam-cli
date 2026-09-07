@@ -40,6 +40,21 @@ export const ProviderConfigSchema = z.object({
 
 export type ProviderConfig = z.infer<typeof ProviderConfigSchema>;
 
+/** Default endpoint used to fetch AWS credentials when remote mode is enabled. */
+export const DEFAULT_REMOTE_URL = "https://sat-cli.saturam.com";
+
+/**
+ * Generic remote configuration. When set, SAT-CLI fetches AWS credentials from
+ * `url` (optionally authenticated with `token`) instead of using local AWS
+ * credentials for Bedrock.
+ */
+export const RemoteConfigSchema = z.object({
+    url: z.string().default(DEFAULT_REMOTE_URL).describe("Remote endpoint that returns AWS credentials"),
+    token: z.string().optional().describe("Optional token sent with the remote request"),
+});
+
+export type RemoteConfig = z.infer<typeof RemoteConfigSchema>;
+
 const migrateModelId = (val: unknown) =>
     typeof val === "string" ? val.replace(/^(us|eu|ap)\./, "") : val;
 const modelField = z.preprocess(migrateModelId, z.nativeEnum(LLMModel).optional());
@@ -61,6 +76,7 @@ export const PersonalConfigurationSchema = z.object({
         .string()
         .optional()
         .describe("GitLab instance base URL (for self-hosted, e.g. https://gitlab.example.com)"),
+    remote: RemoteConfigSchema.optional().describe("Remote credential retrieval settings"),
 });
 
 export type PersonalConfiguration = z.infer<typeof PersonalConfigurationSchema>;
@@ -411,6 +427,21 @@ export class ConfigService {
     public async getProviderConfig(provider: AIProvider): Promise<ProviderConfig | undefined> {
         const config = await this.loadPersonalConfig();
         return config.providers?.[provider];
+    }
+
+    // --- Remote credential retrieval ---
+
+    /**
+     * Returns the remote configuration when remote mode is enabled, with the
+     * default URL applied. Returns undefined when remote mode is not configured.
+     */
+    public async getRemoteConfig(): Promise<RemoteConfig | undefined> {
+        const config = await this.loadPersonalConfig();
+        if (!config.remote) return undefined;
+        return {
+            url: config.remote.url || DEFAULT_REMOTE_URL,
+            token: config.remote.token,
+        };
     }
 
     // --- GitHub Token ---

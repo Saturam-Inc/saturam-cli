@@ -1,0 +1,48 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  SAT-CLI remote credential endpoint. API Gateway -> Lambda -> Secrets Manager.
+  The Lambda returns AWS credentials to SAT-CLI. It does NOT call Bedrock.
+
+Parameters:
+  SecretId:
+    Type: String
+    Description: Name or ARN of the Secrets Manager secret holding the AWS credentials.
+  ExpectedToken:
+    Type: String
+    Default: ""
+    NoEcho: true
+    Description: >
+      Optional shared token. When set, requests must send a matching
+      'Authorization: Bearer <token>' header. Leave empty to allow tokenless requests.
+
+Resources:
+  CredentialsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: credentials-handler.handler
+      Runtime: nodejs22.x
+      Timeout: 10
+      MemorySize: 128
+      Environment:
+        Variables:
+          SECRET_ID: !Ref SecretId
+          EXPECTED_TOKEN: !Ref ExpectedToken
+      Policies:
+        # Least-privilege: only allow reading the specific secret. No Bedrock access.
+        - Statement:
+            - Effect: Allow
+              Action:
+                - secretsmanager:GetSecretValue
+              Resource: !Ref SecretId
+      Events:
+        GetCredentials:
+          Type: Api
+          Properties:
+            Path: /credentials
+            Method: get
+
+Outputs:
+  CredentialsUrl:
+    Description: URL to configure as the SAT-CLI remote URL (without the /credentials path).
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod"

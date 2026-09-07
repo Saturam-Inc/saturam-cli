@@ -5,11 +5,13 @@ import { LLMModel } from "../constants/llm-models";
 import {
     AIProvider,
     ConfigService,
+    DEFAULT_REMOTE_URL,
     KEYLESS_PROVIDERS,
     PersonalConfiguration,
     ProviderConfig,
     PROVIDER_ENV_VARS,
     PROVIDER_MODELS,
+    RemoteConfig,
 } from "../services/config-service";
 import { TypedCommand, TypedInputs } from "./base";
 
@@ -123,11 +125,18 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
                     { name: "Add/update an AI provider", value: "add" },
                     { name: "Change default model", value: "model" },
                     { name: "Configure SCM platforms (GitHub/Bitbucket/GitLab)", value: "scm" },
+                    { name: "Configure remote credentials", value: "remote" },
                     { name: "Exit", value: "exit" },
                 ],
             });
 
             if (action === "exit") return;
+            if (action === "remote") {
+                const remote = await this.configureRemote(existing.remote);
+                await this.config.savePersonalConfig({ ...existing, remote });
+                logger.info("\nRemote configuration saved.");
+                return;
+            }
             if (action === "model") {
                 await this.selectDefaultModel(existing);
                 return;
@@ -190,12 +199,54 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         // Step 4: SCM platforms (GitHub, Bitbucket)
         const scmConfig = await this.configureSCMPlatforms(existing);
 
+        // Step 5: Remote credential retrieval (optional)
+        const remote = await this.maybeConfigureRemote(existing.remote);
+
         return {
             defaultProvider,
             defaultModel,
             providers,
             ...scmConfig,
+            ...(remote ? { remote } : {}),
         };
+    }
+
+    /**
+     * Asks whether to enable remote credential retrieval, and configures it if so.
+     * Remote mode lets SAT-CLI obtain AWS credentials from a remote URL instead of
+     * requiring local AWS credentials.
+     */
+    private async maybeConfigureRemote(existing?: RemoteConfig): Promise<RemoteConfig | undefined> {
+        logger.info("\n--- Remote Credential Retrieval ---");
+        logger.info("Remote mode fetches AWS credentials from a remote URL (no local AWS setup required).");
+
+        const enable = await confirm({
+            message: "Enable remote credential retrieval?",
+            default: !!existing,
+        });
+        if (!enable) return undefined;
+
+        return this.configureRemote(existing);
+    }
+
+    /** Prompts for the remote URL (with default) and an optional token. */
+    private async configureRemote(existing?: RemoteConfig): Promise<RemoteConfig> {
+        const url =
+            (
+                await input({
+                    message: "Remote URL:",
+                    default: existing?.url ?? DEFAULT_REMOTE_URL,
+                })
+            ).trim() || DEFAULT_REMOTE_URL;
+
+        const hint = existing?.token ? " (press enter to keep existing)" : " (optional, leave empty to skip)";
+        const tokenInput = await password({
+            message: `Remote token${hint}:`,
+            mask: "*",
+        });
+        const token = tokenInput || existing?.token;
+
+        return { url, token: token || undefined };
     }
 
     private async configureProvider(provider: AIProvider, existing?: ProviderConfig): Promise<ProviderConfig> {
@@ -223,10 +274,13 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
     }
 
     private async configureBedrockProvider(existing?: ProviderConfig): Promise<ProviderConfig> {
-        logger.info("Bedrock uses your AWS credentials (no API key needed).");
+        logger.info("Bedrock uses AWS credentials (no API key needed).");
+        logger.info(
+            "Tip: enable remote credential retrieval later in this setup to skip local AWS configuration entirely.",
+        );
 
         const awsProfile = await input({
-            message: "AWS CLI profile name (leave empty for default credential chain):",
+            message: "AWS CLI profile name (leave empty for default credential chain or remote mode):",
             default: existing?.awsProfile ?? process.env.AWS_PROFILE ?? "",
         });
 
@@ -767,6 +821,11 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
             for (const p of scmPlatforms) {
                 logger.info(`    ${p}`);
             }
+        }
+        if (config.remote) {
+            const auth = config.remote.token ? "token set" : "no token";
+            logger.info("  Remote credentials:");
+            logger.info(`    URL: ${config.remote.url} (${auth})`);
         }
     }
 }
