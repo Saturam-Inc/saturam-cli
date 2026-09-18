@@ -47,7 +47,13 @@ describe("ProjectRouterAgent", () => {
         expect(decision.kind).toBe("ambiguous");
     });
 
-    it("falls back to the session's active project when the question names none", async () => {
+    it("stays on the session's project while it still answers the question", async () => {
+        (knowledgeBase.retrieve as jest.Mock).mockResolvedValueOnce([
+            chunk("smile", 0.9),
+            chunk("smile", 0.88),
+            chunk("billing-core", 0.5),
+        ]);
+
         const decision = await agent.route({
             question: "and how does it fail?",
             projectHints: [],
@@ -55,6 +61,54 @@ describe("ProjectRouterAgent", () => {
         });
 
         expect(decision).toMatchObject({ kind: "resolved", project: smile });
+    });
+
+    it("leaves the session's project when the question is answered elsewhere", async () => {
+        // The bug this guards: once a project became sticky, every later question was filtered to
+        // it — so a question about another project searched a corpus that could not answer it.
+        // smile holds 1 of 5 chunks (0.20), below the share needed to keep the conversation on it.
+        (knowledgeBase.retrieve as jest.Mock).mockResolvedValueOnce([
+            chunk("billing-core", 0.93),
+            chunk("billing-core", 0.91),
+            chunk("billing-core", 0.9),
+            chunk("billing-core", 0.88),
+            chunk("smile", 0.4),
+        ]);
+
+        const decision = await agent.route({
+            question: "which AWS services does billing integrate with?",
+            projectHints: [],
+            activeProject: "smile",
+        });
+
+        expect(decision).toMatchObject({ kind: "resolved", project: billing });
+    });
+
+    it("leaves the session's project when it has no support at all", async () => {
+        (knowledgeBase.retrieve as jest.Mock).mockResolvedValueOnce([
+            chunk("billing-core", 0.93),
+            chunk("billing-core", 0.9),
+        ]);
+
+        const decision = await agent.route({
+            question: "how is settlement handled?",
+            projectHints: [],
+            activeProject: "smile",
+        });
+
+        expect(decision).toMatchObject({ kind: "resolved", project: billing });
+    });
+
+    it("lets an explicitly named project override the session's project", async () => {
+        (registry.findByName as jest.Mock).mockResolvedValueOnce([billing]);
+
+        const decision = await agent.route({
+            question: "how does Billing Core work?",
+            projectHints: ["Billing Core"],
+            activeProject: "smile",
+        });
+
+        expect(decision).toMatchObject({ kind: "resolved", project: billing });
         expect(knowledgeBase.retrieve).not.toHaveBeenCalled();
     });
 

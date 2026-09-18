@@ -90,6 +90,41 @@ describe("IntentClassifierAgent", () => {
         expect(joined).not.toContain("x".repeat(3000));
     });
 
+    it("does not carry the previous project into a question about a new subject", async () => {
+        // The bug this guards: the classifier inherited "saturam" from history for a question
+        // about the DE Framework, which pinned retrieval to a corpus that could not answer it.
+        structured.invoke.mockResolvedValue({
+            intent: QuestionIntent.PROJECT_KNOWLEDGE,
+            projectHints: [],
+            crossProject: false,
+            resolvedQuestion: "What are the deployment guidelines for the DE Framework?",
+            reasoning: "",
+        });
+
+        const result = await agent.classify({
+            question: "What are the deployment guidelines for the DE Framework?",
+            recentTurns: [
+                {
+                    index: 0,
+                    question: "what issues were found in the Saturam generator?",
+                    answer: "long answer",
+                    answerGist: "Saturam generator testing found several issues",
+                    intent: QuestionIntent.PROJECT_KNOWLEDGE,
+                    resolvedProject: "saturam",
+                    retrievedChunkIds: [],
+                    createdAt: "2026-01-01T00:00:00Z",
+                },
+            ],
+        });
+
+        expect(result.projectHints).toEqual([]);
+        // The rewritten question must not gain a project the user never named.
+        expect(result.resolvedQuestion.toLowerCase()).not.toContain("saturam");
+
+        const [{ messages }] = structured.invoke.mock.calls[0];
+        expect(messages[0].content).toContain("Leave projectHints empty when the question introduces a new subject");
+    });
+
     it("defaults to project knowledge when classification fails", async () => {
         structured.invoke.mockRejectedValue(new Error("provider down"));
 

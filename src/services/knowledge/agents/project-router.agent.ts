@@ -23,6 +23,12 @@ export const DOMINANCE_SHARE = 0.6;
 /** Or when its best chunk outscores the runner-up's by at least this margin. */
 export const DOMINANCE_SCORE_MARGIN = 0.15;
 
+/**
+ * Share of the probe's chunks the conversation's current project must still own to keep it. Below
+ * this the question has moved to a different subject and continuity is the wrong instinct.
+ */
+export const STICKY_MIN_SHARE = 0.25;
+
 export const RouterCandidatesSchema = z.object({
     candidates: z
         .array(z.object({ slug: z.string(), confidence: z.number().default(0.5), why: z.string().default("") }))
@@ -77,17 +83,11 @@ export class ProjectRouterAgent {
             };
         }
 
-        // No name in the question: a sticky project from earlier in the conversation is the most
-        // likely subject, and avoids re-asking on every follow-up.
-        if (params.activeProject) {
-            const sticky = await this.registry.getBySlug(params.activeProject);
-            if (sticky) {
-                logger.debug(`Routed to "${sticky.slug}" from the active session project.`);
-                return { kind: "resolved", project: sticky, probeChunks: [] };
-            }
-        }
-
-        return this.routeByProbe(params.question);
+        // No name in the question. The project from earlier in the conversation is a hint, not an
+        // instruction: it is weighed against the evidence inside the probe rather than short-
+        // circuiting it. Trusting it blindly pins every later question to whatever was asked first,
+        // so a question about a different project gets filtered to a corpus that cannot answer it.
+        return this.routeByProbe(params.question, params.activeProject);
     }
 
     private async resolveFromHints(hints: string[]): Promise<RegistryProject[]> {
@@ -101,7 +101,7 @@ export class ProjectRouterAgent {
     }
 
     /** Runs one unfiltered retrieval and groups the results by their `project` metadata. */
-    private async routeByProbe(question: string): Promise<RoutingDecision> {
+    private async routeByProbe(question: string, activeProject?: string): Promise<RoutingDecision> {
         const probeChunks = await this.knowledgeBase
             .retrieve(question, { numberOfResults: PROBE_RESULT_COUNT })
             .catch((err) => {
@@ -114,6 +114,21 @@ export class ProjectRouterAgent {
         const candidates = await this.groupByProject(probeChunks);
         if (candidates.length === 0) return { kind: "none", probeChunks };
         if (candidates.length === 1) return { kind: "resolved", project: candidates[0].project, probeChunks };
+
+        // Continuity, but only while the conversation's project still genuinely answers the
+        // question. Below the threshold the subject has moved on and the sticky project would
+        // filter retrieval down to a corpus that cannot answer it.
+        if (activeProject) {
+            const sticky = candidates.find((c) => c.project.slug === activeProject);
+            const share = sticky ? sticky.matchCount / probeChunks.length : 0;
+            if (sticky && share >= STICKY_MIN_SHARE) {
+                logger.debug(`Staying on "${activeProject}" (share ${share.toFixed(2)}).`);
+                return { kind: "resolved", project: sticky.project, probeChunks };
+            }
+            if (activeProject) {
+                logger.debug(`Leaving "${activeProject}" — the question is better answered elsewhere.`);
+            }
+        }
 
         const [top, runnerUp] = candidates;
         const share = top.matchCount / probeChunks.length;
