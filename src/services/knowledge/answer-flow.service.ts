@@ -83,6 +83,7 @@ export class AnswerFlowService {
         const outcome = await this.produceAnswer({
             classification: classification.intent,
             projectHints: classification.projectHints,
+            crossProject: classification.crossProject,
             question: effectiveQuestion,
             session,
             recentTurns,
@@ -127,6 +128,7 @@ export class AnswerFlowService {
     private async produceAnswer(params: {
         classification: QuestionIntent;
         projectHints: string[];
+        crossProject: boolean;
         question: string;
         session: ChatSession;
         recentTurns: ChatTurn[];
@@ -138,9 +140,21 @@ export class AnswerFlowService {
             return { answer: await this.describeCorpus(), chunks: [], cancelled: false };
         }
 
+        if (classification === QuestionIntent.CONVERSATION) {
+            return { answer: this.recapConversation(session), chunks: [], cancelled: false };
+        }
+
         if (classification === QuestionIntent.GENERAL_TECHNICAL) {
             const answer = await this.general.answer({ question, recentTurns, digest: session.digest });
             return { answer, chunks: [], cancelled: false };
+        }
+
+        // A question spanning projects must not inherit the sticky project: narrowing it would
+        // report on one project in language that sounds like it covered them all.
+        if (params.crossProject) {
+            const chunks = await this.retrieveForAnswer(question, undefined, []);
+            const answer = await this.mentor.answer({ question, chunks, recentTurns, digest: session.digest });
+            return { answer, chunks, cancelled: false };
         }
 
         const decision = await this.router.route({
@@ -197,6 +211,35 @@ export class AnswerFlowService {
             logger.warn(`Retrieval failed: ${(err as Error).message}`);
             return probeChunks;
         }
+    }
+
+    /**
+     * Answers "what was I asking about?" from session history, with no retrieval and no model
+     * call. Running the normal pipeline here re-explains the topic in full, which is not what
+     * someone asking to be reminded actually wants.
+     */
+    private recapConversation(session: ChatSession): string {
+        if (session.turns.length === 0) {
+            return "We haven't covered anything yet — this is the first question in this conversation.";
+        }
+
+        const recent = session.turns.slice(-5);
+        const lines = recent.map((turn) => {
+            const project = turn.resolvedProject ? ` [${turn.resolvedProject}]` : "";
+            return `- "${turn.question}"${project} — ${turn.answerGist}`;
+        });
+
+        const older = session.turns.length - recent.length;
+        const intro =
+            older > 0
+                ? `Here's the last ${recent.length} of ${session.turns.length} questions in this conversation:`
+                : `Here's what we've covered so far:`;
+
+        const parts = [intro, "", ...lines];
+        if (session.digest?.summary) {
+            parts.push("", `Earlier on: ${session.digest.summary}`);
+        }
+        return parts.join("\n");
     }
 
     /** Answers "what can you tell me about?" from the registry, with no model call. */

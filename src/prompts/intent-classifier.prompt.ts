@@ -24,12 +24,14 @@ Choose exactly one intent:
 - "general_technical" — answerable from general software engineering knowledge, with no reference to our internal systems. Example: "What is idempotency?"
 - "project_knowledge" — about one of our internal projects, services, tickets or documents. Example: "How does SMILE handle refunds?"
 - "meta" — about what this assistant or the knowledge base can do, rather than about any subject. Example: "What projects can you tell me about?"
+- "conversation" — about this conversation itself rather than about any subject: what was asked, what was covered, a recap. Examples: "What was I asking about?", "What have we covered so far?", "Remind me what you just said". These want a short recall of the conversation, not the topic explained again.
 
 Rules:
 - A follow-up is not its own intent. Resolve pronouns and elisions ("it", "that", "and why?") against the conversation above, then classify the resolved question. "And how does it fail?" after a question about SMILE is "project_knowledge".
 - Prefer "project_knowledge" whenever the question names, or clearly refers to, something in the project catalogue below.
 - A general concept asked in our specific context ("how do we do retries?") is "project_knowledge". The same concept asked in the abstract ("what is exponential backoff?") is "general_technical".
 - Put every project name the question refers to, whether stated or inherited from the conversation, into projectHints. Use the name as the user said it; the router resolves it.
+- Set crossProject to true when the question asks across projects rather than about one: "do any of our projects use Lambda?", "which project handles billing?", "where do we use Airflow?". Plural or indefinite phrasing ("our projects", "anywhere", "any of them") is the signal. When crossProject is true, leave projectHints empty unless the user named specific projects to compare.
 
 Projects currently indexed:
 ${params.projectCatalogue}`,
@@ -50,8 +52,9 @@ ${params.projectCatalogue}`,
 }
 
 export const INTENT_CLASSIFIER_SHAPE_HINT = `{
-  "intent": "general_technical" | "project_knowledge" | "meta",
+  "intent": "general_technical" | "project_knowledge" | "meta" | "conversation",
   "projectHints": string[],
+  "crossProject": boolean,
   "resolvedQuestion": string,
   "reasoning": string
 }`;

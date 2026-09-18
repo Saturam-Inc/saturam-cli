@@ -1,30 +1,35 @@
 {
-    "_comment": "PLACEHOLDER SET \u2014 replace with real questions freshers asked about projects actually indexed in your Knowledge Base. The scores are only meaningful against your own corpus; these questions assume saturam-cli's own documentation is indexed, which it may not be. `mustMention` is checked literally (case-insensitive) and should only be used where you know the corpus covers the term \u2014 an answer that correctly reports a gap would otherwise fail the assertion rather than the rubric.",
+    "_comment": "Questions against the live Knowledge Base (mrf, smile, saturam). Add real fresher questions here as they come up.",
     "questions": [
         {
-            "id": "onboarding-sync-what",
-            "question": "What does the onboarding sync actually do?",
-            "notes": "Baseline: should explain the mechanism, not list components."
+            "id": "mrf-architecture",
+            "question": "Ask about MRF architecture",
+            "notes": "Long answer — should use headings named after the subject."
         },
         {
-            "id": "onboarding-sync-why",
-            "question": "Why does the sync write a JSON sidecar next to each Markdown file?",
-            "notes": "Tests the 'why it exists' part of the contract."
+            "id": "mrf-dags",
+            "question": "explain more about the dags configurations",
+            "notes": "Follow-up shape; should stay on MRF."
         },
         {
-            "id": "sync-failure-mode",
-            "question": "What happens when one document fails to sync?",
-            "notes": "Tests 'what to watch out for'."
+            "id": "mrf-focus-short",
+            "question": "What is the focus of the mrf project?",
+            "notes": "Short question — should get a short answer with no headings."
         },
         {
-            "id": "jargon-gloss",
-            "question": "How are Jira tickets converted for the knowledge base?",
-            "notes": "Should gloss ADF rather than assume the reader knows it."
+            "id": "smile-overview",
+            "question": "give more details on smile project",
+            "notes": "Different project; heading style should not mirror the MRF answer."
         },
         {
-            "id": "partial-context",
-            "question": "What is the rollback procedure if an ingestion job corrupts the index?",
-            "notes": "Likely undocumented \u2014 must name the gap instead of inventing a procedure."
+            "id": "smile-arap",
+            "question": "How does the ARAP Data Mart improve data accuracy?",
+            "notes": "Narrow how-question; mostly narrative."
+        },
+        {
+            "id": "mrf-gotchas",
+            "question": "What should I watch out for in the MRF pipeline?",
+            "notes": "Should be mostly gotchas, little background."
         }
     ]
 }

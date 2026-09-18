@@ -24,6 +24,7 @@ describe("AnswerFlowService", () => {
             classify: jest.fn().mockResolvedValue({
                 intent: QuestionIntent.PROJECT_KNOWLEDGE,
                 projectHints: [],
+                crossProject: false,
                 resolvedQuestion: "how do refunds work?",
                 reasoning: "",
             }),
@@ -167,6 +168,71 @@ describe("AnswerFlowService", () => {
         expect(knowledgeBase.retrieve).toHaveBeenCalledWith(
             "how does SMILE refund processing fail?",
             expect.anything(),
+        );
+    });
+
+    it("recalls the conversation instead of re-explaining the topic", async () => {
+        // The bug this guards: "what was I asking about?" used to run the full pipeline and
+        // re-explain the subject at length instead of simply recalling it.
+        await store.appendTurn("s1", {
+            index: 0,
+            question: "how does the ARAP data mart work?",
+            answer: "long answer",
+            answerGist: "ARAP uses double-entry for receivables and payables",
+            intent: QuestionIntent.PROJECT_KNOWLEDGE,
+            resolvedProject: "smile",
+            retrievedChunkIds: [],
+            createdAt: new Date().toISOString(),
+        });
+        classifier.classify.mockResolvedValueOnce({
+            intent: QuestionIntent.CONVERSATION,
+            projectHints: [],
+            crossProject: false,
+            resolvedQuestion: "what was I asking about?",
+            reasoning: "",
+        });
+
+        const result = await flow.ask("what was I asking about?", chooser);
+
+        expect(result.answer).toContain("how does the ARAP data mart work?");
+        expect(result.answer).toContain("double-entry");
+        expect(mentor.answer).not.toHaveBeenCalled();
+        expect(knowledgeBase.retrieve).not.toHaveBeenCalled();
+    });
+
+    it("says so plainly when asked to recap an empty conversation", async () => {
+        classifier.classify.mockResolvedValueOnce({
+            intent: QuestionIntent.CONVERSATION,
+            projectHints: [],
+            crossProject: false,
+            resolvedQuestion: "what have we covered?",
+            reasoning: "",
+        });
+
+        const result = await flow.ask("what have we covered?", chooser);
+
+        expect(result.answer).toContain("first question");
+    });
+
+    it("searches every project when the question spans projects", async () => {
+        // "do any of our projects use Lambda?" must not inherit the sticky project, or the answer
+        // reports on one project while sounding like it covered them all.
+        await store.saveActiveProject("s1", "smile");
+        classifier.classify.mockResolvedValueOnce({
+            intent: QuestionIntent.PROJECT_KNOWLEDGE,
+            projectHints: [],
+            crossProject: true,
+            resolvedQuestion: "do any of our projects use Lambda?",
+            reasoning: "",
+        });
+
+        const result = await flow.ask("do any of our projects use Lambda?", chooser);
+
+        expect(router.route).not.toHaveBeenCalled();
+        expect(result.project).toBeUndefined();
+        expect(knowledgeBase.retrieve).toHaveBeenCalledWith(
+            "do any of our projects use Lambda?",
+            expect.not.objectContaining({ project: expect.anything() }),
         );
     });
 

@@ -14,6 +14,12 @@ const TEMPERATURE = 0;
 export const IntentClassificationSchema = z.object({
     intent: z.nativeEnum(QuestionIntent),
     projectHints: z.array(z.string()).default([]),
+    /**
+     * True when the question asks across projects rather than about one ("do any of our projects
+     * use Lambda?"). Without this the sticky project silently narrows the search to whatever was
+     * discussed last, and the answer reports on one project while sounding like it covered all.
+     */
+    crossProject: z.boolean().default(false),
     /** The question with pronouns and elisions resolved against the conversation. */
     resolvedQuestion: z.string(),
     reasoning: z.string().default(""),
@@ -61,6 +67,7 @@ export class IntentClassifierAgent {
             return {
                 intent: QuestionIntent.PROJECT_KNOWLEDGE,
                 projectHints: [],
+                crossProject: false,
                 resolvedQuestion: params.question,
                 reasoning: "classification failed",
             };

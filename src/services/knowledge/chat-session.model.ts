@@ -14,6 +14,12 @@ export enum QuestionIntent {
     PROJECT_KNOWLEDGE = "project_knowledge",
     /** About the assistant or the corpus itself ("what can you tell me about?"). */
     META = "meta",
+    /**
+     * About the conversation so far ("what was I asking about?", "recap what we covered").
+     * Answered from session history, not from retrieval — running the full answering pipeline
+     * re-explains the topic at length instead of simply recalling it.
+     */
+    CONVERSATION = "conversation",
 }
 
 export interface ChatTurn {
