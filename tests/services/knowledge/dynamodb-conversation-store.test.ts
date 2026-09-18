@@ -26,6 +26,7 @@ jest.mock("../../../src/integrations/aws/utils/aws-credentials.util", () => ({
 }));
 
 import { DynamoDbConversationStore } from "../../../src/services/knowledge/dynamodb-conversation-store";
+import { InMemoryConversationStore } from "../../../src/services/knowledge/conversation-store";
 
 function turn(index: number) {
     return {
@@ -41,6 +42,7 @@ function turn(index: number) {
 
 describe("DynamoDbConversationStore", () => {
     let config: any;
+    let fallback: InMemoryConversationStore;
     let store: DynamoDbConversationStore;
 
     beforeEach(() => {
@@ -52,7 +54,8 @@ describe("DynamoDbConversationStore", () => {
                 .mockResolvedValue({ tableName: "sateng-conversations", region: "ap-south-1", ttlDays: 90 }),
             getAWSCloudConfig: jest.fn().mockResolvedValue({ awsRegion: "ap-south-1" }),
         };
-        store = new DynamoDbConversationStore(config);
+        fallback = new InMemoryConversationStore();
+        store = new DynamoDbConversationStore(config, fallback);
     });
 
     it("writes a turn under a session-partitioned, zero-padded sort key", async () => {
@@ -79,7 +82,17 @@ describe("DynamoDbConversationStore", () => {
             Items: [
                 { sk: "turn#000002", ...turn(2) },
                 { sk: "turn#000001", ...turn(1) },
-                { sk: "meta", activeProject: "smile", digest: { summary: "d", projectsDiscussed: [], jargonDefined: [], questionsAsked: [], coversUpToIndex: 1 } },
+                {
+                    sk: "meta",
+                    activeProject: "smile",
+                    digest: {
+                        summary: "d",
+                        projectsDiscussed: [],
+                        jargonDefined: [],
+                        questionsAsked: [],
+                        coversUpToIndex: 1,
+                    },
+                },
             ],
         });
 
@@ -112,9 +125,7 @@ describe("DynamoDbConversationStore", () => {
         expect(second.ExpressionAttributeValues[":value"]).toMatchObject({ summary: "covered refunds" });
     });
 
-    it("returns an empty session instead of throwing when the table is unreachable", async () => {
-        // The IAM user may have no DynamoDB permissions, or the table may not exist. Losing
-        // history must never take down the answering flow.
+    it("does not take down the answering flow when the table is unreachable", async () => {
         sendMock.mockRejectedValueOnce(Object.assign(new Error("not authorized"), { name: "AccessDeniedException" }));
 
         const session = await store.load("s1");
@@ -122,21 +133,68 @@ describe("DynamoDbConversationStore", () => {
         expect(session).toEqual({ sessionId: "s1", turns: [] });
     });
 
+    it("keeps history in memory after a failure, so context survives within the session", async () => {
+        // The bug this guards: every turn used to start a fresh session, so a follow-up was
+        // answered as if nothing had been said before it.
+        sendMock.mockRejectedValue(Object.assign(new Error("not authorized"), { name: "AccessDeniedException" }));
+
+        await store.load("s1");
+        await store.appendTurn("s1", turn(0));
+        await store.saveActiveProject("s1", "mrf");
+        const session = await store.load("s1");
+
+        expect(session.turns.map((t) => t.index)).toEqual([0]);
+        expect(session.activeProject).toBe("mrf");
+    });
+
+    it("stops calling DynamoDB once degraded, instead of retrying on every question", async () => {
+        sendMock.mockRejectedValue(new Error("not authorized"));
+
+        await store.load("s1");
+        const callsAfterFirstFailure = sendMock.mock.calls.length;
+        await store.appendTurn("s1", turn(0));
+        await store.saveActiveProject("s1", "mrf");
+
+        expect(sendMock.mock.calls.length).toBe(callsAfterFirstFailure);
+    });
+
+    it("preserves the digest through the fallback as well", async () => {
+        sendMock.mockRejectedValue(new Error("not authorized"));
+        await store.load("s1");
+
+        await store.saveDigest("s1", {
+            summary: "covered mrf",
+            projectsDiscussed: ["mrf"],
+            jargonDefined: [],
+            questionsAsked: [],
+            coversUpToIndex: 1,
+        });
+
+        expect((await store.load("s1")).digest?.summary).toBe("covered mrf");
+    });
+
     it("swallows write failures rather than failing the question that produced them", async () => {
         sendMock.mockRejectedValue(new Error("throughput exceeded"));
 
         await expect(store.appendTurn("s1", turn(0))).resolves.toBeUndefined();
-        await expect(store.saveDigest("s1", {
-            summary: "", projectsDiscussed: [], jargonDefined: [], questionsAsked: [], coversUpToIndex: 0,
-        })).resolves.toBeUndefined();
+        await expect(
+            store.saveDigest("s1", {
+                summary: "",
+                projectsDiscussed: [],
+                jargonDefined: [],
+                questionsAsked: [],
+                coversUpToIndex: 0,
+            }),
+        ).resolves.toBeUndefined();
     });
 
-    it("degrades to an empty session when no table is configured", async () => {
+    it("falls back to memory when no table is configured", async () => {
         config.getConversationTableConfig.mockResolvedValue(undefined);
 
-        const session = await store.load("s1");
+        await store.load("s1");
+        await store.appendTurn("s1", turn(0));
 
-        expect(session).toEqual({ sessionId: "s1", turns: [] });
         expect(sendMock).not.toHaveBeenCalled();
+        expect((await store.load("s1")).turns).toHaveLength(1);
     });
 });

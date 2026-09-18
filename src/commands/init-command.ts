@@ -421,6 +421,53 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
             };
         }
 
+        let conversationTable: CloudProviderConfig["conversationTable"] = existing?.conversationTable;
+        const configureTable = await confirm({
+            message: "Configure DynamoDB conversation history for 'onboard --chat'?",
+            default: !!existing?.conversationTable,
+        });
+        if (configureTable) {
+            logger.info("\nDynamoDB conversation history (lets a later run continue the same conversation):");
+            logger.info("1. Go to: https://console.aws.amazon.com/dynamodbv2/home#tables");
+            logger.info("2. Create a table with partition key 'pk' (String) and sort key 'sk' (String).");
+            logger.info("3. Leave capacity on 'On-demand'.");
+            logger.info("4. After it is created, open the table and turn on Time to Live with attribute 'expiresAt'.");
+            logger.info("5. Grant your IAM user/role these actions on that table's ARN:");
+            logger.info('     "Action": ["dynamodb:Query", "dynamodb:PutItem", "dynamodb:UpdateItem"],');
+            logger.info('     "Resource": ["arn:aws:dynamodb:REGION:ACCOUNT_ID:table/YOUR_TABLE"]');
+            logger.info("Leave the table name empty to keep history in memory for the session only.\n");
+
+            const tableName = await input({
+                message: "DynamoDB table name:",
+                default: existing?.conversationTable?.tableName ?? "",
+            });
+
+            if (tableName.trim()) {
+                const tableRegion = await input({
+                    message: "Table region (leave empty to use the AWS region above):",
+                    default: existing?.conversationTable?.region ?? "",
+                });
+                const ttlDays = await input({
+                    message: "Days to keep conversation history:",
+                    default: String(existing?.conversationTable?.ttlDays ?? 90),
+                    validate: (val) => {
+                        const parsed = Number(val);
+                        return Number.isInteger(parsed) && parsed > 0 ? true : "Enter a whole number of days";
+                    },
+                });
+
+                conversationTable = {
+                    tableName: tableName.trim(),
+                    region: tableRegion.trim() || undefined,
+                    ttlDays: Number(ttlDays),
+                };
+            } else {
+                // An empty name is how the user opts out; keep it undefined so the chat flow falls
+                // back to in-memory history rather than failing on an unusable table name.
+                conversationTable = undefined;
+            }
+        }
+
         return {
             enabled: true,
             awsAuthMethod: authMethod,
@@ -431,6 +478,7 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
             awsSessionToken: awsSessionToken || undefined,
             s3,
             bedrockKnowledgeBase,
+            conversationTable,
         };
     }
 
@@ -1067,6 +1115,13 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
             }
             if (awsCloud.bedrockKnowledgeBase) {
                 logger.info(`      Bedrock Knowledge Base: ${awsCloud.bedrockKnowledgeBase.knowledgeBaseId}`);
+            }
+            if (awsCloud.conversationTable) {
+                logger.info(
+                    `      Conversation history: ${awsCloud.conversationTable.tableName} (${awsCloud.conversationTable.ttlDays ?? 90}d retention)`,
+                );
+            } else {
+                logger.info("      Conversation history: in-memory (session only)");
             }
         }
     }

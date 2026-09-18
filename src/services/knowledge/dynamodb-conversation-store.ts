@@ -2,14 +2,7 @@ import { getLogger } from "log4js";
 import { Service } from "typedi";
 import { resolveAwsClientConfig } from "../../integrations/aws/utils/aws-credentials.util";
 import { ConfigService } from "../config-service";
-import {
-    ChatSession,
-    ChatTurn,
-    MAX_RETAINED_TURNS,
-    QuestionIntent,
-    SessionDigest,
-    createEmptySession,
-} from "./chat-session.model";
+import { ChatSession, ChatTurn, MAX_RETAINED_TURNS, QuestionIntent, SessionDigest } from "./chat-session.model";
 import { ConversationStore, InMemoryConversationStore } from "./conversation-store";
 
 const logger = getLogger("DynamoConversationStore");
@@ -40,7 +33,30 @@ function partitionKey(sessionId: string): string {
 export class DynamoDbConversationStore implements ConversationStore {
     private client: import("@aws-sdk/lib-dynamodb").DynamoDBDocumentClient | undefined;
 
-    constructor(private readonly config: ConfigService) {}
+    /**
+     * Set after the first failed call. Losing the table must not silently disable conversation
+     * memory altogether: without this the flow would start a fresh session on every question, so
+     * follow-ups answer as if nothing had been said. Once degraded, the in-memory store takes over
+     * for the rest of the process, so context still works within the session.
+     */
+    private degraded = false;
+
+    constructor(
+        private readonly config: ConfigService,
+        private readonly fallback: InMemoryConversationStore,
+    ) {}
+
+    /** Records the first failure, explains it once, and hands over to the in-memory store. */
+    private degrade(err: unknown): void {
+        if (this.degraded) return;
+        this.degraded = true;
+        logger.warn(
+            `Conversation history is not reachable, so this session is keeping history in memory only: ${(err as Error).message}`,
+        );
+        logger.warn(
+            "History will not carry across runs until this is fixed — check the table name, region, and that the IAM identity has dynamodb:Query, PutItem and UpdateItem on it.",
+        );
+    }
 
     private async getClient(region: string): Promise<import("@aws-sdk/lib-dynamodb").DynamoDBDocumentClient> {
         if (this.client) return this.client;
@@ -69,6 +85,8 @@ export class DynamoDbConversationStore implements ConversationStore {
     }
 
     public async load(sessionId: string): Promise<ChatSession> {
+        if (this.degraded) return this.fallback.load(sessionId);
+
         try {
             const { tableName, region } = await this.requireTable();
             const { QueryCommand } = await import("@aws-sdk/lib-dynamodb");
@@ -101,8 +119,8 @@ export class DynamoDbConversationStore implements ConversationStore {
                 digest: (meta?.digest as SessionDigest | undefined) ?? undefined,
             };
         } catch (err) {
-            logger.warn(`Could not load conversation history: ${(err as Error).message}. Starting a fresh session.`);
-            return createEmptySession(sessionId);
+            this.degrade(err);
+            return this.fallback.load(sessionId);
         }
     }
 
@@ -120,6 +138,8 @@ export class DynamoDbConversationStore implements ConversationStore {
     }
 
     public async appendTurn(sessionId: string, turn: ChatTurn): Promise<void> {
+        if (this.degraded) return this.fallback.appendTurn(sessionId, turn);
+
         try {
             const { tableName, region, ttlDays } = await this.requireTable();
             const { PutCommand } = await import("@aws-sdk/lib-dynamodb");
@@ -137,7 +157,8 @@ export class DynamoDbConversationStore implements ConversationStore {
                 }),
             );
         } catch (err) {
-            logger.warn(`Could not persist conversation turn: ${(err as Error).message}`);
+            this.degrade(err);
+            await this.fallback.appendTurn(sessionId, turn);
         }
     }
 
@@ -154,6 +175,8 @@ export class DynamoDbConversationStore implements ConversationStore {
      * than a put) so the digest and the active project do not clobber one another.
      */
     private async updateMeta(sessionId: string, attribute: "digest" | "activeProject", value: unknown): Promise<void> {
+        if (this.degraded) return this.writeMetaToFallback(sessionId, attribute, value);
+
         try {
             const { tableName, region, ttlDays } = await this.requireTable();
             const { UpdateCommand } = await import("@aws-sdk/lib-dynamodb");
@@ -169,7 +192,20 @@ export class DynamoDbConversationStore implements ConversationStore {
                 }),
             );
         } catch (err) {
-            logger.warn(`Could not persist session ${attribute}: ${(err as Error).message}`);
+            this.degrade(err);
+            await this.writeMetaToFallback(sessionId, attribute, value);
+        }
+    }
+
+    private async writeMetaToFallback(
+        sessionId: string,
+        attribute: "digest" | "activeProject",
+        value: unknown,
+    ): Promise<void> {
+        if (attribute === "digest") {
+            await this.fallback.saveDigest(sessionId, value as SessionDigest);
+        } else {
+            await this.fallback.saveActiveProject(sessionId, value as string | undefined);
         }
     }
 }
