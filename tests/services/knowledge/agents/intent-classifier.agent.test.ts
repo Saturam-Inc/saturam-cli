@@ -122,7 +122,8 @@ describe("IntentClassifierAgent", () => {
         expect(result.resolvedQuestion.toLowerCase()).not.toContain("saturam");
 
         const [{ messages }] = structured.invoke.mock.calls[0];
-        expect(messages[0].content).toContain("Leave projectHints empty when the question introduces a new subject");
+        expect(messages[0].content).toContain("It names its own subject");
+        expect(messages[0].content).toContain("It carries no subject of its own");
     });
 
     it("defaults to project knowledge when classification fails", async () => {

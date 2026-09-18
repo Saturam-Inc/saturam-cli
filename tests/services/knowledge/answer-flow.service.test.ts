@@ -329,42 +329,82 @@ describe("AnswerFlowService", () => {
         expect(second.answer).toBe("mentor answer");
     });
 
-    it("starts a new session when the previous conversation has gone cold", async () => {
-        await store.appendTurn(ref("s1"), {
+    it("gives each run its own session instead of reusing the last one", async () => {
+        await store.appendTurn(ref("earlier-session"), {
             index: 0,
-            question: "yesterday's question",
+            question: "what i need to know to get into mrf project",
             answer: "a",
-            answerGist: "g",
+            answerGist: "MRF uses DB2, ADF, Airflow and PostgreSQL",
             intent: QuestionIntent.PROJECT_KNOWLEDGE,
-            resolvedProject: "smile",
-            retrievedChunkIds: [],
-            createdAt: new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString(),
-        });
-
-        await flow.ask("a brand new question", chooser);
-
-        const [latest] = await store.findRecentSessionIds(getOwnerId(), 1);
-        expect(latest).not.toBe("s1");
-        // The stale turn must not leak into the new conversation's history.
-        expect((await store.load(ref(latest))).turns.map((t) => t.question)).toEqual(["a brand new question"]);
-    });
-
-    it("keeps appending while the conversation is still active", async () => {
-        await store.appendTurn(ref("s1"), {
-            index: 0,
-            question: "a minute ago",
-            answer: "a",
-            answerGist: "g",
-            intent: QuestionIntent.PROJECT_KNOWLEDGE,
+            resolvedProject: "mrf",
             retrievedChunkIds: [],
             createdAt: new Date().toISOString(),
         });
 
-        await flow.ask("still going", chooser);
+        await flow.ask("so what tech stacks are used", chooser);
 
-        // Same conversation continued, not rotated away.
-        expect(await store.findRecentSessionIds(getOwnerId(), 5)).toEqual(["s1"]);
-        expect((await store.load(ref("s1"))).turns).toHaveLength(2);
+        const sessions = await store.findRecentSessionIds(getOwnerId(), 5);
+        expect(sessions).toHaveLength(2);
+        expect(sessions).not.toEqual(["earlier-session"]);
+        // The new turn belongs to the new session, not the earlier one.
+        expect((await store.load(ref("earlier-session"))).turns).toHaveLength(1);
+    });
+
+    it("carries the owner's recent turns into a fresh terminal as context", async () => {
+        // The bug this guards: a new terminal answered "so what tech stacks are used" without the
+        // MRF context from the previous run, and pulled documents from an unrelated project.
+        await store.appendTurn(ref("earlier-session"), {
+            index: 0,
+            question: "what i need to know to get into mrf project",
+            answer: "a",
+            answerGist: "MRF uses DB2, ADF, Airflow and PostgreSQL",
+            intent: QuestionIntent.PROJECT_KNOWLEDGE,
+            resolvedProject: "mrf",
+            retrievedChunkIds: [],
+            createdAt: new Date().toISOString(),
+        });
+
+        await flow.ask("so what tech stacks are used", chooser);
+
+        const [{ recentTurns }] = classifier.classify.mock.calls[0];
+        expect(recentTurns.map((t: any) => t.question)).toContain("what i need to know to get into mrf project");
+    });
+
+    it("seeds the project from the previous session so a follow-up stays on topic", async () => {
+        await store.appendTurn(ref("earlier-session"), {
+            index: 0,
+            question: "tell me about mrf",
+            answer: "a",
+            answerGist: "g",
+            intent: QuestionIntent.PROJECT_KNOWLEDGE,
+            resolvedProject: "mrf",
+            retrievedChunkIds: [],
+            createdAt: new Date().toISOString(),
+        });
+        await store.saveActiveProject(ref("earlier-session"), "mrf");
+
+        await flow.ask("so what tech stacks are used", chooser);
+
+        expect(router.route).toHaveBeenCalledWith(expect.objectContaining({ activeProject: "mrf" }));
+    });
+
+    it("starts clean with no carried context when a new session is requested", async () => {
+        await store.appendTurn(ref("earlier-session"), {
+            index: 0,
+            question: "tell me about mrf",
+            answer: "a",
+            answerGist: "g",
+            intent: QuestionIntent.PROJECT_KNOWLEDGE,
+            resolvedProject: "mrf",
+            retrievedChunkIds: [],
+            createdAt: new Date().toISOString(),
+        });
+
+        flow.startNewSession();
+        await flow.ask("what is idempotency?", chooser);
+
+        const [{ recentTurns }] = classifier.classify.mock.calls[0];
+        expect(recentTurns).toHaveLength(0);
     });
 
     it("recalls the previous conversation when this one has only just started", async () => {

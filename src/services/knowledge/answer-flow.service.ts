@@ -11,7 +11,7 @@ import { GroundingCheckAgent, GroundingVerdict } from "./agents/grounding-check.
 import { IntentClassifierAgent } from "./agents/intent-classifier.agent";
 import { MentorAnswererAgent } from "./agents/mentor-answerer.agent";
 import { ProjectCandidate, ProjectRouterAgent } from "./agents/project-router.agent";
-import { ChatSession, ChatTurn, QuestionIntent, VERBATIM_TURN_WINDOW, isSessionStale } from "./chat-session.model";
+import { CARRY_OVER_TURNS, ChatSession, ChatTurn, QuestionIntent, contextTurns } from "./chat-session.model";
 import { SessionRef, describeOwner, getOwnerId, newSessionId } from "./session-identity";
 import { ConversationStoreProvider } from "./dynamodb-conversation-store";
 import { ProjectRegistryService, RegistryProject } from "./project-registry.service";
@@ -21,6 +21,9 @@ const logger = getLogger("AnswerFlow");
 
 /** Chunks retrieved for the answer itself, once a project is settled. */
 const ANSWER_RESULT_COUNT = 12;
+
+/** Previous sessions consulted when gathering carry-over context. */
+const CARRY_OVER_SESSION_LOOKBACK = 3;
 
 /** What the user picked when asked to disambiguate a project. */
 export type ProjectChoice = { kind: "project"; slug: string } | { kind: "all" } | { kind: "rephrase" };
@@ -68,6 +71,8 @@ export interface AnswerResult {
 export class AnswerFlowService {
     /** The conversation this process is in, once resolved. */
     private currentRef: SessionRef | undefined;
+    /** Context read once per run from the owner's previous sessions. */
+    private carried: { turns: ChatTurn[]; activeProject?: string } | undefined;
     /** Set by startNewSession, consumed by the next resolve. */
     private forcedSession: SessionRef | undefined;
 
@@ -93,7 +98,7 @@ export class AnswerFlowService {
         const allowClarification = options?.allowClarification ?? true;
         const store = await this.stores.get();
         const { ref, session } = await this.resolveSession(store);
-        const recentTurns = session.turns.slice(-VERBATIM_TURN_WINDOW);
+        const recentTurns = contextTurns(session);
 
         const classification = await this.classifier.classify({
             question,
@@ -302,43 +307,69 @@ export class AnswerFlowService {
     }
 
     /**
-     * Resolves which conversation this question belongs to.
+     * Resolves the session for this run.
      *
-     * Sessions hang off the owner — this machine and OS user — rather than off a stored id, so a
-     * second terminal continues the conversation already in progress instead of starting blind.
-     * A conversation left idle past the timeout is not resumed: picking up yesterday's thread
-     * would mix unrelated work into a recap and scope a fresh question to an old topic.
+     * Every process gets its own session, so each terminal and each restart is a separate
+     * conversation in the table. Continuity comes from context rather than from sharing an id:
+     * the owner's most recent turns are read back and handed to the agents, which is what lets a
+     * new terminal understand "so what tech stacks are used" as a continuation.
      */
     private async resolveSession(
         store: Awaited<ReturnType<ConversationStoreProvider["get"]>>,
     ): Promise<{ ref: SessionRef; session: ChatSession }> {
         const ownerId = getOwnerId();
 
-        if (this.forcedSession) {
-            const ref = this.forcedSession;
+        if (!this.currentRef) {
+            // An explicitly requested new session starts clean: that is what the user asked for.
+            const startingClean = this.forcedSession !== undefined;
+            this.currentRef = this.forcedSession ?? { ownerId, sessionId: newSessionId() };
             this.forcedSession = undefined;
-            this.currentRef = ref;
-            return { ref, session: await store.load(ref) };
-        }
-
-        // A process joins a conversation once and stays in it until that conversation goes cold.
-        // Re-picking the newest session every turn would yank a terminal mid-conversation into one
-        // another terminal had just started, which is more surprising than useful.
-        const [latest] = this.currentRef ? [this.currentRef.sessionId] : await store.findRecentSessionIds(ownerId, 1);
-
-        if (latest) {
-            const ref = { ownerId, sessionId: latest };
-            const session = await store.load(ref);
-            if (!isSessionStale(session)) {
-                this.currentRef = ref;
-                return { ref, session };
+            // Carried context is read once per run: it is history, so it cannot change underneath us.
+            this.carried = startingClean
+                ? { turns: [] }
+                : await this.loadCarryOver(store, ownerId, this.currentRef.sessionId);
+            if (this.carried.turns.length > 0) {
+                logger.debug(
+                    `Carried ${this.carried.turns.length} turn(s) from earlier sessions for ${describeOwner(ownerId)}.`,
+                );
             }
-            logger.debug(`Last conversation for ${describeOwner(ownerId)} has gone cold — starting a new one.`);
         }
 
-        const ref = { ownerId, sessionId: newSessionId() };
-        this.currentRef = ref;
-        return { ref, session: await store.load(ref) };
+        const session = await store.load(this.currentRef);
+        return {
+            ref: this.currentRef,
+            session: {
+                ...session,
+                carriedTurns: this.carried?.turns ?? [],
+                // Only seed the project while this session has said nothing of its own; after that
+                // its own routing decisions take over.
+                activeProject:
+                    session.activeProject ?? (session.turns.length === 0 ? this.carried?.activeProject : undefined),
+            },
+        };
+    }
+
+    /** The owner's most recent turns, oldest first, drawn from their previous sessions. */
+    private async loadCarryOver(
+        store: Awaited<ReturnType<ConversationStoreProvider["get"]>>,
+        ownerId: string,
+        currentSessionId: string,
+    ): Promise<{ turns: ChatTurn[]; activeProject?: string }> {
+        const recent = (await store.findRecentSessionIds(ownerId, CARRY_OVER_SESSION_LOOKBACK)).filter(
+            (id) => id !== currentSessionId,
+        );
+
+        const turns: ChatTurn[] = [];
+        let activeProject: string | undefined;
+        for (const sessionId of recent) {
+            const previous = await store.load({ ownerId, sessionId });
+            // Sessions arrive newest first, so each older block goes in front of what we have.
+            turns.unshift(...previous.turns);
+            activeProject ??= previous.activeProject;
+            if (turns.length >= CARRY_OVER_TURNS) break;
+        }
+
+        return { turns: turns.slice(-CARRY_OVER_TURNS), activeProject };
     }
 
     /**
@@ -347,7 +378,17 @@ export class AnswerFlowService {
      * which is what "what did we discuss last time?" actually means.
      */
     private async recall(session: ChatSession, ref: SessionRef): Promise<string> {
-        if (session.turns.length > 0) return this.recapConversation(session);
+        // Carried turns count as "what we discussed": in a new terminal they are the only history
+        // there is, and they are exactly what the user is asking to be reminded of. Say plainly
+        // when nothing has been asked yet in this run, so the recap is not mistaken for this one.
+        const carried = session.carriedTurns ?? [];
+        const known = [...carried, ...session.turns];
+        if (known.length > 0) {
+            const recap = this.recapConversation({ ...session, turns: known });
+            return session.turns.length === 0 && carried.length > 0
+                ? `That was in an earlier conversation:\n\n${recap}`
+                : recap;
+        }
 
         const store = await this.stores.get();
         const recent = await store.findRecentSessionIds(ref.ownerId, 2);
@@ -437,5 +478,6 @@ export class AnswerFlowService {
     public startNewSession(): void {
         this.forcedSession = { ownerId: getOwnerId(), sessionId: newSessionId() };
         this.currentRef = undefined;
+        this.carried = undefined;
     }
 }

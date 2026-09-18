@@ -72,34 +72,6 @@ describe("InMemoryConversationStore", () => {
     });
 });
 
-describe("isSessionStale", () => {
-    const { isSessionStale, SESSION_IDLE_HOURS } = require("../../../src/services/knowledge/chat-session.model");
-
-    function sessionEndingAt(iso: string) {
-        return { sessionId: "s1", turns: [{ ...turn(0), createdAt: iso }] };
-    }
-
-    it("treats an empty session as fresh, so a first question is never rotated away", () => {
-        expect(isSessionStale({ sessionId: "s1", turns: [] })).toBe(false);
-    });
-
-    it("continues a conversation that is still active", () => {
-        const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
-        expect(isSessionStale(sessionEndingAt(tenMinutesAgo))).toBe(false);
-    });
-
-    it("starts a new conversation once the last one has gone cold", () => {
-        // The bug this guards: every run appended to one partition forever, so a recap mixed
-        // questions from different days and the sticky project scoped new questions to old topics.
-        const stale = new Date(Date.now() - (SESSION_IDLE_HOURS + 1) * 60 * 60 * 1000).toISOString();
-        expect(isSessionStale(sessionEndingAt(stale))).toBe(true);
-    });
-
-    it("does not rotate on an unparseable timestamp, which would discard real history", () => {
-        expect(isSessionStale(sessionEndingAt("not-a-date"))).toBe(false);
-    });
-});
-
 describe("owner-scoped sessions", () => {
     let store: InMemoryConversationStore;
 

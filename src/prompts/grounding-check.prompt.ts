@@ -9,6 +9,31 @@ import { RetrievedChunk } from "../integrations/aws/services/bedrock-knowledge-b
  * gate the answering model treats whatever came back as the answer and writes a confident,
  * plausible, wrong reply. The cost of one extra structured call is worth not doing that.
  */
+/** Characters of each document the judge sees. Enough to reach real content, not the whole corpus. */
+const EXCERPT_CHARS = 2000;
+
+/**
+ * Trims a chunk to the part worth judging.
+ *
+ * Every synced document opens with a generated metadata table (Space, Version, Author, Updated,
+ * Labels, Link) that can run to several hundred characters. Judging a truncated chunk meant
+ * judging that header, so documents that plainly answered the question were being read as
+ * unrelated. Drop the leading table, then take the excerpt from the content that follows.
+ */
+function excerpt(content: string): string {
+    const lines = content.trim().split("\n");
+    let start = 0;
+    while (start < lines.length) {
+        const line = lines[start].trim();
+        const isHeading = start === 0 && line.startsWith("#");
+        const isTableRow = line.startsWith("|");
+        if (!isHeading && !isTableRow && line !== "") break;
+        start += 1;
+    }
+    const body = lines.slice(start).join("\n").trim();
+    return (body || content.trim()).slice(0, EXCERPT_CHARS);
+}
+
 export function getGroundingCheckMessages(params: { question: string; chunks: RetrievedChunk[] }): BaseMessage[] {
     const system = new SystemMessage(
         `You judge whether retrieved documents are about the right subject, before an answer is written.
@@ -16,11 +41,13 @@ export function getGroundingCheckMessages(params: { question: string; chunks: Re
 **Your default verdict is "sufficient".** You are a narrow safety check for one specific failure: retrieval returning documents about a different thing that merely resembles the question's subject. You are NOT a quality bar, and you are NOT asking whether the documentation is complete. Almost nothing is documented comprehensively, and partial coverage is normal and fine — the answering step is already required to answer what it can and name what is missing.
 
 Verdicts:
-- "sufficient" — the documents are about the right subject. Use this whenever the subject appears at all, even if the coverage is thin, scattered, partial, or only answers part of the question. This is the common case by a wide margin.
-- "wrong_subject" — the documents are about something genuinely different that merely looks similar. Watch for near-identical names: "Lambda" (AWS compute) is not "Llama" (a language model); "Airflow" is not "Azure". Use this ONLY when the question's actual subject is absent and something else has been matched in its place.
+- "sufficient" — the documents are about the right subject. Use this whenever the thing the question asks about appears at all, even if the coverage is thin, scattered, partial, or phrased quite differently from the question. This is the common case by a wide margin.
+- "wrong_subject" — the documents are about a genuinely different thing that merely looks similar. Watch for near-identical names: "Lambda" (AWS compute) is not "Llama" (a language model); "Airflow" is not "Azure". Use this ONLY when the question's actual subject is absent and something else has been matched in its place.
 - "ambiguous" — the question has two or more clearly different readings and the documents cover more than one, so answering would mean picking one at random.
 
-Do not use "wrong_subject" because the documents are shallow, or because you would have liked more detail, or because no single document gives a full overview. Scattered mentions across several documents are sufficient.
+The test is about the SUBJECT, never the wording and never the aspect. Ask yourself one thing: are these documents about the thing the question asks about? If a question asks about MRF and these are MRF documents, the answer is yes — "sufficient" — even if they never use the question's phrasing, and even if they cover the specific aspect only in passing. Documents describing Azure Data Factory, Airflow and PostgreSQL DO answer "what tech stacks are used", because that is what a tech stack is.
+
+Never return "wrong_subject" because the documents are shallow, because they lack a term the question used, because no single document gives a full overview, or because you would have liked more detail. Scattered mentions across several documents are sufficient. When in doubt, return "sufficient" — the answering step is already required to answer what it can and name what is missing.
 
 Then:
 - missing: one sentence naming what is absent. Empty when the verdict is "sufficient".
@@ -33,7 +60,7 @@ Then:
                   const title =
                       typeof chunk.metadata?.title === "string" ? chunk.metadata.title : `Document ${index + 1}`;
                   const project = typeof chunk.metadata?.project === "string" ? ` · ${chunk.metadata.project}` : "";
-                  return `Document ${index + 1}: ${title}${project}\n${chunk.content.trim().slice(0, 700)}`;
+                  return `Document ${index + 1}: ${title}${project}\n${excerpt(chunk.content)}`;
               })
               .join("\n\n---\n\n")
         : "(nothing was retrieved)";

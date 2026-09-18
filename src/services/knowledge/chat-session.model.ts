@@ -64,6 +64,8 @@ export interface SessionDigest {
 export interface ChatSession {
     sessionId: string;
     turns: ChatTurn[];
+    /** Read-only context from the owner's previous sessions; never persisted under this session. */
+    carriedTurns?: ChatTurn[];
     /** Sticky project, carried across turns until the user changes topic. */
     activeProject?: string;
     digest?: SessionDigest;
@@ -79,21 +81,21 @@ export const DIGEST_REFRESH_INTERVAL = 5;
 export const MAX_RETAINED_TURNS = 20;
 
 /**
- * How long a conversation can sit idle before the next question starts a new session. Picking up
- * yesterday's conversation is rarely what someone means by "continue" — a recap would mix
- * unrelated work, and the sticky project would silently scope a fresh question to an old topic.
+ * Turns carried into a new session from the owner's previous ones.
+ *
+ * Every run is its own session, so without this a new terminal would start blind. Reading the
+ * recent history back gives the classifier and router enough to tell a continuation from a fresh
+ * subject, which is what makes "so what tech stacks are used" resolvable in a new terminal.
  */
-export const SESSION_IDLE_HOURS = 4;
+export const CARRY_OVER_TURNS = 5;
 
-/** Whether a session has been idle long enough that the next question should start a new one. */
-export function isSessionStale(session: ChatSession, now = Date.now()): boolean {
-    const last = session.turns[session.turns.length - 1];
-    if (!last) return false;
-
-    const lastActivity = Date.parse(last.createdAt);
-    if (Number.isNaN(lastActivity)) return false;
-
-    return now - lastActivity > SESSION_IDLE_HOURS * 60 * 60 * 1000;
+/**
+ * The turns agents actually see: this session's own turns, preceded by whatever was carried over,
+ * trimmed to the verbatim window. Carried turns are context only — they are never rewritten, and
+ * new turns are always appended to the current session.
+ */
+export function contextTurns(session: ChatSession): ChatTurn[] {
+    return [...(session.carriedTurns ?? []), ...session.turns].slice(-VERBATIM_TURN_WINDOW);
 }
 
 export function createEmptySession(sessionId: string): ChatSession {
