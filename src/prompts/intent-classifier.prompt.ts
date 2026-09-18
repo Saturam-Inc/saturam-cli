@@ -25,9 +25,11 @@ Choose exactly one intent:
 - "project_knowledge" — about one of our internal projects, services, tickets or documents. Example: "How does SMILE handle refunds?"
 - "meta" — about what this assistant or the knowledge base can do, rather than about any subject. Example: "What projects can you tell me about?"
 - "conversation" — about this conversation itself rather than about any subject: what was asked, what was covered, a recap. Examples: "What was I asking about?", "What have we covered so far?", "Remind me what you just said". These want a short recall of the conversation, not the topic explained again.
+- "small_talk" — ONLY a bare greeting, thanks, or pleasantry with no subject in it at all: "hi", "hello", "thanks", "ok", "good morning". These are NOT requests for a recap. Anything naming a subject, however briefly, is one of the other intents — never classify a real question as small talk.
 
 Rules:
 - A follow-up is not its own intent. Resolve pronouns and elisions ("it", "that", "and why?") against the conversation above, then classify the resolved question. "And how does it fail?" after a question about SMILE is "project_knowledge".
+- Handle corrections. When the user is correcting or narrowing the previous question rather than asking a new one ("I meant X not Y", "no, I'm asking about X", "not that, the other one"), rebuild the PREVIOUS question with the correction applied and put that in resolvedQuestion. Carry forward the previous question's scope, including crossProject. "I'm asking about lambda functions not llama" after "do any projects use lambda?" resolves to "do any of our projects use AWS Lambda functions?" with crossProject still true — never to a question about llama.
 - Prefer "project_knowledge" whenever the question names, or clearly refers to, something in the project catalogue below.
 - A general concept asked in our specific context ("how do we do retries?") is "project_knowledge". The same concept asked in the abstract ("what is exponential backoff?") is "general_technical".
 - Put every project name the question refers to, whether stated or inherited from the conversation, into projectHints. Use the name as the user said it; the router resolves it.
@@ -52,7 +54,7 @@ ${params.projectCatalogue}`,
 }
 
 export const INTENT_CLASSIFIER_SHAPE_HINT = `{
-  "intent": "general_technical" | "project_knowledge" | "meta" | "conversation",
+  "intent": "general_technical" | "project_knowledge" | "meta" | "conversation" | "small_talk",
   "projectHints": string[],
   "crossProject": boolean,
   "resolvedQuestion": string,

@@ -20,6 +20,8 @@ export enum QuestionIntent {
      * re-explains the topic at length instead of simply recalling it.
      */
     CONVERSATION = "conversation",
+    /** A greeting, thanks, or other pleasantry — answered briefly, with no retrieval or recall. */
+    SMALL_TALK = "small_talk",
 }
 
 export interface ChatTurn {

@@ -439,7 +439,11 @@ describe("OnboardCommand Dual-Mode Routing", () => {
                 Object.defineProperty(process.stdout, "isTTY", { value: stdoutIsTTY, configurable: true });
             }
 
-            expect(mockAnswerFlow.ask).toHaveBeenCalledWith("what is the auth flow?", expect.anything());
+            expect(mockAnswerFlow.ask).toHaveBeenCalledWith(
+                "what is the auth flow?",
+                expect.anything(),
+                expect.anything(),
+            );
             expect((command as any).renderAnswer("The auth flow uses OAuth2. [1]")).toBe("The auth flow uses OAuth2.");
         });
 
@@ -450,7 +454,11 @@ describe("OnboardCommand Dual-Mode Routing", () => {
 
             // The question reaches the flow unscoped: routing is automatic, and a stale manual
             // filter silently returning nothing is the failure mode the redesign removes.
-            expect(mockAnswerFlow.ask).toHaveBeenCalledWith("give me the overview", expect.anything());
+            expect(mockAnswerFlow.ask).toHaveBeenCalledWith(
+                "give me the overview",
+                expect.anything(),
+                expect.anything(),
+            );
         });
 
         it("starts a fresh conversation when --new-session is passed", async () => {
@@ -485,6 +493,7 @@ describe("OnboardCommand Dual-Mode Routing", () => {
             expect(mockAnswerFlow.ask).toHaveBeenNthCalledWith(
                 2,
                 "How does the sync handle failures?",
+                expect.anything(),
                 expect.anything(),
             );
         });

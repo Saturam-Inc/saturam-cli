@@ -7,6 +7,7 @@ import {
 import { ConfigService } from "../config-service";
 import { FollowUp, FollowUpGeneratorAgent } from "./agents/follow-up-generator.agent";
 import { GeneralTechnicalAgent } from "./agents/general-technical.agent";
+import { GroundingCheckAgent, GroundingVerdict } from "./agents/grounding-check.agent";
 import { IntentClassifierAgent } from "./agents/intent-classifier.agent";
 import { MentorAnswererAgent } from "./agents/mentor-answerer.agent";
 import { ProjectCandidate, ProjectRouterAgent } from "./agents/project-router.agent";
@@ -33,6 +34,16 @@ export interface ProjectChooser {
     choose(question: string, candidates: ProjectCandidate[]): Promise<ProjectChoice>;
 }
 
+/**
+ * Returned instead of an answer when the retrieved context does not support one. The questions
+ * are put to the user as selectable options, and their reply becomes the next question.
+ */
+export interface ClarificationRequest {
+    /** One sentence naming what is missing. */
+    missing: string;
+    questions: string[];
+}
+
 export interface AnswerResult {
     answer: string;
     chunks: RetrievedChunk[];
@@ -41,6 +52,8 @@ export interface AnswerResult {
     project?: RegistryProject;
     /** True when the user asked to rephrase instead of picking a project — nothing was answered. */
     cancelled: boolean;
+    /** Present when the flow needs more from the user before it can answer. */
+    clarification?: ClarificationRequest;
 }
 
 /**
@@ -56,6 +69,7 @@ export class AnswerFlowService {
         private readonly classifier: IntentClassifierAgent,
         private readonly router: ProjectRouterAgent,
         private readonly general: GeneralTechnicalAgent,
+        private readonly grounding: GroundingCheckAgent,
         private readonly mentor: MentorAnswererAgent,
         private readonly followUps: FollowUpGeneratorAgent,
         private readonly knowledgeBase: BedrockKnowledgeBaseService,
@@ -65,7 +79,12 @@ export class AnswerFlowService {
         private readonly config: ConfigService,
     ) {}
 
-    public async ask(question: string, chooser: ProjectChooser): Promise<AnswerResult> {
+    public async ask(
+        question: string,
+        chooser: ProjectChooser,
+        options?: { allowClarification?: boolean },
+    ): Promise<AnswerResult> {
+        const allowClarification = options?.allowClarification ?? true;
         const store = await this.stores.get();
         const sessionId = await this.config.getOrCreateChatSessionId();
         const session = await store.load(sessionId);
@@ -88,9 +107,16 @@ export class AnswerFlowService {
             session,
             recentTurns,
             chooser,
+            allowClarification,
         });
 
         if (outcome.cancelled) {
+            return { ...outcome, intent: classification.intent, followUps: [] };
+        }
+
+        // A clarification is not an answer: nothing is recorded, so the user's reply is treated as
+        // a fresh question rather than a follow-up to something that was never said.
+        if (outcome.clarification) {
             return { ...outcome, intent: classification.intent, followUps: [] };
         }
 
@@ -133,11 +159,22 @@ export class AnswerFlowService {
         session: ChatSession;
         recentTurns: ChatTurn[];
         chooser: ProjectChooser;
-    }): Promise<{ answer: string; chunks: RetrievedChunk[]; project?: RegistryProject; cancelled: boolean }> {
+        allowClarification: boolean;
+    }): Promise<{
+        answer: string;
+        chunks: RetrievedChunk[];
+        project?: RegistryProject;
+        cancelled: boolean;
+        clarification?: ClarificationRequest;
+    }> {
         const { classification, question, session, recentTurns } = params;
 
         if (classification === QuestionIntent.META) {
             return { answer: await this.describeCorpus(), chunks: [], cancelled: false };
+        }
+
+        if (classification === QuestionIntent.SMALL_TALK) {
+            return { answer: await this.greet(), chunks: [], cancelled: false };
         }
 
         if (classification === QuestionIntent.CONVERSATION) {
@@ -153,6 +190,10 @@ export class AnswerFlowService {
         // report on one project in language that sounds like it covered them all.
         if (params.crossProject) {
             const chunks = await this.retrieveForAnswer(question, undefined, []);
+            const gate = await this.grounding.check({ question, chunks });
+            if (this.shouldClarify(gate, params.allowClarification)) {
+                return { answer: "", chunks, cancelled: false, clarification: this.toClarification(gate) };
+            }
             const answer = await this.mentor.answer({ question, chunks, recentTurns, digest: session.digest });
             return { answer, chunks, cancelled: false };
         }
@@ -177,6 +218,12 @@ export class AnswerFlowService {
         }
 
         const chunks = await this.retrieveForAnswer(question, project, decision.probeChunks);
+
+        const gate = await this.grounding.check({ question, chunks });
+        if (this.shouldClarify(gate, params.allowClarification)) {
+            return { answer: "", chunks, project, cancelled: false, clarification: this.toClarification(gate) };
+        }
+
         const answer = await this.mentor.answer({
             question,
             chunks,
@@ -186,6 +233,39 @@ export class AnswerFlowService {
         });
 
         return { answer, chunks, project, cancelled: false };
+    }
+
+    /**
+     * Whether to stop and ask rather than answer. A failed verdict with no usable questions falls
+     * through to answering instead of leaving the user at a dead end — the answer prompt's own
+     * "never invent" and "name the gaps" rules then carry the weight.
+     */
+    private shouldClarify(
+        gate: { verdict: GroundingVerdict; alternativeQuestions: string[] },
+        allowClarification: boolean,
+    ): boolean {
+        // Never two clarifications in a row. Without this hard stop, each suggested rephrasing can
+        // itself fail the gate and the user is walked through an endless chain of questions
+        // without ever receiving an answer — worse than the wrong answer this gate exists to catch.
+        if (!allowClarification) return false;
+        return gate.verdict !== GroundingVerdict.SUFFICIENT && gate.alternativeQuestions.length > 0;
+    }
+
+    private toClarification(gate: { missing: string; alternativeQuestions: string[] }): ClarificationRequest {
+        return {
+            missing: gate.missing || "I could not find that in the documentation.",
+            questions: gate.alternativeQuestions,
+        };
+    }
+
+    /** Short greeting, answered from the registry with no model call. */
+    private async greet(): Promise<string> {
+        const { projects } = await this.registry.load();
+        if (projects.length === 0) {
+            return "Hello. No project documentation is indexed yet, so ask me a general engineering question and I'll help with that.";
+        }
+        const names = projects.map((p) => p.displayName).join(", ");
+        return `Hello. I can help with ${names}, or with a general engineering question — what would you like to know?`;
     }
 
     /**

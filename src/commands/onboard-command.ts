@@ -439,6 +439,8 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
 
         // Set when the user picks a suggested follow-up, so the next iteration skips the prompt.
         let queuedQuestion: string | undefined;
+        // The question after a clarification must produce an answer, never another clarification.
+        let answeringAClarification = false;
 
         for (;;) {
             const question = queuedQuestion ?? (await this.promptQuestion());
@@ -449,11 +451,32 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
             }
 
             try {
-                const result = await this.withLoading("Thinking", () => this.answerFlow.ask(question, chooser));
+                const allowClarification = !answeringAClarification;
+                answeringAClarification = false;
+                const result = await this.withLoading("Thinking", () =>
+                    this.answerFlow.ask(question, chooser, { allowClarification }),
+                );
 
                 // The user chose to rephrase at the project picker — nothing was answered.
                 if (result.cancelled) {
                     logger.info("");
+                    continue;
+                }
+
+                // The flow could not answer from what it found, so it asks rather than guessing.
+                if (result.clarification) {
+                    logger.info(`\n${result.clarification.missing}`);
+                    logger.info("Did you mean one of these?\n");
+                    const refined = await this.promptFollowUp(
+                        result.clarification.questions.map((question) => ({ question, rationale: "" })),
+                        "Try instead:",
+                    );
+                    if (refined === null) {
+                        logger.info("Exiting.");
+                        return;
+                    }
+                    answeringAClarification = true;
+                    queuedQuestion = refined;
                     continue;
                 }
 
@@ -477,7 +500,7 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
      * Offers the generated follow-ups as selectable options. Returns the chosen question, or
      * undefined to fall back to a free-text prompt, or null to exit.
      */
-    private async promptFollowUp(followUps: FollowUp[]): Promise<string | undefined | null> {
+    private async promptFollowUp(followUps: FollowUp[], message = "What next?"): Promise<string | undefined | null> {
         if (followUps.length === 0 || !process.stdin.isTTY) return undefined;
 
         const ASK_OWN = "__ask_own__";
@@ -485,10 +508,10 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
 
         try {
             const choice = await select<string>({
-                message: "What next?",
+                message,
                 choices: [
                     ...followUps.map((followUp) => ({ name: followUp.question, value: followUp.question })),
-                    { name: "Ask my own question", value: ASK_OWN },
+                    { name: "Let me put it another way", value: ASK_OWN },
                     { name: "Exit", value: EXIT },
                 ],
                 pageSize: followUps.length + 2,

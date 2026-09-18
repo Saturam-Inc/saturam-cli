@@ -8,6 +8,7 @@ describe("AnswerFlowService", () => {
     let classifier: any;
     let router: any;
     let general: any;
+    let grounding: any;
     let mentor: any;
     let followUps: any;
     let knowledgeBase: any;
@@ -31,6 +32,9 @@ describe("AnswerFlowService", () => {
         };
         router = { route: jest.fn().mockResolvedValue({ kind: "resolved", project: smile, probeChunks: [] }) };
         general = { answer: jest.fn().mockResolvedValue("general answer") };
+        grounding = {
+            check: jest.fn().mockResolvedValue({ verdict: "sufficient", missing: "", alternativeQuestions: [] }),
+        };
         mentor = {
             answer: jest.fn().mockResolvedValue("mentor answer"),
             summarize: jest.fn().mockResolvedValue("gist"),
@@ -48,6 +52,7 @@ describe("AnswerFlowService", () => {
             classifier,
             router,
             general,
+            grounding,
             mentor,
             followUps,
             knowledgeBase,
@@ -234,6 +239,86 @@ describe("AnswerFlowService", () => {
             "do any of our projects use Lambda?",
             expect.not.objectContaining({ project: expect.anything() }),
         );
+    });
+
+    it("asks a clarifying question instead of answering from the wrong documents", async () => {
+        // The bug this guards: "do we use Lambda?" retrieved documents about the Llama API and
+        // the answer opened with "Yes, we are using Lambda functions".
+        grounding.check.mockResolvedValueOnce({
+            verdict: "wrong_subject",
+            missing: "No document mentions AWS Lambda; the matches are about the Llama API.",
+            alternativeQuestions: [
+                "Which AWS services does the DE Framework integrate with?",
+                "Where do we run serverless workloads?",
+            ],
+        });
+
+        const result = await flow.ask("do any projects use lambda?", chooser);
+
+        expect(result.clarification?.questions).toHaveLength(2);
+        expect(result.answer).toBe("");
+        expect(mentor.answer).not.toHaveBeenCalled();
+        expect(followUps.suggest).not.toHaveBeenCalled();
+    });
+
+    it("does not record a turn for a clarification, so the reply is a fresh question", async () => {
+        grounding.check.mockResolvedValueOnce({
+            verdict: "wrong_subject",
+            missing: "nothing covers rollback",
+            alternativeQuestions: ["How is the MRF pipeline rolled back?"],
+        });
+
+        await flow.ask("how do I roll back?", chooser);
+
+        expect((await store.load("s1")).turns).toHaveLength(0);
+    });
+
+    it("answers anyway when the gate objects but offers no usable question", async () => {
+        grounding.check.mockResolvedValueOnce({
+            verdict: "wrong_subject",
+            missing: "partial coverage",
+            alternativeQuestions: [],
+        });
+
+        const result = await flow.ask("how do refunds work?", chooser);
+
+        expect(result.clarification).toBeUndefined();
+        expect(result.answer).toBe("mentor answer");
+    });
+
+    it("greets briefly instead of dumping a conversation recap", async () => {
+        // "hi" used to be classified as a recap request and printed the last five questions.
+        classifier.classify.mockResolvedValueOnce({
+            intent: QuestionIntent.SMALL_TALK,
+            projectHints: [],
+            crossProject: false,
+            resolvedQuestion: "hi",
+            reasoning: "",
+        });
+
+        const result = await flow.ask("hi", chooser);
+
+        expect(result.answer).toContain("SMILE");
+        expect(knowledgeBase.retrieve).not.toHaveBeenCalled();
+        expect(mentor.answer).not.toHaveBeenCalled();
+    });
+
+    it("never asks for clarification twice in a row", async () => {
+        // The bug this guards: each suggested rephrasing failed the gate in turn, walking the user
+        // through eight rounds of questions without ever producing an answer.
+        grounding.check.mockResolvedValue({
+            verdict: "wrong_subject",
+            missing: "not covered",
+            alternativeQuestions: ["a sharper question?"],
+        });
+
+        const first = await flow.ask("how does SMILE work?", chooser);
+        expect(first.clarification).toBeDefined();
+
+        const second = await flow.ask("a sharper question?", chooser, { allowClarification: false });
+
+        expect(second.clarification).toBeUndefined();
+        expect(second.answer).toBe("mentor answer");
     });
 
     it("persists the turn with its gist and makes the project sticky", async () => {
