@@ -1,8 +1,10 @@
 import { AnswerFlowService, ProjectChooser } from "../../../src/services/knowledge/answer-flow.service";
 import { QuestionIntent, createEmptySession } from "../../../src/services/knowledge/chat-session.model";
 import { InMemoryConversationStore } from "../../../src/services/knowledge/conversation-store";
+import { getOwnerId } from "../../../src/services/knowledge/session-identity";
 
 const smile = { slug: "smile", displayName: "SMILE", aliases: [], sources: [] };
+const ref = (sessionId: string) => ({ ownerId: getOwnerId(), sessionId });
 
 describe("AnswerFlowService", () => {
     let classifier: any;
@@ -18,6 +20,7 @@ describe("AnswerFlowService", () => {
     let stores: any;
     let config: any;
     let chooser: jest.Mocked<ProjectChooser>;
+    let loadCurrent: () => Promise<any>;
     let flow: AnswerFlowService;
 
     beforeEach(() => {
@@ -45,8 +48,13 @@ describe("AnswerFlowService", () => {
         digest = { shouldRefresh: jest.fn().mockReturnValue(false), refresh: jest.fn() };
         store = new InMemoryConversationStore();
         stores = { get: jest.fn().mockResolvedValue(store) };
-        config = { getOrCreateChatSessionId: jest.fn().mockResolvedValue("s1") };
+        config = {};
         chooser = { choose: jest.fn() };
+        // The flow picks its own session, so tests read back whichever one it used.
+        loadCurrent = async () => {
+            const [latest] = await store.findRecentSessionIds(getOwnerId(), 1);
+            return store.load(ref(latest));
+        };
 
         flow = new AnswerFlowService(
             classifier,
@@ -179,7 +187,7 @@ describe("AnswerFlowService", () => {
     it("recalls the conversation instead of re-explaining the topic", async () => {
         // The bug this guards: "what was I asking about?" used to run the full pipeline and
         // re-explain the subject at length instead of simply recalling it.
-        await store.appendTurn("s1", {
+        await store.appendTurn(ref("s1"), {
             index: 0,
             question: "how does the ARAP data mart work?",
             answer: "long answer",
@@ -187,7 +195,7 @@ describe("AnswerFlowService", () => {
             intent: QuestionIntent.PROJECT_KNOWLEDGE,
             resolvedProject: "smile",
             retrievedChunkIds: [],
-            createdAt: new Date().toISOString(),
+            createdAt: new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString(),
         });
         classifier.classify.mockResolvedValueOnce({
             intent: QuestionIntent.CONVERSATION,
@@ -222,7 +230,7 @@ describe("AnswerFlowService", () => {
     it("searches every project when the question spans projects", async () => {
         // "do any of our projects use Lambda?" must not inherit the sticky project, or the answer
         // reports on one project while sounding like it covered them all.
-        await store.saveActiveProject("s1", "smile");
+        await store.saveActiveProject(ref("s1"), "smile");
         classifier.classify.mockResolvedValueOnce({
             intent: QuestionIntent.PROJECT_KNOWLEDGE,
             projectHints: [],
@@ -270,7 +278,7 @@ describe("AnswerFlowService", () => {
 
         await flow.ask("how do I roll back?", chooser);
 
-        expect((await store.load("s1")).turns).toHaveLength(0);
+        expect((await store.load(ref("s1"))).turns).toHaveLength(0);
     });
 
     it("answers anyway when the gate objects but offers no usable question", async () => {
@@ -321,10 +329,73 @@ describe("AnswerFlowService", () => {
         expect(second.answer).toBe("mentor answer");
     });
 
+    it("starts a new session when the previous conversation has gone cold", async () => {
+        await store.appendTurn(ref("s1"), {
+            index: 0,
+            question: "yesterday's question",
+            answer: "a",
+            answerGist: "g",
+            intent: QuestionIntent.PROJECT_KNOWLEDGE,
+            resolvedProject: "smile",
+            retrievedChunkIds: [],
+            createdAt: new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString(),
+        });
+
+        await flow.ask("a brand new question", chooser);
+
+        const [latest] = await store.findRecentSessionIds(getOwnerId(), 1);
+        expect(latest).not.toBe("s1");
+        // The stale turn must not leak into the new conversation's history.
+        expect((await store.load(ref(latest))).turns.map((t) => t.question)).toEqual(["a brand new question"]);
+    });
+
+    it("keeps appending while the conversation is still active", async () => {
+        await store.appendTurn(ref("s1"), {
+            index: 0,
+            question: "a minute ago",
+            answer: "a",
+            answerGist: "g",
+            intent: QuestionIntent.PROJECT_KNOWLEDGE,
+            retrievedChunkIds: [],
+            createdAt: new Date().toISOString(),
+        });
+
+        await flow.ask("still going", chooser);
+
+        // Same conversation continued, not rotated away.
+        expect(await store.findRecentSessionIds(getOwnerId(), 5)).toEqual(["s1"]);
+        expect((await store.load(ref("s1"))).turns).toHaveLength(2);
+    });
+
+    it("recalls the previous conversation when this one has only just started", async () => {
+        await store.appendTurn(ref("older"), {
+            index: 0,
+            question: "what bugs were in the generator?",
+            answer: "a",
+            answerGist: "twenty bugs across the synthetic data generator",
+            intent: QuestionIntent.PROJECT_KNOWLEDGE,
+            resolvedProject: "saturam",
+            retrievedChunkIds: [],
+            createdAt: new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString(),
+        });
+        classifier.classify.mockResolvedValueOnce({
+            intent: QuestionIntent.CONVERSATION,
+            projectHints: [],
+            crossProject: false,
+            resolvedQuestion: "what did we discuss last time?",
+            reasoning: "",
+        });
+
+        const result = await flow.ask("what did we discuss last time?", chooser);
+
+        expect(result.answer).toContain("earlier conversation");
+        expect(result.answer).toContain("twenty bugs");
+    });
+
     it("persists the turn with its gist and makes the project sticky", async () => {
         await flow.ask("how do refunds work?", chooser);
 
-        const session = await store.load("s1");
+        const session = await loadCurrent();
         expect(session.turns).toHaveLength(1);
         expect(session.turns[0]).toMatchObject({
             question: "how do refunds work?",
@@ -346,7 +417,7 @@ describe("AnswerFlowService", () => {
 
         await flow.ask("how do refunds work?", chooser);
 
-        const session = await store.load("s1");
+        const session = await loadCurrent();
         expect(session.digest?.summary).toBe("s");
     });
 

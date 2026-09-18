@@ -4,19 +4,44 @@ import { resolveAwsClientConfig } from "../../integrations/aws/utils/aws-credent
 import { ConfigService } from "../config-service";
 import { ChatSession, ChatTurn, MAX_RETAINED_TURNS, QuestionIntent, SessionDigest } from "./chat-session.model";
 import { ConversationStore, InMemoryConversationStore } from "./conversation-store";
+import { SessionRef } from "./session-identity";
 
 const logger = getLogger("DynamoConversationStore");
 
-const META_SORT_KEY = "meta";
-const TURN_SORT_PREFIX = "turn#";
+const SESSION_SORT_PREFIX = "session#";
 
-/** Zero-pads a turn index so lexicographic sort-key ordering matches numeric ordering. */
-function turnSortKey(index: number): string {
-    return `${TURN_SORT_PREFIX}${String(index).padStart(6, "0")}`;
+/** Bounded so a pathological collision loop cannot hang the answer that produced the turn. */
+const APPEND_MAX_ATTEMPTS = 5;
+
+/** Items scanned when listing an owner's recent sessions. */
+const RECENT_SESSION_SCAN_LIMIT = 200;
+
+/**
+ * Sort keys are "session#<id>#meta" and "session#<id>#turn#<index>". Session ids sort
+ * chronologically, so the newest session is simply the largest sort key under the owner — that is
+ * what makes "continue the conversation already in progress" one descending query.
+ */
+function sessionPrefix(sessionId: string): string {
+    return `${SESSION_SORT_PREFIX}${sessionId}#`;
 }
 
-function partitionKey(sessionId: string): string {
-    return `session#${sessionId}`;
+function metaSortKey(sessionId: string): string {
+    return `${sessionPrefix(sessionId)}meta`;
+}
+
+/** Zero-pads the index so lexicographic ordering matches numeric ordering past turn 9. */
+function turnSortKey(sessionId: string, index: number): string {
+    return `${sessionPrefix(sessionId)}turn#${String(index).padStart(6, "0")}`;
+}
+
+function turnPrefix(sessionId: string): string {
+    return `${sessionPrefix(sessionId)}turn#`;
+}
+
+/** Recovers the session id from any of that session's sort keys. */
+export function sessionIdFromSortKey(sk: string): string | undefined {
+    const match = /^session#([^#]+)#/.exec(sk);
+    return match?.[1];
 }
 
 /**
@@ -84,43 +109,89 @@ export class DynamoDbConversationStore implements ConversationStore {
         return Math.floor(Date.now() / 1000) + ttlDays * 24 * 60 * 60;
     }
 
-    public async load(sessionId: string): Promise<ChatSession> {
-        if (this.degraded) return this.fallback.load(sessionId);
+    /** Session ids for this owner, newest first — the newest is the conversation to continue. */
+    public async findRecentSessionIds(ownerId: string, limit: number): Promise<string[]> {
+        if (this.degraded) return this.fallback.findRecentSessionIds(ownerId, limit);
 
         try {
             const { tableName, region } = await this.requireTable();
             const { QueryCommand } = await import("@aws-sdk/lib-dynamodb");
             const client = await this.getClient(region);
 
-            // Descending so the newest MAX_RETAINED_TURNS come back regardless of session length,
-            // then reversed into chronological order for the callers that build message pairs.
+            // Descending over the owner's items: because session ids sort chronologically, the
+            // first distinct session encountered is the most recent one.
             const response = await client.send(
                 new QueryCommand({
                     TableName: tableName,
-                    KeyConditionExpression: "pk = :pk",
-                    ExpressionAttributeValues: { ":pk": partitionKey(sessionId) },
+                    KeyConditionExpression: "pk = :pk AND begins_with(sk, :prefix)",
+                    ExpressionAttributeValues: { ":pk": ownerId, ":prefix": SESSION_SORT_PREFIX },
+                    ProjectionExpression: "sk",
                     ScanIndexForward: false,
-                    Limit: MAX_RETAINED_TURNS + 1,
+                    Limit: RECENT_SESSION_SCAN_LIMIT,
                 }),
             );
 
-            const items = response.Items ?? [];
-            const meta = items.find((item) => item.sk === META_SORT_KEY);
-            const turns = items
-                .filter((item) => typeof item.sk === "string" && item.sk.startsWith(TURN_SORT_PREFIX))
+            const seen: string[] = [];
+            for (const item of response.Items ?? []) {
+                const sessionId = typeof item.sk === "string" ? sessionIdFromSortKey(item.sk) : undefined;
+                if (sessionId && !seen.includes(sessionId)) {
+                    seen.push(sessionId);
+                    if (seen.length >= limit) break;
+                }
+            }
+            return seen;
+        } catch (err) {
+            this.degrade(err);
+            return this.fallback.findRecentSessionIds(ownerId, limit);
+        }
+    }
+
+    public async load(ref: SessionRef): Promise<ChatSession> {
+        if (this.degraded) return this.fallback.load(ref);
+
+        try {
+            const { tableName, region } = await this.requireTable();
+            const { QueryCommand } = await import("@aws-sdk/lib-dynamodb");
+            const client = await this.getClient(region);
+
+            // Two queries rather than one. "meta" sorts before every "turn#..." key, so a single
+            // limited query can stop before reaching one of them — silently losing either the
+            // turns or the active project. Both calls use Query, so no extra IAM action is needed.
+            const [turnPage, metaPage] = await Promise.all([
+                client.send(
+                    new QueryCommand({
+                        TableName: tableName,
+                        KeyConditionExpression: "pk = :pk AND begins_with(sk, :prefix)",
+                        ExpressionAttributeValues: { ":pk": ref.ownerId, ":prefix": turnPrefix(ref.sessionId) },
+                        ScanIndexForward: false,
+                        Limit: MAX_RETAINED_TURNS,
+                    }),
+                ),
+                client.send(
+                    new QueryCommand({
+                        TableName: tableName,
+                        KeyConditionExpression: "pk = :pk AND sk = :sk",
+                        ExpressionAttributeValues: { ":pk": ref.ownerId, ":sk": metaSortKey(ref.sessionId) },
+                        Limit: 1,
+                    }),
+                ),
+            ]);
+
+            const meta = metaPage.Items?.[0];
+            const turns = (turnPage.Items ?? [])
                 .map((item) => this.toTurn(item))
                 .sort((a, b) => a.index - b.index)
                 .slice(-MAX_RETAINED_TURNS);
 
             return {
-                sessionId,
+                sessionId: ref.sessionId,
                 turns,
                 activeProject: typeof meta?.activeProject === "string" ? meta.activeProject : undefined,
                 digest: (meta?.digest as SessionDigest | undefined) ?? undefined,
             };
         } catch (err) {
             this.degrade(err);
-            return this.fallback.load(sessionId);
+            return this.fallback.load(ref);
         }
     }
 
@@ -137,45 +208,85 @@ export class DynamoDbConversationStore implements ConversationStore {
         };
     }
 
-    public async appendTurn(sessionId: string, turn: ChatTurn): Promise<void> {
-        if (this.degraded) return this.fallback.appendTurn(sessionId, turn);
+    /**
+     * Appends a turn, never overwriting one that already exists at that index.
+     *
+     * The index comes from the caller's view of the conversation, so two terminals sharing a
+     * session can compute the same one. A plain put would let the later write silently replace the
+     * earlier answer. The conditional write turns that into a detectable collision, and the retry
+     * places the turn after whatever landed first.
+     */
+    public async appendTurn(ref: SessionRef, turn: ChatTurn): Promise<void> {
+        if (this.degraded) return this.fallback.appendTurn(ref, turn);
 
         try {
             const { tableName, region, ttlDays } = await this.requireTable();
             const { PutCommand } = await import("@aws-sdk/lib-dynamodb");
             const client = await this.getClient(region);
 
-            await client.send(
-                new PutCommand({
-                    TableName: tableName,
-                    Item: {
-                        pk: partitionKey(sessionId),
-                        sk: turnSortKey(turn.index),
-                        ...turn,
-                        expiresAt: this.expiresAt(ttlDays),
-                    },
-                }),
-            );
+            let index = turn.index;
+            for (let attempt = 0; attempt < APPEND_MAX_ATTEMPTS; attempt += 1) {
+                try {
+                    await client.send(
+                        new PutCommand({
+                            TableName: tableName,
+                            Item: {
+                                pk: ref.ownerId,
+                                sk: turnSortKey(ref.sessionId, index),
+                                sessionId: ref.sessionId,
+                                ...turn,
+                                index,
+                                expiresAt: this.expiresAt(ttlDays),
+                            },
+                            ConditionExpression: "attribute_not_exists(sk)",
+                        }),
+                    );
+                    return;
+                } catch (err) {
+                    if ((err as Error).name !== "ConditionalCheckFailedException") throw err;
+                    index = (await this.highestTurnIndex(ref, tableName, region)) + 1;
+                    logger.debug(`Turn index taken by a concurrent write — retrying at ${index}.`);
+                }
+            }
+
+            logger.warn(`Could not find a free turn index after ${APPEND_MAX_ATTEMPTS} attempts — turn not stored.`);
         } catch (err) {
             this.degrade(err);
-            await this.fallback.appendTurn(sessionId, turn);
+            await this.fallback.appendTurn(ref, turn);
         }
     }
 
-    public async saveDigest(sessionId: string, digest: SessionDigest): Promise<void> {
-        await this.updateMeta(sessionId, "digest", digest);
+    /** Highest turn index currently stored for a session, or -1 when it has no turns yet. */
+    private async highestTurnIndex(ref: SessionRef, tableName: string, region: string): Promise<number> {
+        const { QueryCommand } = await import("@aws-sdk/lib-dynamodb");
+        const client = await this.getClient(region);
+        const newest = await client.send(
+            new QueryCommand({
+                TableName: tableName,
+                KeyConditionExpression: "pk = :pk AND begins_with(sk, :prefix)",
+                ExpressionAttributeValues: { ":pk": ref.ownerId, ":prefix": turnPrefix(ref.sessionId) },
+                ScanIndexForward: false,
+                Limit: 1,
+            }),
+        );
+        const top = newest.Items?.[0];
+        return typeof top?.index === "number" ? top.index : -1;
     }
 
-    public async saveActiveProject(sessionId: string, project: string | undefined): Promise<void> {
-        await this.updateMeta(sessionId, "activeProject", project);
+    public async saveDigest(ref: SessionRef, digest: SessionDigest): Promise<void> {
+        await this.updateMeta(ref, "digest", digest);
+    }
+
+    public async saveActiveProject(ref: SessionRef, project: string | undefined): Promise<void> {
+        await this.updateMeta(ref, "activeProject", project);
     }
 
     /**
-     * Writes one attribute on the session's `meta` item, creating it if absent. An update (rather
-     * than a put) so the digest and the active project do not clobber one another.
+     * Writes one attribute on the session's meta item, creating it if absent. An update rather
+     * than a put, so the digest and the active project do not clobber one another.
      */
-    private async updateMeta(sessionId: string, attribute: "digest" | "activeProject", value: unknown): Promise<void> {
-        if (this.degraded) return this.writeMetaToFallback(sessionId, attribute, value);
+    private async updateMeta(ref: SessionRef, attribute: "digest" | "activeProject", value: unknown): Promise<void> {
+        if (this.degraded) return this.writeMetaToFallback(ref, attribute, value);
 
         try {
             const { tableName, region, ttlDays } = await this.requireTable();
@@ -185,27 +296,31 @@ export class DynamoDbConversationStore implements ConversationStore {
             await client.send(
                 new UpdateCommand({
                     TableName: tableName,
-                    Key: { pk: partitionKey(sessionId), sk: META_SORT_KEY },
-                    UpdateExpression: "SET #attr = :value, expiresAt = :expiresAt",
+                    Key: { pk: ref.ownerId, sk: metaSortKey(ref.sessionId) },
+                    UpdateExpression: "SET #attr = :value, sessionId = :sessionId, expiresAt = :expiresAt",
                     ExpressionAttributeNames: { "#attr": attribute },
-                    ExpressionAttributeValues: { ":value": value ?? null, ":expiresAt": this.expiresAt(ttlDays) },
+                    ExpressionAttributeValues: {
+                        ":value": value ?? null,
+                        ":sessionId": ref.sessionId,
+                        ":expiresAt": this.expiresAt(ttlDays),
+                    },
                 }),
             );
         } catch (err) {
             this.degrade(err);
-            await this.writeMetaToFallback(sessionId, attribute, value);
+            await this.writeMetaToFallback(ref, attribute, value);
         }
     }
 
     private async writeMetaToFallback(
-        sessionId: string,
+        ref: SessionRef,
         attribute: "digest" | "activeProject",
         value: unknown,
     ): Promise<void> {
         if (attribute === "digest") {
-            await this.fallback.saveDigest(sessionId, value as SessionDigest);
+            await this.fallback.saveDigest(ref, value as SessionDigest);
         } else {
-            await this.fallback.saveActiveProject(sessionId, value as string | undefined);
+            await this.fallback.saveActiveProject(ref, value as string | undefined);
         }
     }
 }

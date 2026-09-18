@@ -1,4 +1,3 @@
-import { randomUUID } from "crypto";
 import { existsSync, statSync } from "fs";
 import { chmod, mkdir, readFile, unlink, writeFile } from "fs/promises";
 import { homedir } from "os";
@@ -140,7 +139,6 @@ export const PersonalConfigurationSchema = z.object({
         .optional()
         .describe("Configured cloud providers (AWS/Azure/GCP) for storage & retrieval"),
     defaultCloudProvider: z.nativeEnum(CloudProvider).optional().describe("Default cloud provider"),
-    chatSessionId: z.string().optional().describe("Stable id for knowledge-base chat history"),
 });
 
 export type PersonalConfiguration = z.infer<typeof PersonalConfigurationSchema>;
@@ -681,29 +679,6 @@ export class ConfigService {
             return undefined;
         }
         return { tableName: table.tableName, region, ttlDays: table.ttlDays ?? 90 };
-    }
-
-    // --- Chat Session Tracking ---
-
-    /**
-     * A stable id for this machine's chat history, generated once and persisted. Without it
-     * DynamoDB memory would be worth no more than the in-memory store, since a later run would
-     * have no way to find the previous session.
-     */
-    public async getOrCreateChatSessionId(): Promise<string> {
-        const config = await this.loadPersonalConfig();
-        if (config.chatSessionId) return config.chatSessionId;
-
-        const sessionId = randomUUID();
-        await this.savePersonalConfig({ ...config, chatSessionId: sessionId });
-        return sessionId;
-    }
-
-    public async resetChatSessionId(): Promise<string> {
-        const config = await this.loadPersonalConfig();
-        const sessionId = randomUUID();
-        await this.savePersonalConfig({ ...config, chatSessionId: sessionId });
-        return sessionId;
     }
 
     // --- Atlassian Credentials Helper ---

@@ -54,8 +54,6 @@ describe("OnboardCommand Dual-Mode Routing", () => {
             hasAnyLLMProviderConfigured: jest.fn().mockResolvedValue(true),
             getOnboardingSheetId: jest.fn().mockResolvedValue(undefined),
             setOnboardingSheetId: jest.fn().mockResolvedValue(undefined),
-            resetChatSessionId: jest.fn().mockResolvedValue("new-session-id"),
-            getOrCreateChatSessionId: jest.fn().mockResolvedValue("session-id"),
         } as any;
 
         mockOnboardingConfig = {
@@ -74,6 +72,7 @@ describe("OnboardCommand Dual-Mode Routing", () => {
         } as any;
 
         mockAnswerFlow = {
+            startNewSession: jest.fn(),
             ask: jest.fn().mockResolvedValue({
                 answer: "an answer",
                 chunks: [],
@@ -466,7 +465,7 @@ describe("OnboardCommand Dual-Mode Routing", () => {
 
             await command.execute({ ...chatInputs, "new-session": true });
 
-            expect(mockConfigService.resetChatSessionId).toHaveBeenCalled();
+            expect(mockAnswerFlow.startNewSession).toHaveBeenCalled();
         });
 
         it("offers the generated follow-ups and asks the selected one next", async () => {

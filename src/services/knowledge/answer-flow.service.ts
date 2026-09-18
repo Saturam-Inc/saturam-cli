@@ -11,7 +11,8 @@ import { GroundingCheckAgent, GroundingVerdict } from "./agents/grounding-check.
 import { IntentClassifierAgent } from "./agents/intent-classifier.agent";
 import { MentorAnswererAgent } from "./agents/mentor-answerer.agent";
 import { ProjectCandidate, ProjectRouterAgent } from "./agents/project-router.agent";
-import { ChatSession, ChatTurn, QuestionIntent, VERBATIM_TURN_WINDOW } from "./chat-session.model";
+import { ChatSession, ChatTurn, QuestionIntent, VERBATIM_TURN_WINDOW, isSessionStale } from "./chat-session.model";
+import { SessionRef, describeOwner, getOwnerId, newSessionId } from "./session-identity";
 import { ConversationStoreProvider } from "./dynamodb-conversation-store";
 import { ProjectRegistryService, RegistryProject } from "./project-registry.service";
 import { SessionDigestService } from "./session-digest.service";
@@ -65,6 +66,11 @@ export interface AnswerResult {
  */
 @Service()
 export class AnswerFlowService {
+    /** The conversation this process is in, once resolved. */
+    private currentRef: SessionRef | undefined;
+    /** Set by startNewSession, consumed by the next resolve. */
+    private forcedSession: SessionRef | undefined;
+
     constructor(
         private readonly classifier: IntentClassifierAgent,
         private readonly router: ProjectRouterAgent,
@@ -86,8 +92,7 @@ export class AnswerFlowService {
     ): Promise<AnswerResult> {
         const allowClarification = options?.allowClarification ?? true;
         const store = await this.stores.get();
-        const sessionId = await this.config.getOrCreateChatSessionId();
-        const session = await store.load(sessionId);
+        const { ref, session } = await this.resolveSession(store);
         const recentTurns = session.turns.slice(-VERBATIM_TURN_WINDOW);
 
         const classification = await this.classifier.classify({
@@ -105,6 +110,7 @@ export class AnswerFlowService {
             crossProject: classification.crossProject,
             question: effectiveQuestion,
             session,
+            sessionRef: ref,
             recentTurns,
             chooser,
             allowClarification,
@@ -135,6 +141,7 @@ export class AnswerFlowService {
 
         await this.recordTurn({
             store,
+            ref,
             session,
             turn: {
                 index: session.turns.length,
@@ -157,6 +164,7 @@ export class AnswerFlowService {
         crossProject: boolean;
         question: string;
         session: ChatSession;
+        sessionRef: SessionRef;
         recentTurns: ChatTurn[];
         chooser: ProjectChooser;
         allowClarification: boolean;
@@ -178,7 +186,7 @@ export class AnswerFlowService {
         }
 
         if (classification === QuestionIntent.CONVERSATION) {
-            return { answer: this.recapConversation(session), chunks: [], cancelled: false };
+            return { answer: await this.recall(session, params.sessionRef), chunks: [], cancelled: false };
         }
 
         if (classification === QuestionIntent.GENERAL_TECHNICAL) {
@@ -294,6 +302,66 @@ export class AnswerFlowService {
     }
 
     /**
+     * Resolves which conversation this question belongs to.
+     *
+     * Sessions hang off the owner — this machine and OS user — rather than off a stored id, so a
+     * second terminal continues the conversation already in progress instead of starting blind.
+     * A conversation left idle past the timeout is not resumed: picking up yesterday's thread
+     * would mix unrelated work into a recap and scope a fresh question to an old topic.
+     */
+    private async resolveSession(
+        store: Awaited<ReturnType<ConversationStoreProvider["get"]>>,
+    ): Promise<{ ref: SessionRef; session: ChatSession }> {
+        const ownerId = getOwnerId();
+
+        if (this.forcedSession) {
+            const ref = this.forcedSession;
+            this.forcedSession = undefined;
+            this.currentRef = ref;
+            return { ref, session: await store.load(ref) };
+        }
+
+        // A process joins a conversation once and stays in it until that conversation goes cold.
+        // Re-picking the newest session every turn would yank a terminal mid-conversation into one
+        // another terminal had just started, which is more surprising than useful.
+        const [latest] = this.currentRef ? [this.currentRef.sessionId] : await store.findRecentSessionIds(ownerId, 1);
+
+        if (latest) {
+            const ref = { ownerId, sessionId: latest };
+            const session = await store.load(ref);
+            if (!isSessionStale(session)) {
+                this.currentRef = ref;
+                return { ref, session };
+            }
+            logger.debug(`Last conversation for ${describeOwner(ownerId)} has gone cold — starting a new one.`);
+        }
+
+        const ref = { ownerId, sessionId: newSessionId() };
+        this.currentRef = ref;
+        return { ref, session: await store.load(ref) };
+    }
+
+    /**
+     * Recalls the conversation. When the current session is still empty — the usual case in a
+     * fresh terminal after the last one went cold — it recalls the previous session instead,
+     * which is what "what did we discuss last time?" actually means.
+     */
+    private async recall(session: ChatSession, ref: SessionRef): Promise<string> {
+        if (session.turns.length > 0) return this.recapConversation(session);
+
+        const store = await this.stores.get();
+        const recent = await store.findRecentSessionIds(ref.ownerId, 2);
+        const previousId = recent.find((id) => id !== ref.sessionId);
+        if (previousId) {
+            const previous = await store.load({ ownerId: ref.ownerId, sessionId: previousId });
+            if (previous.turns.length > 0) {
+                return `That was in an earlier conversation:\n\n${this.recapConversation(previous)}`;
+            }
+        }
+        return this.recapConversation(session);
+    }
+
+    /**
      * Answers "what was I asking about?" from session history, with no retrieval and no model
      * call. Running the normal pipeline here re-explains the topic in full, which is not what
      * someone asking to be reminded actually wants.
@@ -346,21 +414,28 @@ export class AnswerFlowService {
 
     private async recordTurn(params: {
         store: Awaited<ReturnType<ConversationStoreProvider["get"]>>;
+        ref: SessionRef;
         session: ChatSession;
         turn: ChatTurn;
     }): Promise<void> {
-        const { store, session, turn } = params;
-        await store.appendTurn(session.sessionId, turn);
+        const { store, ref, session, turn } = params;
+        await store.appendTurn(ref, turn);
 
         if (turn.resolvedProject && turn.resolvedProject !== session.activeProject) {
-            await store.saveActiveProject(session.sessionId, turn.resolvedProject);
+            await store.saveActiveProject(ref, turn.resolvedProject);
             session.activeProject = turn.resolvedProject;
         }
 
         const updated: ChatSession = { ...session, turns: [...session.turns, turn] };
         if (this.digest.shouldRefresh(updated)) {
             const refreshed = await this.digest.refresh(updated);
-            if (refreshed) await store.saveDigest(session.sessionId, refreshed);
+            if (refreshed) await store.saveDigest(ref, refreshed);
         }
+    }
+
+    /** Starts a fresh conversation for the next question, ignoring whatever is in progress. */
+    public startNewSession(): void {
+        this.forcedSession = { ownerId: getOwnerId(), sessionId: newSessionId() };
+        this.currentRef = undefined;
     }
 }

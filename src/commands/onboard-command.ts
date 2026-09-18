@@ -424,7 +424,7 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
         }
 
         if (newSession) {
-            await this.configService.resetChatSessionId();
+            this.answerFlow.startNewSession();
             logger.info("Started a new conversation.");
         }
 

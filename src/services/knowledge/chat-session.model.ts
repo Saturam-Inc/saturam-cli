@@ -78,6 +78,24 @@ export const DIGEST_REFRESH_INTERVAL = 5;
 /** Turns retained in a session; older ones survive only through the digest. */
 export const MAX_RETAINED_TURNS = 20;
 
+/**
+ * How long a conversation can sit idle before the next question starts a new session. Picking up
+ * yesterday's conversation is rarely what someone means by "continue" — a recap would mix
+ * unrelated work, and the sticky project would silently scope a fresh question to an old topic.
+ */
+export const SESSION_IDLE_HOURS = 4;
+
+/** Whether a session has been idle long enough that the next question should start a new one. */
+export function isSessionStale(session: ChatSession, now = Date.now()): boolean {
+    const last = session.turns[session.turns.length - 1];
+    if (!last) return false;
+
+    const lastActivity = Date.parse(last.createdAt);
+    if (Number.isNaN(lastActivity)) return false;
+
+    return now - lastActivity > SESSION_IDLE_HOURS * 60 * 60 * 1000;
+}
+
 export function createEmptySession(sessionId: string): ChatSession {
     return { sessionId, turns: [] };
 }
