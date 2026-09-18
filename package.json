@@ -23,7 +23,8 @@
         "check": "tsc --noEmit",
         "test": "jest --runInBand",
         "fix:lint": "eslint --fix .",
-        "fix:format": "prettier --write ."
+        "fix:format": "prettier --write .",
+        "test:eval": "jest --config jest.eval.config.ts --runInBand"
     },
     "keywords": [
         "cli"
@@ -43,8 +44,10 @@
     },
     "dependencies": {
         "@aws-sdk/client-bedrock-agent-runtime": "^3.687.0",
+        "@aws-sdk/client-dynamodb": "^3.687.0",
         "@aws-sdk/client-s3": "^3.687.0",
         "@aws-sdk/credential-providers": "^3.687.0",
+        "@aws-sdk/lib-dynamodb": "^3.687.0",
         "@inquirer/prompts": "^7.0.1",
         "@langchain/anthropic": "^0.3.22",
         "@langchain/aws": "^0.1.11",

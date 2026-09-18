@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import { existsSync, statSync } from "fs";
 import { chmod, mkdir, readFile, unlink, writeFile } from "fs/promises";
 import { homedir } from "os";
@@ -77,6 +78,14 @@ export const CloudProviderConfigSchema = z.object({
         })
         .optional()
         .describe("Bedrock Knowledge Base retrieval configuration"),
+    conversationTable: z
+        .object({
+            tableName: z.string().describe("DynamoDB table holding conversation history"),
+            region: z.string().optional().describe("Table region (defaults to awsRegion)"),
+            ttlDays: z.number().int().positive().optional().describe("Days before a session expires"),
+        })
+        .optional()
+        .describe("DynamoDB conversation memory configuration"),
 });
 
 export type CloudProviderConfig = z.infer<typeof CloudProviderConfigSchema>;
@@ -131,6 +140,7 @@ export const PersonalConfigurationSchema = z.object({
         .optional()
         .describe("Configured cloud providers (AWS/Azure/GCP) for storage & retrieval"),
     defaultCloudProvider: z.nativeEnum(CloudProvider).optional().describe("Default cloud provider"),
+    chatSessionId: z.string().optional().describe("Stable id for knowledge-base chat history"),
 });
 
 export type PersonalConfiguration = z.infer<typeof PersonalConfigurationSchema>;
@@ -650,6 +660,50 @@ export class ConfigService {
             dataSourceId: cloudConfig.bedrockKnowledgeBase.dataSourceId,
             region,
         };
+    }
+
+    /**
+     * Conversation memory table, or undefined when none is configured — the caller then falls
+     * back to the in-memory store rather than failing, so the chat flow works without AWS access.
+     */
+    public async getConversationTableConfig(): Promise<
+        { tableName: string; region: string; ttlDays: number } | undefined
+    > {
+        const cloudConfig = await this.getCloudConfig(CloudProvider.AWS);
+        const table = cloudConfig?.conversationTable;
+        if (!table) return undefined;
+
+        const region = table.region ?? cloudConfig?.awsRegion;
+        if (!region) {
+            logger.warn(
+                "A conversation table is configured but no region was resolved — falling back to in-memory conversation history.",
+            );
+            return undefined;
+        }
+        return { tableName: table.tableName, region, ttlDays: table.ttlDays ?? 90 };
+    }
+
+    // --- Chat Session Tracking ---
+
+    /**
+     * A stable id for this machine's chat history, generated once and persisted. Without it
+     * DynamoDB memory would be worth no more than the in-memory store, since a later run would
+     * have no way to find the previous session.
+     */
+    public async getOrCreateChatSessionId(): Promise<string> {
+        const config = await this.loadPersonalConfig();
+        if (config.chatSessionId) return config.chatSessionId;
+
+        const sessionId = randomUUID();
+        await this.savePersonalConfig({ ...config, chatSessionId: sessionId });
+        return sessionId;
+    }
+
+    public async resetChatSessionId(): Promise<string> {
+        const config = await this.loadPersonalConfig();
+        const sessionId = randomUUID();
+        await this.savePersonalConfig({ ...config, chatSessionId: sessionId });
+        return sessionId;
     }
 
     // --- Atlassian Credentials Helper ---

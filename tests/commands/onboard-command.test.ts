@@ -1,13 +1,15 @@
-import { input } from "@inquirer/prompts";
+import { input, select } from "@inquirer/prompts";
 import { OnboardCommand } from "../../src/commands/onboard-command";
 import { OnboardService } from "../../src/services/onboarding/onboard.service";
 import { ConfigService } from "../../src/services/config-service";
 import { OnboardingConfigService } from "../../src/services/onboarding/onboarding-config.service";
 import { KnowledgeBaseChatService } from "../../src/services/knowledge/knowledge-base-chat.service";
+import { AnswerFlowService } from "../../src/services/knowledge/answer-flow.service";
 import { WorkingDirectory } from "../../src/utils/working-directory";
 
 jest.mock("@inquirer/prompts", () => ({
     input: jest.fn(),
+    select: jest.fn(),
 }));
 
 describe("OnboardCommand Dual-Mode Routing", () => {
@@ -16,6 +18,7 @@ describe("OnboardCommand Dual-Mode Routing", () => {
     let mockConfigService: jest.Mocked<ConfigService>;
     let mockOnboardingConfig: jest.Mocked<OnboardingConfigService>;
     let mockChatService: jest.Mocked<KnowledgeBaseChatService>;
+    let mockAnswerFlow: jest.Mocked<AnswerFlowService>;
     let dir: WorkingDirectory;
     let originalStdinIsTTY: boolean | undefined;
 
@@ -51,6 +54,8 @@ describe("OnboardCommand Dual-Mode Routing", () => {
             hasAnyLLMProviderConfigured: jest.fn().mockResolvedValue(true),
             getOnboardingSheetId: jest.fn().mockResolvedValue(undefined),
             setOnboardingSheetId: jest.fn().mockResolvedValue(undefined),
+            resetChatSessionId: jest.fn().mockResolvedValue("new-session-id"),
+            getOrCreateChatSessionId: jest.fn().mockResolvedValue("session-id"),
         } as any;
 
         mockOnboardingConfig = {
@@ -68,6 +73,16 @@ describe("OnboardCommand Dual-Mode Routing", () => {
             writeSampleConfig: jest.fn(),
         } as any;
 
+        mockAnswerFlow = {
+            ask: jest.fn().mockResolvedValue({
+                answer: "an answer",
+                chunks: [],
+                followUps: [],
+                intent: "project_knowledge",
+                cancelled: false,
+            }),
+        } as any;
+
         mockChatService = {
             search: jest.fn().mockResolvedValue([]),
             ask: jest.fn().mockResolvedValue({ answer: "Here is the answer.", chunks: [] }),
@@ -75,7 +90,14 @@ describe("OnboardCommand Dual-Mode Routing", () => {
 
         dir = new WorkingDirectory("/mock/cwd", "/mock/cli", "/mock/repo");
 
-        command = new OnboardCommand(mockOnboardService, mockConfigService, mockOnboardingConfig, mockChatService, dir);
+        command = new OnboardCommand(
+            mockOnboardService,
+            mockConfigService,
+            mockOnboardingConfig,
+            mockChatService,
+            mockAnswerFlow,
+            dir,
+        );
     });
 
     it("should route to Google Sheet mode when passed a Google Sheets URL", async () => {
@@ -392,20 +414,23 @@ describe("OnboardCommand Dual-Mode Routing", () => {
             await command.execute(chatInputs);
 
             expect(input).not.toHaveBeenCalled();
-            expect(mockChatService.ask).not.toHaveBeenCalled();
+            expect(mockAnswerFlow.ask).not.toHaveBeenCalled();
             expect(mockOnboardService.sync).not.toHaveBeenCalled();
         });
 
-        it("retrieves context, sends it plus the question to the LLM, and prints the answer", async () => {
+        it("routes the question through the answering flow and prints the answer", async () => {
             const stdoutIsTTY = process.stdout.isTTY;
             Object.defineProperty(process.stdout, "isTTY", { value: false, configurable: true });
             (input as jest.Mock).mockResolvedValueOnce("what is the auth flow?").mockResolvedValueOnce("");
-            (mockChatService.ask as jest.Mock).mockResolvedValueOnce({
+            (mockAnswerFlow.ask as jest.Mock).mockResolvedValueOnce({
                 answer: "The auth flow uses OAuth2. [1]",
                 chunks: [
                     { content: "auth uses OAuth2", score: 0.95, location: "s3://bucket/auth.md" },
                     { content: "more auth context", score: 0.92, location: "s3://bucket/auth.md" },
                 ],
+                followUps: [],
+                intent: "project_knowledge",
+                cancelled: false,
             });
 
             try {
@@ -414,25 +439,71 @@ describe("OnboardCommand Dual-Mode Routing", () => {
                 Object.defineProperty(process.stdout, "isTTY", { value: stdoutIsTTY, configurable: true });
             }
 
-            expect(mockChatService.ask).toHaveBeenCalledWith("what is the auth flow?", { project: undefined });
+            expect(mockAnswerFlow.ask).toHaveBeenCalledWith("what is the auth flow?", expect.anything());
             expect((command as any).renderAnswer("The auth flow uses OAuth2. [1]")).toBe("The auth flow uses OAuth2.");
         });
 
-        it("normalizes --project and scopes the chat service call", async () => {
+        it("ignores --project, since the flow determines the project per question", async () => {
             (input as jest.Mock).mockResolvedValueOnce("give me the overview").mockResolvedValueOnce("");
-            (mockChatService.ask as jest.Mock).mockResolvedValueOnce({
-                answer: "Saturam Core overview answer",
-                chunks: [
-                    {
-                        content: "Saturam Core overview",
-                        location: "s3://bucket/saturam-core/google-docs/overview.md",
-                    },
-                ],
-            });
 
             await command.execute({ ...chatInputs, project: "Saturam Core" });
 
-            expect(mockChatService.ask).toHaveBeenCalledWith("give me the overview", { project: "saturam-core" });
+            // The question reaches the flow unscoped: routing is automatic, and a stale manual
+            // filter silently returning nothing is the failure mode the redesign removes.
+            expect(mockAnswerFlow.ask).toHaveBeenCalledWith("give me the overview", expect.anything());
+        });
+
+        it("starts a fresh conversation when --new-session is passed", async () => {
+            (input as jest.Mock).mockResolvedValueOnce("");
+
+            await command.execute({ ...chatInputs, "new-session": true });
+
+            expect(mockConfigService.resetChatSessionId).toHaveBeenCalled();
+        });
+
+        it("offers the generated follow-ups and asks the selected one next", async () => {
+            (input as jest.Mock).mockResolvedValueOnce("what is onboarding?").mockResolvedValueOnce("");
+            (mockAnswerFlow.ask as jest.Mock)
+                .mockResolvedValueOnce({
+                    answer: "Onboarding syncs documents.",
+                    chunks: [],
+                    followUps: [{ question: "How does the sync handle failures?", rationale: "" }],
+                    intent: "project_knowledge",
+                    cancelled: false,
+                })
+                .mockResolvedValueOnce({
+                    answer: "It retries with backoff.",
+                    chunks: [],
+                    followUps: [],
+                    intent: "project_knowledge",
+                    cancelled: false,
+                });
+            (select as jest.Mock).mockResolvedValueOnce("How does the sync handle failures?");
+
+            await command.execute(chatInputs);
+
+            expect(mockAnswerFlow.ask).toHaveBeenNthCalledWith(
+                2,
+                "How does the sync handle failures?",
+                expect.anything(),
+            );
+        });
+
+        it("skips printing an answer when the user chose to rephrase at the project picker", async () => {
+            (input as jest.Mock).mockResolvedValueOnce("how do refunds work?").mockResolvedValueOnce("");
+            (mockAnswerFlow.ask as jest.Mock).mockResolvedValueOnce({
+                answer: "",
+                chunks: [],
+                followUps: [],
+                intent: "project_knowledge",
+                cancelled: true,
+            });
+
+            await command.execute(chatInputs);
+
+            // Cancelling returns to the prompt rather than ending the session.
+            expect(input).toHaveBeenCalledTimes(2);
+            expect(select).not.toHaveBeenCalled();
         });
 
         it("shows a terminal loading spinner while waiting for the chat answer", async () => {
@@ -443,8 +514,8 @@ describe("OnboardCommand Dual-Mode Routing", () => {
             try {
                 (input as jest.Mock).mockResolvedValueOnce("what is onboarding?").mockResolvedValueOnce("");
 
-                let resolveAnswer!: (result: { answer: string; chunks: unknown[] }) => void;
-                (mockChatService.ask as jest.Mock).mockImplementationOnce(
+                let resolveAnswer!: (result: Record<string, unknown>) => void;
+                (mockAnswerFlow.ask as jest.Mock).mockImplementationOnce(
                     () =>
                         new Promise((resolve) => {
                             resolveAnswer = resolve;
@@ -456,13 +527,14 @@ describe("OnboardCommand Dual-Mode Routing", () => {
                     await Promise.resolve();
                 }
 
-                expect(writeSpy).toHaveBeenCalledWith(
-                    expect.stringContaining("Retrieving context and generating answer"),
-                );
+                expect(writeSpy).toHaveBeenCalledWith(expect.stringContaining("Thinking"));
 
                 resolveAnswer({
                     answer: "Onboarding is documented. [1]",
                     chunks: [{ content: "onboarding docs", score: 0.9, location: "s3://bucket/onboarding.md" }],
+                    followUps: [],
+                    intent: "project_knowledge",
+                    cancelled: false,
                 });
                 await run;
 
@@ -475,7 +547,7 @@ describe("OnboardCommand Dual-Mode Routing", () => {
 
         it("logs an error and keeps looping when the LLM call throws", async () => {
             (input as jest.Mock).mockResolvedValueOnce("bad query").mockResolvedValueOnce("");
-            (mockChatService.ask as jest.Mock).mockRejectedValueOnce(new Error("No API key found"));
+            (mockAnswerFlow.ask as jest.Mock).mockRejectedValueOnce(new Error("No API key found"));
 
             await expect(command.execute(chatInputs)).resolves.toBeUndefined();
 
@@ -487,7 +559,7 @@ describe("OnboardCommand Dual-Mode Routing", () => {
 
             await command.execute(chatInputs);
 
-            expect(mockChatService.ask).not.toHaveBeenCalled();
+            expect(mockAnswerFlow.ask).not.toHaveBeenCalled();
         });
     });
 

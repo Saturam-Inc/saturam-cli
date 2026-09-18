@@ -190,7 +190,8 @@ npx ts-node src/entrypoints/main.ts onboard <spreadsheet_url_or_id>
 
 - **Structured project sheet** — if the header row contains a `project_name` column, the sheet is parsed directly into the same shape as `.sateng/onboarding.json` (one row per project). See [`onboarding-sheet-template.csv`](onboarding-sheet-template.csv) for the full column reference — import it into Google Sheets (File → Import) as a starting point, or copy its header row into a new sheet. Multi-value columns (`confluence_pages`, `jira_tickets`, `google_docs`, `onboarding_sheet_ids`) are comma-separated within a cell. The resolved config is also written to `.sateng/onboarding.json` at the repository root before syncing (tagged with a `_sourceGoogleSheetId` field, for reference only — it's not what drives re-checking, see below).
 
-  **Re-checking the sheet on later runs**: the sheet's ID is remembered in your personal config (`~/.config/sateng/config.json`, alongside your Google access token), not in the local `.sateng/onboarding.json` file. That means plain `sat-cli onboard` (no argument) — **run from any directory** — automatically re-fetches that same sheet and overwrites `.sateng/onboarding.json` at the repository root each time, so editing values in the sheet and just running `sat-cli onboard` again always picks up the latest columns. Passing an explicit config file path (`sat-cli onboard path/to/config.json`) always bypasses this and loads that file directly instead.
+    **Re-checking the sheet on later runs**: the sheet's ID is remembered in your personal config (`~/.config/sateng/config.json`, alongside your Google access token), not in the local `.sateng/onboarding.json` file. That means plain `sat-cli onboard` (no argument) — **run from any directory** — automatically re-fetches that same sheet and overwrites `.sateng/onboarding.json` at the repository root each time, so editing values in the sheet and just running `sat-cli onboard` again always picks up the latest columns. Passing an explicit config file path (`sat-cli onboard path/to/config.json`) always bypasses this and loads that file directly instead.
+
 - **Sheet of links** (legacy) — if there's no `project_name` column, every cell is scanned for Confluence/Jira/Google Doc/Sheet URLs instead, with each sheet tab treated as its own project (see [Google Sheets URL Resolution & Project Tab Mapping](#google-sheets-url-resolution--project-tab-mapping) above).
 
 #### Syncing a Single Project
@@ -259,25 +260,76 @@ sat-cli onboard --knowledge-base --project "Saturam"
 
 Enter questions interactively to see ranked matching chunks with their relevance scores, source locations, and metadata. This command calls Bedrock's `Retrieve` API and does not generate an AI answer. Enter a blank question, type `exit`, `quit`, or `:q`, or press Ctrl+C to stop.
 
-#### Chatting with the Knowledge Base (RAG)
+#### Asking questions (`--chat`)
 
-`--knowledge-base` shows you the raw retrieved chunks. `--chat` goes one step further and answers in plain language, using the LLM already configured via `sat-cli init` → "AI / LLM providers":
+`--knowledge-base` shows you the raw retrieved chunks. `--chat` answers the question the way a senior engineer would explain it to someone who just joined:
 
 ```bash
 sat-cli onboard --chat
-sat-cli onboard --chat --project "Saturam"
+sat-cli onboard --chat --new-session
 ```
 
-`--project` normalizes the supplied name in the same way as `--project-name` during upload (for example, `"Saturam Core"` becomes `saturam-core`) and applies an exact Bedrock metadata filter. Only chunks whose uploaded metadata has that project value are retrieved, and the selected project is also included in the LLM instructions.
+There is no `--project` flag here — the project is determined per question. `--project` still applies to `--knowledge-base`, which is a raw retrieval tool.
 
-For each question, this:
+##### The answering flow
 
-1. Checks that at least one AI/LLM provider is configured (`sat-cli init` → "AI / LLM providers"). If none is found, it prints a suggestion to configure one and stops — no failed API calls.
-2. Retrieves relevant chunks from the Bedrock Knowledge Base, exactly like `--knowledge-base`.
-3. Sends the retrieved chunks plus your question to the configured LLM.
-4. Prints the LLM's generated answer, followed by a deduplicated "Sources" list.
+Each question passes through five agents, wired by `AnswerFlowService`:
+
+| Agent                   | Role                                                                                                      |
+| ----------------------- | --------------------------------------------------------------------------------------------------------- |
+| Intent classifier       | General question, project question, or a question about the corpus itself                                 |
+| Project router          | Resolves which project the question is about, or decides it is ambiguous                                  |
+| General technical agent | Answers general questions with no retrieval, marking what is industry practice rather than our convention |
+| Mentor answerer         | Produces the grounded answer for project questions                                                        |
+| Follow-up generator     | Suggests three or four next questions the Knowledge Base can actually answer                              |
+
+**Intent classification.** A follow-up is deliberately _not_ its own intent. "And how does it fail?" is still a project question — what makes it a follow-up is that its subject comes from the previous turn, which the classifier resolves into a standalone question before routing.
+
+**Project routing.** Resolution is cheapest-first: a project named in the question, then the project you have been discussing, then a broad unfiltered retrieval whose results are grouped by their `project` metadata. The last step grounds routing in what is actually indexed rather than in the model guessing from a name. You are asked to choose only when no single project dominates:
+
+```
+? "How do refunds work?" could mean a few things — which one?
+  > SMILE · Customer-facing refunds portal (12 matches)
+    Billing Core · Payment capture and settlement (9 matches)
+    Ask across all projects
+    Let me rephrase
+```
+
+In non-interactive runs (`--ci`, or piped stdin) no picker can be shown, so the top-ranked project is used and the assumption is stated.
+
+**The answer contract.** Every project answer follows the same skeleton, dropping any part the retrieved context cannot support rather than padding it: what the answer is, why the thing exists, how it works, where it lives, and what to watch out for.
+
+**Follow-ups.** Suggestions are constrained to material the Knowledge Base holds — a suggestion it cannot answer wastes a turn. Select one to continue, or choose "Ask my own question".
+
+##### Conversation memory
+
+History is what makes follow-ups work. Each turn stores the question, the answer, a one-line gist, and the resolved project. Agents receive the last three turns as attributed messages plus a rolling digest of everything older, rather than the full transcript — a mentor-length answer runs 400–600 tokens, so replaying twenty of them would make classification the most expensive call in the flow.
+
+By default history lives in memory and lasts only for the session. Configure a `conversationTable` under your AWS cloud config to persist it in DynamoDB, which is what lets a later run continue the same conversation:
+
+```json
+{
+    "cloud": {
+        "aws": {
+            "conversationTable": { "tableName": "sateng-conversations", "ttlDays": 90 }
+        }
+    }
+}
+```
+
+The table needs partition key `pk` (string) and sort key `sk` (string), with TTL enabled on `expiresAt`. Persistence failures degrade to a warning — losing history makes answers less contextual but never takes down the flow. Use `--new-session` to start fresh.
 
 Same exit controls as `--knowledge-base`: blank input, `exit`, `quit`, `:q`, or Ctrl+C.
+
+##### Evaluating answer quality
+
+Prompt changes are checked against a scored eval set rather than by eye:
+
+```bash
+pnpm test:eval
+```
+
+This runs real questions through the flow and grades each answer with an LLM judge against the answer contract — does it answer the literal question, explain why, define its jargon, point somewhere specific, avoid inventing, and read as one explanation. It makes real API calls and is excluded from `pnpm test`. The fixtures in `tests/eval/fixtures/mentor-questions.json` are placeholders: replace them with real questions about projects in your own Knowledge Base before reading anything into the scores.
 
 ---
 

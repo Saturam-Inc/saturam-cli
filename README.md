@@ -119,12 +119,24 @@ sat-cli onboard --list
 # Interactively test the configured Bedrock Knowledge Base using retrieval only
 sat-cli onboard --knowledge-base
 
-# Interactively chat: RAG-style Q&A using your configured LLM, grounded in Knowledge Base retrieval
+# Ask questions and get a mentoring answer grounded in the Knowledge Base.
+# The project is worked out per question — no --project flag needed.
 sat-cli onboard --chat
 
-# Limit retrieval and answers to one uploaded project
-sat-cli onboard --chat --project "Saturam"
+# Start over with a fresh conversation instead of continuing the last one
+sat-cli onboard --chat --new-session
 ```
+
+### How `--chat` answers
+
+Each question runs through a small chain of agents rather than a single retrieval-and-summarize step:
+
+1. **Intent classification** — is this a general engineering question, a question about one of our projects, or a question about what the assistant knows? General questions are answered directly, without retrieval.
+2. **Automatic project routing** — the project is resolved from the question, from the project you have been discussing, or by retrieving broadly and seeing which project the matching documents actually belong to. You are asked to choose only when two projects are genuinely plausible.
+3. **Mentoring answer** — answers the question, explains why the thing exists, how it works, where it lives, and what to watch out for, rather than quoting document excerpts back.
+4. **Follow-up suggestions** — three or four questions you can select to keep going, each one grounded in material the Knowledge Base can actually answer.
+
+Conversation history is kept so follow-ups work: "and how does it fail?" is understood against the previous answer. History lives in memory by default, or in DynamoDB when a `conversationTable` is configured (see "Cloud" below), which is what lets a later run continue the same conversation.
 
 Once you've synced from a structured project sheet, its ID is remembered in your personal config — plain `sat-cli onboard` (no argument, from any directory) automatically re-checks that same sheet for the latest values on every run, instead of relying on a possibly-stale local file. Passing an explicit config path always overrides this and loads that file directly.
 
@@ -466,22 +478,22 @@ All settings can also be provided via environment variables, which take priority
 
 **AI providers**
 
-| Variable                   | Provider / setting                         |
-| -------------------------- | ------------------------------------------ |
-| `ANTHROPIC_API_KEY`        | Anthropic (Claude)                         |
-| `OPENAI_API_KEY`           | OpenAI (GPT)                               |
-| `OPENAI_BASE_URL`          | OpenAI-compatible API (e.g., OpenRouter)   |
-| `GOOGLE_API_KEY`           | Google (Gemini)                            |
-| `XAI_API_KEY`              | xAI (Grok)                                 |
-| `DEEPSEEK_API_KEY`         | DeepSeek                                   |
-| `AWS_PROFILE`              | AWS Bedrock (also used for S3/Cloud — see below) |
+| Variable                   | Provider / setting                                                         |
+| -------------------------- | -------------------------------------------------------------------------- |
+| `ANTHROPIC_API_KEY`        | Anthropic (Claude)                                                         |
+| `OPENAI_API_KEY`           | OpenAI (GPT)                                                               |
+| `OPENAI_BASE_URL`          | OpenAI-compatible API (e.g., OpenRouter)                                   |
+| `GOOGLE_API_KEY`           | Google (Gemini)                                                            |
+| `XAI_API_KEY`              | xAI (Grok)                                                                 |
+| `DEEPSEEK_API_KEY`         | DeepSeek                                                                   |
+| `AWS_PROFILE`              | AWS Bedrock (also used for S3/Cloud — see below)                           |
 | `AWS_REGION`               | AWS region — Bedrock, S3, and Bedrock Knowledge Base all fall back to this |
-| `OLLAMA_BASE_URL`          | Ollama (default: `http://localhost:11434`) |
-| `OLLAMA_API_TOKEN`         | Optional bearer token for remote Ollama    |
-| `SELF_HOSTED_ENDPOINT`     | Self Hosted LLM endpoint                   |
-| `SELF_HOSTED_MODEL`        | Self Hosted LLM model name                 |
-| `SELF_HOSTED_ACCESS_TOKEN` | Optional bearer token for Self Hosted LLM  |
-| `SELF_HOSTED_TIMEOUT_MS`   | Self Hosted LLM request timeout            |
+| `OLLAMA_BASE_URL`          | Ollama (default: `http://localhost:11434`)                                 |
+| `OLLAMA_API_TOKEN`         | Optional bearer token for remote Ollama                                    |
+| `SELF_HOSTED_ENDPOINT`     | Self Hosted LLM endpoint                                                   |
+| `SELF_HOSTED_MODEL`        | Self Hosted LLM model name                                                 |
+| `SELF_HOSTED_ACCESS_TOKEN` | Optional bearer token for Self Hosted LLM                                  |
+| `SELF_HOSTED_TIMEOUT_MS`   | Self Hosted LLM request timeout                                            |
 
 **SCM platforms**
 
