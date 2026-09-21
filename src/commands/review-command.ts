@@ -113,7 +113,7 @@ export class ReviewCommand implements TypedCommand<typeof INPUTS> {
         }
 
         // Phase 4: Show audit
-        const auditMd = this.multiAgent.findingParser.formatAuditMarkdown(audit, prNumber);
+        const auditMd = this.multiAgent.findingParser.formatAuditMarkdown(audit, prNumber, result.durationFormatted);
         if (!autoMode || inputs.self) {
             logger.info("\n--- Audit Review ---\n");
             logger.info(auditMd);
@@ -137,7 +137,7 @@ export class ReviewCommand implements TypedCommand<typeof INPUTS> {
                     });
 
             if (shouldPost) {
-                await this.postReview(scm, owner, repo, prNumber, audit, rawDiff, context);
+                await this.postReview(scm, owner, repo, prNumber, audit, rawDiff, context, result.durationFormatted);
             } else if (!autoMode) {
                 logger.info(`Review not posted. Artifacts at: ${result.artifactsDir}`);
             } else {
@@ -161,9 +161,10 @@ export class ReviewCommand implements TypedCommand<typeof INPUTS> {
         audit: AuditResult,
         rawDiff: string,
         context?: SCMRequestContext,
+        durationFormatted?: string,
     ): Promise<void> {
         if (audit.findings.length === 0) {
-            const summary = this.multiAgent.findingParser.formatSummaryTable(audit, prNumber);
+            const summary = this.multiAgent.findingParser.formatSummaryTable(audit, prNumber, durationFormatted);
             await scm.postReviewComment(owner, repo, prNumber, summary, context);
             logger.info("Summary posted (no inline findings).");
             return;
@@ -176,7 +177,7 @@ export class ReviewCommand implements TypedCommand<typeof INPUTS> {
             body: this.multiAgent.findingParser.formatCommentBody(f),
         }));
 
-        const summary = this.multiAgent.findingParser.formatSummaryTable(audit, prNumber);
+        const summary = this.multiAgent.findingParser.formatSummaryTable(audit, prNumber, durationFormatted);
 
         logger.info(`\nPosting to ${scm.provider}: ${comments.length} inline + summary...`);
         try {

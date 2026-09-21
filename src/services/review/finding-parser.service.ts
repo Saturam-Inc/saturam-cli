@@ -430,7 +430,7 @@ export class FindingParser {
         return `${label[finding.severity]}${title}${finding.description}${rec}`;
     }
 
-    public formatSummaryTable(audit: AuditResult, prNumber: number): string {
+    public formatSummaryTable(audit: AuditResult, prNumber: number, durationFormatted?: string): string {
         const { findings, summary, verdict } = audit;
         const counts: Record<Severity, number> = { critical: 0, major: 0, minor: 0, nit: 0 };
         for (const f of findings) counts[f.severity]++;
@@ -441,12 +441,13 @@ export class FindingParser {
         );
 
         const emoji = verdict === "approve" ? "✅" : verdict.includes("change") || verdict === "block" ? "🚫" : "⚠️";
+        const timeInfo = durationFormatted ? `\n\n⏱️ *Time taken for review:* ${durationFormatted}` : "";
 
         return `## AI Review Summary — PR #${prNumber}
 
 ${summary}
 
-**Verdict:** ${emoji} ${verdict.toUpperCase()}
+**Verdict:** ${emoji} ${verdict.toUpperCase()}${timeInfo}
 
 **${counts.critical} critical, ${counts.major} major, ${counts.minor} minor, ${counts.nit} nits** — see inline comments.
 
@@ -455,13 +456,14 @@ ${summary}
 ${rows.join("\n")}`;
     }
 
-    public formatAuditMarkdown(audit: AuditResult, prNumber: number): string {
-        if (audit.rawMarkdown) return audit.rawMarkdown;
+    public formatAuditMarkdown(audit: AuditResult, prNumber: number, durationFormatted?: string): string {
+        const timeInfo = durationFormatted ? `\n\n⏱️ **Time taken for review:** ${durationFormatted}` : "";
+        if (audit.rawMarkdown) return audit.rawMarkdown + timeInfo;
 
         const sections: string[] = [];
         const emoji = audit.verdict === "approve" ? "✅" : "🚫";
         sections.push(
-            `# Audit — PR #${prNumber}\n\n${audit.summary}\n\n**Verdict:** ${emoji} ${audit.verdict.toUpperCase()}`,
+            `# Audit — PR #${prNumber}\n\n${audit.summary}\n\n**Verdict:** ${emoji} ${audit.verdict.toUpperCase()}${timeInfo}`,
         );
 
         const grouped: Record<Severity, Finding[]> = { critical: [], major: [], minor: [], nit: [] };
