@@ -8,7 +8,10 @@ describe("IntentClassifierAgent", () => {
 
     beforeEach(() => {
         structured = { invoke: jest.fn() };
-        registry = { describeForPrompt: jest.fn().mockResolvedValue("- SMILE [slug: smile]") };
+        registry = {
+            describeForPrompt: jest.fn().mockResolvedValue("- SMILE [slug: smile]"),
+            exampleProjectName: jest.fn().mockResolvedValue("SMILE"),
+        };
         agent = new IntentClassifierAgent(structured, registry);
     });
 

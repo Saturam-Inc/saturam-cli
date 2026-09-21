@@ -75,6 +75,17 @@ describe("ProjectRegistryService", () => {
         expect(described).toContain("Refunds portal");
     });
 
+    it("offers a real indexed project name for prompt examples", async () => {
+        await expect(service.exampleProjectName()).resolves.toBe("SMILE");
+    });
+
+    it("offers a neutral phrase for prompt examples when nothing is indexed", async () => {
+        s3.getStateObject.mockRejectedValue(new Error("no such key"));
+
+        // Must read naturally inside "after a question about X" and "used in X".
+        await expect(service.exampleProjectName()).resolves.toBe("the project");
+    });
+
     it("tells the prompt plainly when nothing is indexed", async () => {
         s3.getStateObject.mockRejectedValue(new Error("no such key"));
 

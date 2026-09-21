@@ -138,6 +138,25 @@ export class ProjectRegistryService {
         return projects.find((project) => project.slug === slug);
     }
 
+    /**
+     * A real indexed project name for prompts to use in their examples.
+     *
+     * Prompt instructions illustrate shapes — "after a question about X, 'so what stacks are
+     * used' becomes 'what stacks are used in X'" — and X has to be something. Baking a client's
+     * name in at build time meant every other client's deployment carried that client's
+     * vocabulary in its prompts. Drawing it from the registry means the example always names a
+     * project that actually exists in this deployment, and reads as "the project" when nothing
+     * is indexed yet.
+     *
+     * The first project is used rather than the session's current one: the classifier is what
+     * decides the current project, and seeding its own example with that project is precisely
+     * the "carry the earlier project forward" mistake its instructions warn against.
+     */
+    public async exampleProjectName(): Promise<string> {
+        const { projects } = await this.load();
+        return projects[0]?.displayName ?? "the project";
+    }
+
     /** One-line-per-project summary for prompts that must know what exists. */
     public async describeForPrompt(): Promise<string> {
         const { projects } = await this.load();

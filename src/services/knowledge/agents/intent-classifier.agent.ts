@@ -46,8 +46,12 @@ export class IntentClassifierAgent {
         recentTurns: ChatTurn[];
         digest?: SessionDigest;
     }): Promise<IntentClassification> {
-        const projectCatalogue = await this.registry.describeForPrompt();
-        const messages = getIntentClassifierMessages({ ...params, projectCatalogue });
+        // Both read the same cached registry, so this is one load, not two.
+        const [projectCatalogue, exampleProject] = await Promise.all([
+            this.registry.describeForPrompt(),
+            this.registry.exampleProjectName(),
+        ]);
+        const messages = getIntentClassifierMessages({ ...params, projectCatalogue, exampleProject });
 
         try {
             const result = await this.structured.invoke({

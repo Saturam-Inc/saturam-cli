@@ -3,7 +3,7 @@ import { BaseMessage, HumanMessage, SystemMessage } from "@langchain/core/messag
 /**
  * Turns a change question into the several searches it actually needs.
  *
- * "What should I change to move the DAG schedule to Friday?" embeds close to documents that
+ * "What should I change to move the nightly job to Friday?" embeds close to documents that
  * *describe* the schedule, and far from the one that says how to change it — so a single search
  * returns a correct-looking set of documents that cannot answer the question. The corpus usually
  * does hold the answer; it is spread across the page that says where the setting lives, the page
@@ -40,7 +40,7 @@ A change question is answered by several different documents, and searching the 
 Rules:
 - Write 2 to 4 queries. Fewer is better when the question is narrow.
 - Each query must stand alone, with no pronouns and no reference to the other queries.
-- Write them as statements of the topic, the way a document's own sentences would read — "how Airflow DAG runs are triggered and scheduled", not "where do I find how to change the DAG schedule?". You are matching against documentation prose, not asking a person.
+- Write them as statements of the topic, the way a document's own sentences would read — "how scheduled jobs are triggered and when they run", not "where do I find how to change the schedule?". You are matching against documentation prose, not asking a person.
 - Use the system's own vocabulary from the question. Keep names, file paths and identifiers exactly as written.
 - Do not invent specifics the question did not contain. If it does not name a file, do not guess a filename.
 - Make them genuinely different from each other. Four rewordings of one query retrieve one set of documents and waste three searches.
