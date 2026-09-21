@@ -6,8 +6,8 @@ import { LearnerStage, SessionDigest } from "../services/knowledge/chat-session.
  * Generates the next-step menu shown after each answer.
  *
  * Two things changed from the earlier version. The entries are written in the mentor's voice —
- * "Walk me through what happens on Sunday at 01:30" rather than "How do the Airflow DAGs and
- * scheduler scripts trigger runs?" — because the menu is the mentor offering where to go next,
+ * "Walk me through what happens when the nightly job runs" rather than "How are scheduled jobs
+ * triggered and when do they run?" — because the menu is the mentor offering where to go next,
  * not a list of search queries. And there are three, ordered as a path: the natural next step,
  * then deeper, then wider. Four unordered options read as a table of contents.
  *

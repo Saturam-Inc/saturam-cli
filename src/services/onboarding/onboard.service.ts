@@ -24,7 +24,7 @@ import { JiraKnowledgeSource } from "../knowledge/jira-knowledge.source";
 import { ConfluenceKnowledgeSource } from "../knowledge/confluence-knowledge.source";
 import { GoogleDriveKnowledgeSource } from "../knowledge/google-drive-knowledge.source";
 import { GoogleSheetsKnowledgeSource } from "../knowledge/google-sheets-knowledge.source";
-import { KnowledgeDocument, KnowledgeSource } from "../knowledge/knowledge-source.model";
+import { KNOWLEDGE_SOURCE_CATEGORIES, KnowledgeDocument, KnowledgeSource } from "../knowledge/knowledge-source.model";
 import { slugify } from "../../utils/slug.util";
 import { quoteSheetTitle } from "../../utils/google-sheets-a1.util";
 
@@ -787,7 +787,8 @@ export class OnboardService {
 
     // --- S3 upload ---
 
-    private static readonly ONBOARD_SUBDIRS = ["confluence", "jira", "google-docs", "google-sheets"] as const;
+    /** Folder names documents are written under — the enum is the source of truth, not this list. */
+    private static readonly ONBOARD_SUBDIRS = KNOWLEDGE_SOURCE_CATEGORIES;
 
     /**
      * Uploads the given synced documents to the configured S3 bucket (up to 5 concurrently),

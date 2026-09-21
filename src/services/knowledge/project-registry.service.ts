@@ -5,6 +5,7 @@ import { Service } from "typedi";
 import { z } from "zod";
 import { S3Service } from "../../integrations/aws/services/s3.service";
 import { ConfigService } from "../config-service";
+import { KNOWLEDGE_SOURCE_CATEGORIES } from "./knowledge-source.model";
 import { slugify } from "../../utils/slug.util";
 
 const logger = getLogger("ProjectRegistry");
@@ -78,7 +79,7 @@ export class ProjectRegistryService {
      */
     private async loadFromLocalSync(): Promise<ProjectRegistry | undefined> {
         const baseDir = join(dirname(this.config.getPersonalConfigPath()), "onboarding");
-        const categoryNames = new Set(["confluence", "jira", "google-docs", "google-sheets"]);
+        const categoryNames = new Set(KNOWLEDGE_SOURCE_CATEGORIES);
 
         try {
             const entries = await readdir(baseDir, { withFileTypes: true });

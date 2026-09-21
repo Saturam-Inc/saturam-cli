@@ -12,6 +12,16 @@ export enum KnowledgeSourceType {
     GOOGLE_SHEETS = "google-sheets",
 }
 
+/**
+ * Every source category, and therefore every folder name a synced document can live under.
+ *
+ * Derived from the enum rather than written out again, because it was written out again — twice,
+ * in the sync service and in the project registry. A fourth source added to the enum but missed
+ * in one of those copies silently stops its documents being counted, and the project they belong
+ * to disappears from the registry with nothing failing.
+ */
+export const KNOWLEDGE_SOURCE_CATEGORIES: readonly string[] = Object.values(KnowledgeSourceType);
+
 export interface KnowledgeDocument {
     id: string;
     source: KnowledgeSourceType;
