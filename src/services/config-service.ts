@@ -17,6 +17,7 @@ export enum AIProvider {
     ANTHROPIC = "anthropic",
     BEDROCK = "bedrock",
     OPENAI = "openai",
+    AZURE_OPENAI = "azure-openai",
     GOOGLE = "google",
     XAI = "xai",
     DEEPSEEK = "deepseek",
@@ -32,6 +33,13 @@ export const ProviderConfigSchema = z.object({
     awsRegion: z.string().optional().describe("AWS region (for Bedrock)"),
     // OpenAI-specific
     baseUrl: z.string().optional().describe("Base URL for OpenAI API (for custom OpenAI-compatible endpoints)"),
+    // Azure OpenAI-specific
+    azureEndpoint: z
+        .string()
+        .optional()
+        .describe("Azure OpenAI resource endpoint, e.g. https://my-res.openai.azure.com"),
+    azureDeploymentName: z.string().optional().describe("Azure OpenAI deployment name (acts as the model ID)"),
+    azureApiVersion: z.string().optional().describe("Azure OpenAI REST API version, e.g. 2024-10-21"),
     // Ollama-specific
     ollamaBaseUrl: z.string().optional().describe("Base URL for local model server (for Ollama)"),
     apiToken: z.string().optional().describe("Bearer token for remote Ollama API gateways"),
@@ -199,6 +207,7 @@ export const PROVIDER_MODELS: Record<AIProvider, LLMModel[]> = {
         LLMModel.OPENAI_GEMMA_4_31B_IT,
         LLMModel.OPENAI_LLAMA_3_3_70B_INSTRUCT,
     ],
+    [AIProvider.AZURE_OPENAI]: [LLMModel.AZURE_OPENAI_CUSTOM],
     [AIProvider.XAI]: [LLMModel.GROK_2],
     [AIProvider.DEEPSEEK]: [LLMModel.DEEPSEEK_CHAT, LLMModel.DEEPSEEK_REASONER],
     [AIProvider.OLLAMA]: [
@@ -221,6 +230,7 @@ export const PROVIDER_ENV_VARS: Record<AIProvider, string> = {
     [AIProvider.ANTHROPIC]: "ANTHROPIC_API_KEY",
     [AIProvider.BEDROCK]: "AWS_PROFILE",
     [AIProvider.OPENAI]: "OPENAI_API_KEY",
+    [AIProvider.AZURE_OPENAI]: "AZURE_OPENAI_API_KEY",
     [AIProvider.GOOGLE]: "GOOGLE_API_KEY",
     [AIProvider.XAI]: "XAI_API_KEY",
     [AIProvider.DEEPSEEK]: "DEEPSEEK_API_KEY",
@@ -232,6 +242,7 @@ export const PROVIDER_BASE_URL_ENV_VARS: Record<AIProvider, string | undefined> 
     [AIProvider.ANTHROPIC]: undefined,
     [AIProvider.BEDROCK]: undefined,
     [AIProvider.OPENAI]: "OPENAI_BASE_URL",
+    [AIProvider.AZURE_OPENAI]: "AZURE_OPENAI_ENDPOINT",
     [AIProvider.GOOGLE]: undefined,
     [AIProvider.XAI]: undefined,
     [AIProvider.DEEPSEEK]: undefined,
@@ -243,6 +254,7 @@ export const PROVIDER_DEFAULT_KEY_PATHS: Record<AIProvider, string[]> = {
     [AIProvider.ANTHROPIC]: [],
     [AIProvider.BEDROCK]: [],
     [AIProvider.OPENAI]: [],
+    [AIProvider.AZURE_OPENAI]: [],
     [AIProvider.GOOGLE]: [join(homedir(), ".config", "google", "api_key")],
     [AIProvider.XAI]: [],
     [AIProvider.DEEPSEEK]: [],

@@ -19,11 +19,13 @@ const logger = getLogger("InitCommand");
 
 const INPUTS = [] as const;
 const SETUP_CONNECTIVITY_TIMEOUT_MS = 10000;
+const DEFAULT_AZURE_OPENAI_API_VERSION = "2024-10-21";
 
 const PROVIDER_DISPLAY_NAMES: Record<AIProvider, string> = {
     [AIProvider.ANTHROPIC]: "Anthropic (Claude)",
     [AIProvider.BEDROCK]: "AWS Bedrock (Claude, Nova)",
     [AIProvider.OPENAI]: "OpenAI (GPT)",
+    [AIProvider.AZURE_OPENAI]: "Azure OpenAI (GPT)",
     [AIProvider.GOOGLE]: "Google (Gemini)",
     [AIProvider.XAI]: "xAI (Grok)",
     [AIProvider.DEEPSEEK]: "DeepSeek",
@@ -80,12 +82,21 @@ const MODEL_DISPLAY_NAMES: Record<LLMModel, string> = {
     [LLMModel.OLLAMA_QWEN2_5_CODER]: "Qwen 2.5 Coder",
     [LLMModel.OLLAMA_GEMMA2]: "Gemma 2",
     [LLMModel.OLLAMA_PHI3]: "Phi-3 (128K context)",
+    [LLMModel.AZURE_OPENAI_CUSTOM]: "Azure OpenAI deployment",
     [LLMModel.OLLAMA_CUSTOM]: "Custom model (specify name)",
     [LLMModel.SELF_HOSTED_CUSTOM]: "Self Hosted LLM",
 };
 
 function normalizeBaseUrl(baseUrl: string): string {
     return baseUrl.replace(/\/+$/, "");
+}
+
+/**
+ * Azure's endpoint must be the bare resource URL — getEndpoint() in @langchain/openai appends
+ * "/openai/deployments/<name>" itself, so a pasted full deployment URL would double up.
+ */
+function normalizeAzureEndpoint(endpoint: string): string {
+    return normalizeBaseUrl(normalizeBaseUrl(endpoint).replace(/\/openai(\/.*)?$/i, ""));
 }
 
 function isRemoteOllamaUrl(baseUrl: string): boolean {
@@ -556,6 +567,10 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
             return this.configureOpenAIProvider(existing);
         }
 
+        if (provider === AIProvider.AZURE_OPENAI) {
+            return this.configureAzureOpenAIProvider(existing);
+        }
+
         if (provider === AIProvider.OLLAMA) {
             return this.configureOllamaProvider(existing);
         }
@@ -616,6 +631,79 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
             apiKey,
             baseUrl: baseUrl.trim() || undefined,
         };
+    }
+
+    private async configureAzureOpenAIProvider(existing?: ProviderConfig): Promise<ProviderConfig> {
+        const apiKey = await this.promptForApiKey(AIProvider.AZURE_OPENAI, existing?.apiKey);
+
+        const azureEndpoint = normalizeAzureEndpoint(
+            await input({
+                message: "Azure OpenAI endpoint (e.g. https://my-resource.openai.azure.com):",
+                default: existing?.azureEndpoint ?? process.env.AZURE_OPENAI_ENDPOINT ?? "",
+                validate: (val) =>
+                    val.startsWith("http://") || val.startsWith("https://") ? true : "Must be a valid HTTP/HTTPS URL",
+            }),
+        );
+
+        const azureDeploymentName = await input({
+            message: "Deployment name (your deployment's name in Azure, not the model name):",
+            default:
+                existing?.azureDeploymentName ??
+                process.env.AZURE_OPENAI_DEPLOYMENT_NAME ??
+                process.env.AZURE_OPENAI_API_DEPLOYMENT_NAME ??
+                "",
+            validate: (val) => (val.trim() ? true : "Deployment name is required"),
+        });
+
+        const azureApiVersion = await input({
+            message: "API version:",
+            default:
+                existing?.azureApiVersion ?? process.env.AZURE_OPENAI_API_VERSION ?? DEFAULT_AZURE_OPENAI_API_VERSION,
+            validate: (val) => (val.trim() ? true : "API version is required"),
+        });
+
+        await this.verifyAzureOpenAI(azureEndpoint, azureDeploymentName, azureApiVersion, apiKey);
+
+        return {
+            enabled: true,
+            apiKey,
+            azureEndpoint,
+            azureDeploymentName: azureDeploymentName.trim(),
+            azureApiVersion: azureApiVersion.trim(),
+        };
+    }
+
+    /** Best-effort reachability check — mirrors the Ollama/self-hosted flows: warn, never block. */
+    private async verifyAzureOpenAI(
+        endpoint: string,
+        deploymentName: string,
+        apiVersion: string,
+        apiKey: string,
+    ): Promise<void> {
+        const url = `${endpoint}/openai/deployments/${deploymentName}/chat/completions?api-version=${apiVersion}`;
+        try {
+            const response = await fetch(url, {
+                method: "POST",
+                headers: { "api-key": apiKey, "Content-Type": "application/json" },
+                body: JSON.stringify({ messages: [{ role: "user", content: "ping" }], max_tokens: 1 }),
+                signal: AbortSignal.timeout(SETUP_CONNECTIVITY_TIMEOUT_MS),
+            });
+
+            if (response.ok) {
+                logger.info(`Azure OpenAI deployment '${deploymentName}' verified successfully.`);
+            } else if (response.status === 401 || response.status === 403) {
+                logger.warn("Warning: Azure rejected the API key (HTTP 401/403). Double-check the key and endpoint.");
+            } else if (response.status === 404) {
+                logger.warn(
+                    `Warning: Azure returned 404 for deployment '${deploymentName}'. ` +
+                        "Check the deployment name and API version.",
+                );
+            } else {
+                logger.warn(`Warning: Azure OpenAI returned HTTP ${response.status}.`);
+            }
+        } catch {
+            logger.warn(`Warning: Could not reach Azure OpenAI at ${endpoint}.`);
+        }
     }
 
     private async configureOllamaProvider(existing?: ProviderConfig): Promise<ProviderConfig> {
@@ -794,6 +882,10 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
     private async promptForModel(provider: AIProvider, providerConfig?: ProviderConfig): Promise<LLMModel> {
         if (provider === AIProvider.SELF_HOSTED) {
             return LLMModel.SELF_HOSTED_CUSTOM;
+        }
+        // The Azure deployment chosen during setup *is* the model — nothing to pick.
+        if (provider === AIProvider.AZURE_OPENAI) {
+            return LLMModel.AZURE_OPENAI_CUSTOM;
         }
         // For Ollama, build a smarter list
         if (provider === AIProvider.OLLAMA) {
@@ -1072,6 +1164,14 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
                     const customText = custom ? `, model=${custom}` : "";
                     const auth = val.apiToken ? ", auth=token set" : "";
                     logger.info(`    ${PROVIDER_DISPLAY_NAMES[provider]}: ${url}${customText}${auth}${isDefault}`);
+                } else if (provider === AIProvider.AZURE_OPENAI) {
+                    const endpoint = val.azureEndpoint ?? "not set";
+                    const deployment = val.azureDeploymentName ?? "not set";
+                    const version = val.azureApiVersion ?? DEFAULT_AZURE_OPENAI_API_VERSION;
+                    logger.info(
+                        `    ${PROVIDER_DISPLAY_NAMES[provider]}: endpoint=${endpoint}, ` +
+                            `deployment=${deployment}, api-version=${version}${isDefault}`,
+                    );
                 } else if (provider === AIProvider.SELF_HOSTED) {
                     const endpoint = val.endpoint ?? "not set";
                     const modelName = val.model ?? "selfhosted-custom";

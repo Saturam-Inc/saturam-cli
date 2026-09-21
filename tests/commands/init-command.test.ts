@@ -1,5 +1,6 @@
 import { InitCommand } from "../../src/commands/init-command";
-import { CloudProvider, ConfigService } from "../../src/services/config-service";
+import { AIProvider, CloudProvider, ConfigService } from "../../src/services/config-service";
+import { LLMModel } from "../../src/constants/llm-models";
 import { select, input, password, confirm } from "@inquirer/prompts";
 
 jest.mock("@inquirer/prompts", () => ({
@@ -85,5 +86,44 @@ describe("InitCommand Platform Config Flow", () => {
             },
             defaultCloudProvider: CloudProvider.AWS,
         });
+    });
+
+    it("should configure Azure OpenAI from the AI providers menu", async () => {
+        // Existing config so init offers "Add/update an AI provider" rather than full setup.
+        mockConfig.loadPersonalConfig.mockResolvedValue({
+            providers: { [AIProvider.ANTHROPIC]: { enabled: true, apiKey: "sk-ant-existing" } },
+        });
+        const fetchSpy = jest.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 200 }));
+
+        // top-level "ai_providers" -> action "add" -> provider "azure-openai"
+        (select as jest.Mock)
+            .mockResolvedValueOnce("ai_providers")
+            .mockResolvedValueOnce("add")
+            .mockResolvedValueOnce(AIProvider.AZURE_OPENAI);
+        (password as jest.Mock).mockResolvedValueOnce("azure-secret-key");
+        // endpoint, deployment name, api version
+        (input as jest.Mock)
+            .mockResolvedValueOnce("https://my-res.openai.azure.com/")
+            .mockResolvedValueOnce("gpt-4o-prod")
+            .mockResolvedValueOnce("2024-10-21");
+        // "Set as the default provider?" -> yes
+        (confirm as jest.Mock).mockResolvedValueOnce(true);
+
+        await command.execute({});
+
+        const saved = mockConfig.savePersonalConfig.mock.calls.at(-1)![0];
+        expect(saved.providers![AIProvider.AZURE_OPENAI]).toEqual({
+            enabled: true,
+            apiKey: "azure-secret-key",
+            // trailing slash normalized away
+            azureEndpoint: "https://my-res.openai.azure.com",
+            azureDeploymentName: "gpt-4o-prod",
+            azureApiVersion: "2024-10-21",
+        });
+        // No model picker runs for Azure — the deployment is the model.
+        expect(saved.defaultProvider).toBe(AIProvider.AZURE_OPENAI);
+        expect(saved.defaultModel).toBe(LLMModel.AZURE_OPENAI_CUSTOM);
+
+        fetchSpy.mockRestore();
     });
 });

@@ -43,6 +43,10 @@ export enum LLMModel {
     OPENAI_GEMMA_4_31B_IT = "gemma-4-31b-it",
     OPENAI_LLAMA_3_3_70B_INSTRUCT = "llama-3.3-70b-instruct",
 
+    // Azure OpenAI — the real model is whichever deployment the user configured, so this is a
+    // single sentinel (like SELF_HOSTED_CUSTOM) resolved to the deployment name at call time.
+    AZURE_OPENAI_CUSTOM = "azure-openai-custom",
+
     // Grok
     GROK_2 = "grok-2-1212",
 
@@ -107,6 +111,12 @@ export const MODEL_CONTEXT_WINDOWS: Record<LLMModel, number> = {
     [LLMModel.OPENAI_GEMMA_4_26B_A4B_IT]: 128000,
     [LLMModel.OPENAI_GEMMA_4_31B_IT]: 128000,
     [LLMModel.OPENAI_LLAMA_3_3_70B_INSTRUCT]: 128000,
+    // Azure OpenAI (depends on the deployed model, configurable via AZURE_OPENAI_CONTEXT_WINDOW)
+    [LLMModel.AZURE_OPENAI_CUSTOM]: (() => {
+        const val = process.env.AZURE_OPENAI_CONTEXT_WINDOW;
+        const num = val ? parseInt(val, 10) : NaN;
+        return isNaN(num) || num <= 0 ? 128000 : num;
+    })(),
     // Grok
     [LLMModel.GROK_2]: 131072,
     // DeepSeek
@@ -172,6 +182,7 @@ const OPENAI_MODELS = new Set([
     LLMModel.OPENAI_GEMMA_4_31B_IT,
     LLMModel.OPENAI_LLAMA_3_3_70B_INSTRUCT,
 ]);
+const AZURE_OPENAI_MODELS = new Set([LLMModel.AZURE_OPENAI_CUSTOM]);
 const GROK_MODELS = new Set([LLMModel.GROK_2]);
 const DEEPSEEK_MODELS = new Set([LLMModel.DEEPSEEK_CHAT, LLMModel.DEEPSEEK_REASONER]);
 const SELF_HOSTED_MODELS = new Set([LLMModel.SELF_HOSTED_CUSTOM]);
@@ -203,6 +214,10 @@ export function isGeminiModel(model: LLMModel): boolean {
 
 export function isOpenAIModel(model: LLMModel): boolean {
     return OPENAI_MODELS.has(model);
+}
+
+export function isAzureOpenAIModel(model: LLMModel): boolean {
+    return AZURE_OPENAI_MODELS.has(model);
 }
 
 export function isGrokModel(model: LLMModel): boolean {
