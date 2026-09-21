@@ -15,7 +15,7 @@ import {
     isSelfHostedModel,
 } from "../constants/llm-models";
 import { AIProvider, ConfigService, ProviderConfig } from "./config-service";
-import { RemoteCredentialService } from "./remote-credential.service";
+import { RemoteCredentialService, type AwsCredentials } from "./remote-credential.service";
 
 const logger = getLogger("LlmService");
 
@@ -157,23 +157,27 @@ export class LlmService {
         const region = providerConfig?.awsRegion ?? process.env.AWS_REGION ?? "us-east-1";
         const profile = providerConfig?.awsProfile ?? process.env.AWS_PROFILE;
 
-        // Remote mode: fetch AWS credentials from the configured endpoint so no
-        // local AWS credentials are required. Falls back to the existing local
-        // profile / default credential chain when remote mode is not configured.
+        // Remote mode: fetch AWS credentials from the configured endpoint dynamically
+        // via a provider function so tokens can be refreshed automatically when expired.
+        // Falls back to local profile / default credential chain when remote mode is disabled.
         const remote = await this.config.getRemoteConfig();
-        let credentials: any;
+        let credentials: (() => Promise<AwsCredentials>) | undefined;
         if (remote) {
             logger.info("Using remote AWS credentials for Bedrock.");
-            credentials = await this.remoteCredentials.getCredentials();
+            credentials = () => this.remoteCredentials.getCredentials();
         } else if (profile) {
             credentials = (await import("@aws-sdk/credential-providers")).fromIni({ profile });
         } else {
             credentials = undefined;
         }
 
+        if (model === LLMModel.BEDROCK_CUSTOM && !providerConfig?.model) {
+            throw new Error("Custom Bedrock model ID or ARN is required. Run 'sat-cli init' to configure your custom Bedrock model.");
+        }
+
         const targetModel =
-            (model === LLMModel.BEDROCK_CUSTOM && providerConfig?.model)
-                ? providerConfig.model
+            model === LLMModel.BEDROCK_CUSTOM
+                ? providerConfig!.model!
                 : (model as string);
         const regionPrefix = region.startsWith("eu") ? "eu" : region.startsWith("ap") ? "ap" : "us";
         const resolvedModel =

@@ -42,7 +42,7 @@ export class FindingParser {
         const parsed = this.extractLastJsonArray(rawJson);
 
         if (!parsed) {
-            logger.error("Could not find JSON array in LLM response, falling back to regex parser");
+            logger.debug("Could not find JSON array in LLM response, falling back to regex parser");
             logger.debug(`Response (last 500 chars): ${rawJson.slice(-500)}`);
             return this.parseAuditOutput(rawAudit, diff);
         }

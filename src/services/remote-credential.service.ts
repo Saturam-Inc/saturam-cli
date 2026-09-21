@@ -95,9 +95,23 @@ function parseCredentials(payload: unknown): AwsCredentials {
 
     const credentials: AwsCredentials = { accessKeyId, secretAccessKey };
     if (sessionToken) credentials.sessionToken = sessionToken;
-    if (expirationRaw) {
-        const expiration = new Date(expirationRaw);
-        if (!isNaN(expiration.getTime())) credentials.expiration = expiration;
+
+    const expirationVal = data["expiration"] ?? data["Expiration"];
+    if (expirationVal !== undefined && expirationVal !== null) {
+        let expirationDate: Date | undefined;
+        if (typeof expirationVal === "number") {
+            expirationDate = new Date(expirationVal > 1e11 ? expirationVal : expirationVal * 1000);
+        } else if (typeof expirationVal === "string" && expirationVal.trim().length > 0) {
+            if (/^\d+$/.test(expirationVal.trim())) {
+                const num = Number(expirationVal.trim());
+                expirationDate = new Date(num > 1e11 ? num : num * 1000);
+            } else {
+                expirationDate = new Date(expirationVal);
+            }
+        }
+        if (expirationDate && !isNaN(expirationDate.getTime())) {
+            credentials.expiration = expirationDate;
+        }
     }
 
     return credentials;

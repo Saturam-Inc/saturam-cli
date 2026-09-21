@@ -23,7 +23,7 @@ export enum LLMModel {
     BEDROCK_CLAUDE_3_5_HAIKU = "anthropic.claude-3-5-haiku-20241022-v1:0",
     BEDROCK_CLAUDE_4_SONNET = "anthropic.claude-sonnet-4-20250514-v1:0",
     BEDROCK_CLAUDE_4_5_SONNET = "anthropic.claude-sonnet-4-5-20250929-v1:0",
-    BEDROCK_CLAUDE_4_6_SONNET = "anthropic.claude-sonnet-4-6-v1",
+    BEDROCK_CLAUDE_4_6_SONNET = "anthropic.claude-sonnet-4-6",
     BEDROCK_CLAUDE_4_6_OPUS = "anthropic.claude-opus-4-6-v1",
     BEDROCK_NOVA_PRO = "amazon.nova-pro-v1:0",
     BEDROCK_CUSTOM = "bedrock-custom",

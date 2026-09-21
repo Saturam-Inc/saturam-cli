@@ -44,7 +44,7 @@ describe("LlmService Bedrock credential resolution", () => {
         delete process.env.AWS_PROFILE;
     });
 
-    it("uses remote credentials when remote mode is configured", async () => {
+    it("uses dynamic remote credentials provider when remote mode is configured", async () => {
         const remoteCredentials: AwsCredentials = {
             accessKeyId: "AKIA_REMOTE",
             secretAccessKey: "SECRET_REMOTE",
@@ -58,9 +58,17 @@ describe("LlmService Bedrock credential resolution", () => {
         const service = new LlmService(config, remoteCreds);
         await service.getModel(LLMModel.BEDROCK_CLAUDE_4_SONNET);
 
-        expect(remoteCreds.getCredentials).toHaveBeenCalledTimes(1);
         expect(fromIniMock).not.toHaveBeenCalled();
-        expect(bedrockConstructorArgs[0].credentials).toEqual(remoteCredentials);
+        expect(typeof bedrockConstructorArgs[0].credentials).toBe("function");
+
+        // Execute provider function to verify dynamic credential retrieval
+        const creds = await bedrockConstructorArgs[0].credentials();
+        expect(creds).toEqual(remoteCredentials);
+        expect(remoteCreds.getCredentials).toHaveBeenCalledTimes(1);
+
+        // Verify dynamic refresh on subsequent invocations
+        await bedrockConstructorArgs[0].credentials();
+        expect(remoteCreds.getCredentials).toHaveBeenCalledTimes(2);
     });
 
     it("uses the local AWS profile when remote mode is not configured", async () => {

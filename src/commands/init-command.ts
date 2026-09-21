@@ -138,9 +138,22 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
 
             if (action === "exit") return;
             if (action === "remote") {
-                const remote = await this.configureRemote(existing.remote);
-                await this.config.savePersonalConfig({ ...existing, remote });
-                logger.info("\nRemote configuration saved.");
+                const enableRemote = await confirm({
+                    message: existing.remote
+                        ? "Remote credentials mode is currently ENABLED. Keep remote credentials enabled?"
+                        : "Enable remote AWS credential retrieval mode?",
+                    default: !!existing.remote,
+                });
+                if (enableRemote) {
+                    const remote = await this.configureRemote(existing.remote);
+                    await this.config.savePersonalConfig({ ...existing, remote });
+                    logger.info("\nRemote credential configuration saved.");
+                } else {
+                    const newConfig = { ...existing };
+                    delete newConfig.remote;
+                    await this.config.savePersonalConfig(newConfig);
+                    logger.info("\nRemote credential mode disabled.");
+                }
                 return;
             }
             if (action === "model") {
@@ -185,10 +198,15 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         // Step 2: Configure each provider
         const providers: PersonalConfiguration["providers"] = {};
         let remoteConfig: RemoteConfig | undefined = existing.remote;
+        let bedrockConfiguredInWizard = false;
+
         for (const provider of selectedProviders) {
             const res = await this.configureProvider(provider, existing.providers?.[provider], existing.remote);
             providers[provider] = res.providerConfig;
-            if (res.remoteConfig) {
+            if (provider === AIProvider.BEDROCK) {
+                bedrockConfiguredInWizard = true;
+                remoteConfig = res.remoteConfig;
+            } else if (res.remoteConfig) {
                 remoteConfig = res.remoteConfig;
             }
         }
@@ -210,16 +228,22 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         // Step 4: SCM platforms (GitHub, Bitbucket)
         const scmConfig = await this.configureSCMPlatforms(existing);
 
-        // Step 5: Remote credential retrieval (optional)
-        const remote = remoteConfig ?? (await this.maybeConfigureRemote(existing.remote));
+        // Step 5: Remote credential retrieval (only ask if Bedrock was not configured in step 2)
+        const remote = bedrockConfiguredInWizard
+            ? remoteConfig
+            : (remoteConfig ?? (await this.maybeConfigureRemote(existing.remote)));
 
-        return {
+        const finalConfig: PersonalConfiguration = {
             defaultProvider,
             defaultModel,
             providers,
             ...scmConfig,
-            ...(remote ? { remote } : {}),
         };
+        if (remote) {
+            finalConfig.remote = remote;
+        }
+
+        return finalConfig;
     }
 
     /**
@@ -249,6 +273,10 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
                     default: existing?.url ?? DEFAULT_REMOTE_URL,
                 })
             ).trim() || DEFAULT_REMOTE_URL;
+
+        if (!url.startsWith("https://") && !url.startsWith("http://localhost") && !url.startsWith("http://127.0.0.1")) {
+            logger.warn("Warning: Non-HTTPS remote URL configured. HTTPS (https://) is strongly recommended to protect credentials in transit.");
+        }
 
         const hint = existing?.token ? " (press enter to keep existing)" : " (optional, leave empty to skip)";
         const tokenInput = await password({
@@ -296,7 +324,7 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
 
         const useRemote = await confirm({
             message: "Configure remote AWS credential API URL for Bedrock?",
-            default: true,
+            default: existingRemote ? true : existing?.awsProfile ? false : true,
         });
 
         let remoteConfig: RemoteConfig | undefined;
@@ -485,8 +513,16 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         const config: PersonalConfiguration = {
             ...existing,
             providers,
-            ...(remoteConfig ? { remote: remoteConfig } : {}),
         };
+        if (provider === AIProvider.BEDROCK) {
+            if (remoteConfig) {
+                config.remote = remoteConfig;
+            } else {
+                delete config.remote;
+            }
+        } else if (remoteConfig) {
+            config.remote = remoteConfig;
+        }
         await this.config.savePersonalConfig(config);
 
         logger.info(`\n${PROVIDER_DISPLAY_NAMES[provider]} configured successfully.`);
