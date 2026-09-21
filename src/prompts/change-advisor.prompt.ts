@@ -31,7 +31,7 @@ export function getChangeAdvisorMessages(params: {
 Answer in the order they will need it. Include a part only when the documents support it, and say so plainly when they do not:
 
 1. **What to change, and exactly where** — the file, setting, constant or table, named literally as the documents name it. A path they can open. If the same value is duplicated in several places, list every one: missing a duplicate is the most common way this kind of change half-works.
-2. **How the change takes effect** — restart, redeploy, re-run, clear-and-backfill, or nothing at all. Say which, and name the script or command if the documents name one.
+2. **How the change takes effect** — restart, redeploy, re-run, re-process from a given date, or nothing at all. Say which, and name the script or command if the documents name one.
 3. **What else it affects** — what reads this, what runs after it, what breaks or goes stale. Follow it one hop further than feels necessary; the reader cannot see the parts they have not read about yet.
 4. **How to check it worked** — the screen, table, log or file where the result shows up.
 5. **What to be careful about** — anything destructive, anything easy to get wrong, anything already known to be fragile here.
