@@ -1,4 +1,3 @@
-import { QuestionIntent } from "../../../src/services/knowledge/chat-session.model";
 
 const sendMock = jest.fn();
 
@@ -38,7 +37,6 @@ function turn(index: number) {
         question: `q${index}`,
         answer: `a${index}`,
         answerGist: `g${index}`,
-        intent: QuestionIntent.PROJECT_KNOWLEDGE,
         retrievedChunkIds: [],
         createdAt: "2026-09-18T00:00:00Z",
     };

@@ -2,7 +2,7 @@ import { getLogger } from "log4js";
 import { Service } from "typedi";
 import { resolveAwsClientConfig } from "../../integrations/aws/utils/aws-credentials.util";
 import { ConfigService } from "../config-service";
-import { ChatSession, ChatTurn, MAX_RETAINED_TURNS, QuestionIntent, SessionDigest } from "./chat-session.model";
+import { ChatSession, ChatTurn, MAX_RETAINED_TURNS, SessionDigest } from "./chat-session.model";
 import { ConversationStore, InMemoryConversationStore } from "./conversation-store";
 import { SessionRef } from "./session-identity";
 
@@ -201,7 +201,7 @@ export class DynamoDbConversationStore implements ConversationStore {
             question: String(item.question ?? ""),
             answer: String(item.answer ?? ""),
             answerGist: String(item.answerGist ?? ""),
-            intent: (item.intent as QuestionIntent) ?? QuestionIntent.PROJECT_KNOWLEDGE,
+            // Rows written before the intent enum was removed still carry `intent`; it is ignored.
             resolvedProject: typeof item.resolvedProject === "string" ? item.resolvedProject : undefined,
             retrievedChunkIds: Array.isArray(item.retrievedChunkIds) ? (item.retrievedChunkIds as string[]) : [],
             createdAt: String(item.createdAt ?? new Date().toISOString()),

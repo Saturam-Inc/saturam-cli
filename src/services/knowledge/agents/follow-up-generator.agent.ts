@@ -3,7 +3,7 @@ import { Service } from "typedi";
 import { z } from "zod";
 import { RetrievedChunk } from "../../../integrations/aws/services/bedrock-knowledge-base.service";
 import { FOLLOW_UP_SHAPE_HINT, getFollowUpMessages } from "../../../prompts/follow-up.prompt";
-import { LearnerStage, SessionDigest } from "../chat-session.model";
+import { SessionDigest } from "../chat-session.model";
 import { StructuredOutputService } from "../structured-output";
 
 const logger = getLogger("FollowUpGenerator");
@@ -34,8 +34,6 @@ export class FollowUpGeneratorAgent {
         chunks: RetrievedChunk[];
         digest?: SessionDigest;
         projectDisplayName?: string;
-        stage: LearnerStage;
-        learnerGoal?: string;
     }): Promise<FollowUp[]> {
         try {
             const result = await this.structured.invoke({

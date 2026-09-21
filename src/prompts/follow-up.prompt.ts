@@ -1,6 +1,6 @@
 import { BaseMessage, HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { RetrievedChunk } from "../integrations/aws/services/bedrock-knowledge-base.service";
-import { LearnerStage, SessionDigest } from "../services/knowledge/chat-session.model";
+import { SessionDigest } from "../services/knowledge/chat-session.model";
 
 /**
  * Generates the next-step menu shown after each answer.
@@ -20,31 +20,20 @@ export function getFollowUpMessages(params: {
     chunks: RetrievedChunk[];
     digest?: SessionDigest;
     projectDisplayName?: string;
-    stage: LearnerStage;
-    learnerGoal?: string;
 }): BaseMessage[] {
     const alreadyAsked = params.digest?.questionsAsked.length
         ? `\n\nAlready asked in this conversation — do not suggest these or near-duplicates:\n${params.digest.questionsAsked.map((q) => `- ${q}`).join("\n")}`
         : "";
 
     const scope = params.projectDisplayName ? ` about the "${params.projectDisplayName}" project` : "";
-    const goal = params.learnerGoal ? `\nTheir overall aim: ${params.learnerGoal}. Steer the path toward it.` : "";
-
-    const stageHint: Record<LearnerStage, string> = {
-        [LearnerStage.FIRST_CONTACT]:
-            "They have just arrived. Offer the map: the one or two things to understand first.",
-        [LearnerStage.ORIENTING]:
-            "They are early. Offer the next piece of the picture, then one step deeper into what was just explained.",
-        [LearnerStage.DEEPENING]:
-            "They are going deep. Offer the failure mode, how to work on it safely, or what it connects to — not another overview.",
-        [LearnerStage.RETURNING]:
-            "They are back after a break. Offer to continue where they left off, then something adjacent.",
-    };
+    const goal = params.digest?.learnerGoal
+        ? `\nTheir overall aim: ${params.digest.learnerGoal}. Steer the path toward it.`
+        : "";
 
     const system = new SystemMessage(
         `You are a mentor deciding what to offer next to someone new to the team${scope}, having just answered their question.
 
-${stageHint[params.stage]}${goal}
+Judge from the answer below how far along they are, and pitch the suggestions to that.${goal}
 
 Produce exactly 3 entries, in this order:
 1. the natural next step from what was just explained

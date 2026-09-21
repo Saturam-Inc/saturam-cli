@@ -1,4 +1,4 @@
-import { ChatSession, QuestionIntent, VERBATIM_TURN_WINDOW } from "../../../src/services/knowledge/chat-session.model";
+import { ChatSession, VERBATIM_TURN_WINDOW } from "../../../src/services/knowledge/chat-session.model";
 import { SessionDigestService } from "../../../src/services/knowledge/session-digest.service";
 
 function session(turnCount: number, coversUpToIndex?: number): ChatSession {
@@ -9,7 +9,6 @@ function session(turnCount: number, coversUpToIndex?: number): ChatSession {
             question: `q${i}`,
             answer: `a${i}`,
             answerGist: `g${i}`,
-            intent: QuestionIntent.PROJECT_KNOWLEDGE,
             retrievedChunkIds: [],
             createdAt: new Date().toISOString(),
         })),

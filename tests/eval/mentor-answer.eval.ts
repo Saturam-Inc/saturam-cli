@@ -3,7 +3,7 @@ import { readFileSync } from "fs";
 import { join } from "path";
 import { z } from "zod";
 import { getAllCommandsContainer } from "../../src/containers/all-commands";
-import { AnswerFlowService, ProjectChooser } from "../../src/services/knowledge/answer-flow.service";
+import { AnswerFlowService } from "../../src/services/knowledge/answer-flow.service";
 import { ConfigService } from "../../src/services/config-service";
 import { StructuredOutputService } from "../../src/services/knowledge/structured-output";
 import { JUDGE_SHAPE_HINT, RUBRIC_CRITERIA, getJudgeMessages } from "./judge.prompt";
@@ -42,13 +42,6 @@ const fixtures = z
 /** Minimum mean score per criterion, out of 2. Raise as the prompt improves. */
 const PASS_THRESHOLD = 1.4;
 
-/** Eval answers should not ask the user anything — always take the top candidate. */
-const autoChooser: ProjectChooser = {
-    async choose(_question, candidates) {
-        return candidates[0] ? { kind: "project", slug: candidates[0].project.slug } : { kind: "all" };
-    },
-};
-
 describe("mentor answering eval", () => {
     let flow: AnswerFlowService;
     let structured: StructuredOutputService;
@@ -75,7 +68,7 @@ describe("mentor answering eval", () => {
                 return;
             }
 
-            const result = await flow.ask(fixture.question, autoChooser);
+            const result = await flow.ask(fixture.question);
             expect(result.answer.length).toBeGreaterThan(0);
 
             for (const term of fixture.mustMention ?? []) {

@@ -1,4 +1,4 @@
-import { ChatTurn, MAX_RETAINED_TURNS, QuestionIntent } from "../../../src/services/knowledge/chat-session.model";
+import { ChatTurn, MAX_RETAINED_TURNS } from "../../../src/services/knowledge/chat-session.model";
 import { InMemoryConversationStore } from "../../../src/services/knowledge/conversation-store";
 import { SessionRef } from "../../../src/services/knowledge/session-identity";
 
@@ -8,7 +8,6 @@ function turn(index: number): ChatTurn {
         question: `q${index}`,
         answer: `a${index}`,
         answerGist: `g${index}`,
-        intent: QuestionIntent.PROJECT_KNOWLEDGE,
         retrievedChunkIds: [],
         createdAt: new Date().toISOString(),
     };

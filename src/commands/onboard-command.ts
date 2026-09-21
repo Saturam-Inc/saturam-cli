@@ -6,10 +6,8 @@ import * as colors from "yoctocolors-cjs";
 import { Service } from "typedi";
 import { z } from "zod";
 import { KnowledgeBaseChatService } from "../services/knowledge/knowledge-base-chat.service";
-import { AnswerFlowService, OrientationRequest, ProjectChooser } from "../services/knowledge/answer-flow.service";
-import { AutoProjectChooser, InteractiveProjectChooser } from "../services/knowledge/cli-project-chooser";
+import { AnswerFlowService } from "../services/knowledge/answer-flow.service";
 import { FollowUp } from "../services/knowledge/agents/follow-up-generator.agent";
-import { QuestionIntent } from "../services/knowledge/chat-session.model";
 import { ConfigService } from "../services/config-service";
 import { OnboardConfig } from "../services/onboarding/onboarding-config.schema";
 import { OnboardingConfigService } from "../services/onboarding/onboarding-config.service";
@@ -437,84 +435,26 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
             logger.info("Started a new conversation.");
         }
 
-        // A picker cannot be shown without a terminal, so non-interactive runs take the
-        // top-ranked project and say so rather than hanging on a prompt nobody can answer.
-        const chooser: ProjectChooser = process.stdin.isTTY
-            ? new InteractiveProjectChooser()
-            : new AutoProjectChooser();
-
         logger.info("Ask about any indexed project, or a general engineering question.");
         logger.info("Type 'exit' or leave blank to quit.\n");
 
         // Set when the user picks a suggested follow-up, so the next iteration skips the prompt.
         let queuedQuestion: string | undefined;
-        // The question after a clarification must produce an answer, never another clarification.
-        let answeringAClarification = false;
-        // After a check question is posed, the next input is the learner's answer to it.
-        let awaitingQuizAnswer = false;
 
         for (;;) {
-            const question =
-                queuedQuestion ?? (await this.promptQuestion(awaitingQuizAnswer ? "Your answer :" : undefined));
+            const question = queuedQuestion ?? (await this.promptQuestion());
             queuedQuestion = undefined;
-            awaitingQuizAnswer = false;
             if (question === null || question === undefined) {
                 logger.info("Exiting.");
                 return;
             }
 
             try {
-                const allowClarification = !answeringAClarification;
-                answeringAClarification = false;
-                const result = await this.withLoading("Thinking", () =>
-                    this.answerFlow.ask(question, chooser, { allowClarification }),
-                );
-
-                // The user chose to rephrase at the project picker — nothing was answered.
-                if (result.cancelled) {
-                    logger.info("");
-                    continue;
-                }
-
-                // The flow could not answer from what it found, so it asks rather than guessing.
-                if (result.clarification) {
-                    logger.info(`\n${result.clarification.missing}`);
-                    logger.info("Did you mean one of these?\n");
-                    const refined = await this.promptFollowUp(
-                        result.clarification.questions.map((question) => ({ question, rationale: "" })),
-                        "Try instead:",
-                    );
-                    if (refined === null) {
-                        logger.info("Exiting.");
-                        return;
-                    }
-                    answeringAClarification = true;
-                    queuedQuestion = refined;
-                    continue;
-                }
-
-                // The mentor wants to know why they are here before answering. The goal is saved
-                // and the same question is asked again with it known.
-                if (result.orientation) {
-                    const goal = await this.promptOrientation(result.orientation);
-                    if (goal === null) {
-                        logger.info("Exiting.");
-                        return;
-                    }
-                    await this.answerFlow.setLearnerGoal(goal);
-                    queuedQuestion = question;
-                    continue;
-                }
+                const result = await this.withLoading("Thinking", () => this.answerFlow.ask(question));
 
                 if (result.project) logger.info(`\n${colors.bold(colors.cyan(`[${result.project.displayName}]`))}`);
                 logger.info(`\n${this.renderAnswer(result.answer)}\n`);
                 this.printSources(result.chunks);
-
-                // A posed check has no menu: the learner types their answer at the next prompt.
-                if (result.intent === QuestionIntent.QUIZ && result.followUps.length === 0) {
-                    awaitingQuizAnswer = true;
-                    continue;
-                }
 
                 const next = await this.promptFollowUp(result.followUps);
                 if (next === null) {
@@ -525,34 +465,6 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
             } catch (err) {
                 logger.error(`Chat failed: ${(err as Error).message}\n`);
             }
-        }
-    }
-
-    /**
-     * The mentor's opening question: a fixed set of goals plus free text. Returns the goal, or null
-     * to exit. Without a terminal there is nobody to ask, so the most open-ended goal is assumed.
-     */
-    private async promptOrientation(orientation: OrientationRequest): Promise<string | null> {
-        if (!process.stdin.isTTY) return orientation.options[orientation.options.length - 1] ?? "exploring";
-
-        const OTHER = "__other__";
-        logger.info(`\n${orientation.prompt}\n`);
-        try {
-            const choice = await select<string>({
-                message: "I'm here for:",
-                choices: [
-                    ...orientation.options.map((option) => ({ name: option, value: option })),
-                    { name: "Something else…", value: OTHER },
-                ],
-                pageSize: orientation.options.length + 1,
-            });
-            if (choice !== OTHER) return choice;
-
-            const typed = await input({ message: "Tell me in a few words:" });
-            return typed.trim() || orientation.options[orientation.options.length - 1];
-        } catch (err) {
-            if (err instanceof Error && err.name === "ExitPromptError") return null;
-            throw err;
         }
     }
 
