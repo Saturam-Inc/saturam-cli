@@ -110,8 +110,6 @@ export class MultiAgentReviewService {
         const seconds = Math.floor((durationMs % 60000) / 1000);
         const durationFormatted = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
 
-        logger.info(`Time taken for review: ${durationFormatted}`);
-
         return { audit, artifactsDir, durationFormatted, durationMs };
     }
 
