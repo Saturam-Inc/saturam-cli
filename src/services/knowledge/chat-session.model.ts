@@ -12,6 +12,17 @@ export enum QuestionIntent {
     GENERAL_TECHNICAL = "general_technical",
     /** About one of our internal projects — needs retrieval. */
     PROJECT_KNOWLEDGE = "project_knowledge",
+    /**
+     * About changing one of our systems, or about what a change would do: "what do I edit to move
+     * the schedule to Friday?", "what breaks if I change this path?", "how do I add a new domain?".
+     *
+     * Separated from PROJECT_KNOWLEDGE because it fails differently. A descriptive question is
+     * answered by the documents that describe the thing; a change question is answered by the
+     * documents that say where it is configured, what triggers it, and what reads it downstream —
+     * which are rarely the same documents, and rarely the ones a single search on the question's
+     * own wording returns.
+     */
+    CHANGE_IMPACT = "change_impact",
     /** About the assistant or the corpus itself ("what can you tell me about?"). */
     META = "meta",
     /**

@@ -21,12 +21,16 @@ const JudgeSchema = z.object({
     pointsSomewhere: z.number().min(0).max(2),
     avoidsInvention: z.number().min(0).max(2),
     synthesizes: z.number().min(0).max(2),
+    admitsGaps: z.number().min(0).max(2),
+    avoidsTemplate: z.number().min(0).max(2),
     notes: z.string().default(""),
 });
 
 const QuestionSchema = z.object({
     id: z.string(),
     question: z.string(),
+    /** Which behaviour the case exercises, so a regression points at one area rather than the mean. */
+    group: z.enum(["descriptive", "scenario", "guardrail", "blended"]).default("descriptive"),
     notes: z.string().optional(),
     mustMention: z.array(z.string()).optional(),
 });
@@ -60,6 +64,8 @@ describe("mentor answering eval", () => {
     }, 60_000);
 
     const scores: Record<string, number[]> = Object.fromEntries(RUBRIC_CRITERIA.map((c) => [c, []]));
+    /** Same scores split by fixture group — a mean over everything hides one broken category. */
+    const byGroup: Record<string, Record<string, number[]>> = {};
 
     it.each(fixtures.questions)(
         "$id",
@@ -85,12 +91,14 @@ describe("mentor answering eval", () => {
                 options: { temperature: 0 },
             });
 
+            byGroup[fixture.group] ??= Object.fromEntries(RUBRIC_CRITERIA.map((c) => [c, []]));
             for (const criterion of RUBRIC_CRITERIA) {
                 scores[criterion].push(graded[criterion]);
+                byGroup[fixture.group][criterion].push(graded[criterion]);
             }
 
             const line = RUBRIC_CRITERIA.map((c) => `${c}=${graded[c]}`).join(" ");
-            console.log(`[${fixture.id}] ${line} — ${graded.notes}`);
+            console.log(`[${fixture.group}/${fixture.id}] ${line} — ${graded.notes}`);
         },
         180_000,
     );
@@ -107,6 +115,16 @@ describe("mentor answering eval", () => {
         }
         if (failures.length > 0) {
             console.warn(`\nBelow the ${PASS_THRESHOLD} threshold: ${failures.join(", ")}`);
+        }
+
+        console.log("\n--- Mean scores by group ---");
+        for (const [group, groupScores] of Object.entries(byGroup)) {
+            const line = RUBRIC_CRITERIA.map((c) => {
+                const values = groupScores[c];
+                const mean = values.reduce((a, b) => a + b, 0) / values.length;
+                return `${c}=${mean.toFixed(2)}`;
+            }).join(" ");
+            console.log(`${group.padEnd(12)} ${line}`);
         }
     });
 });

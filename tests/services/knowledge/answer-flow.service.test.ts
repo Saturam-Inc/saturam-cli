@@ -1,4 +1,4 @@
-import { AnswerFlowService, ProjectChooser } from "../../../src/services/knowledge/answer-flow.service";
+import { AnswerCoverage, AnswerFlowService, ProjectChooser } from "../../../src/services/knowledge/answer-flow.service";
 import { QuestionIntent, createEmptySession } from "../../../src/services/knowledge/chat-session.model";
 import { InMemoryConversationStore } from "../../../src/services/knowledge/conversation-store";
 import { getOwnerId } from "../../../src/services/knowledge/session-identity";
@@ -9,9 +9,9 @@ const ref = (sessionId: string) => ({ ownerId: getOwnerId(), sessionId });
 describe("AnswerFlowService", () => {
     let classifier: any;
     let router: any;
-    let general: any;
-    let grounding: any;
-    let mentor: any;
+    let planner: any;
+    let writer: any;
+    let verify: any;
     let followUps: any;
     let knowledgeBase: any;
     let registry: any;
@@ -34,13 +34,18 @@ describe("AnswerFlowService", () => {
             }),
         };
         router = { route: jest.fn().mockResolvedValue({ kind: "resolved", project: smile, probeChunks: [] }) };
-        general = { answer: jest.fn().mockResolvedValue("general answer") };
-        grounding = {
-            check: jest.fn().mockResolvedValue({ verdict: "sufficient", missing: "", alternativeQuestions: [] }),
+        planner = {
+            plan: jest.fn().mockResolvedValue({ intent: "", queries: ["where configured", "what triggers it"] }),
         };
-        mentor = {
-            answer: jest.fn().mockResolvedValue("mentor answer"),
+        writer = {
+            describe: jest.fn().mockResolvedValue("mentor answer"),
+            advise: jest.fn().mockResolvedValue("change plan"),
+            general: jest.fn().mockResolvedValue("general answer"),
             summarize: jest.fn().mockResolvedValue("gist"),
+        };
+        verify = {
+            screen: jest.fn().mockResolvedValue({ verdict: "sufficient", missing: "", alternativeQuestions: [] }),
+            audit: jest.fn().mockResolvedValue({ unsupportedClaims: [] }),
         };
         followUps = { suggest: jest.fn().mockResolvedValue([{ question: "next?", rationale: "" }]) };
         knowledgeBase = { retrieve: jest.fn().mockResolvedValue([{ content: "c", location: "s3://b/a.md" }]) };
@@ -59,9 +64,9 @@ describe("AnswerFlowService", () => {
         flow = new AnswerFlowService(
             classifier,
             router,
-            general,
-            grounding,
-            mentor,
+            planner,
+            writer,
+            verify,
             followUps,
             knowledgeBase,
             registry,
@@ -80,10 +85,10 @@ describe("AnswerFlowService", () => {
             "how do refunds work?",
             expect.objectContaining({ project: "smile" }),
         );
-        expect(general.answer).not.toHaveBeenCalled();
+        expect(writer.general).not.toHaveBeenCalled();
     });
 
-    it("answers a general question without retrieving anything", async () => {
+    it("answers a general question without narrowing it to a project", async () => {
         classifier.classify.mockResolvedValueOnce({
             intent: QuestionIntent.GENERAL_TECHNICAL,
             projectHints: [],
@@ -94,8 +99,10 @@ describe("AnswerFlowService", () => {
         const result = await flow.ask("what is idempotency?", chooser);
 
         expect(result.answer).toBe("general answer");
-        expect(knowledgeBase.retrieve).not.toHaveBeenCalled();
+        // The corpus is still consulted — see "general questions checked against the corpus" —
+        // but a general question is never routed to, or filtered by, one project.
         expect(router.route).not.toHaveBeenCalled();
+        expect(writer.describe).not.toHaveBeenCalled();
     });
 
     it("answers a meta question from the registry, with no model call", async () => {
@@ -109,8 +116,8 @@ describe("AnswerFlowService", () => {
         const result = await flow.ask("what can you tell me about?", chooser);
 
         expect(result.answer).toContain("SMILE");
-        expect(mentor.answer).not.toHaveBeenCalled();
-        expect(general.answer).not.toHaveBeenCalled();
+        expect(writer.describe).not.toHaveBeenCalled();
+        expect(writer.general).not.toHaveBeenCalled();
     });
 
     it("asks the user to choose when routing is ambiguous, then scopes to their pick", async () => {
@@ -138,7 +145,7 @@ describe("AnswerFlowService", () => {
         const result = await flow.ask("how do refunds work?", chooser);
 
         expect(result.cancelled).toBe(true);
-        expect(mentor.answer).not.toHaveBeenCalled();
+        expect(writer.describe).not.toHaveBeenCalled();
         expect(followUps.suggest).not.toHaveBeenCalled();
     });
 
@@ -209,7 +216,7 @@ describe("AnswerFlowService", () => {
 
         expect(result.answer).toContain("how does the ARAP data mart work?");
         expect(result.answer).toContain("double-entry");
-        expect(mentor.answer).not.toHaveBeenCalled();
+        expect(writer.describe).not.toHaveBeenCalled();
         expect(knowledgeBase.retrieve).not.toHaveBeenCalled();
     });
 
@@ -252,7 +259,7 @@ describe("AnswerFlowService", () => {
     it("asks a clarifying question instead of answering from the wrong documents", async () => {
         // The bug this guards: "do we use Lambda?" retrieved documents about the Llama API and
         // the answer opened with "Yes, we are using Lambda functions".
-        grounding.check.mockResolvedValueOnce({
+        verify.screen.mockResolvedValueOnce({
             verdict: "wrong_subject",
             missing: "No document mentions AWS Lambda; the matches are about the Llama API.",
             alternativeQuestions: [
@@ -265,12 +272,12 @@ describe("AnswerFlowService", () => {
 
         expect(result.clarification?.questions).toHaveLength(2);
         expect(result.answer).toBe("");
-        expect(mentor.answer).not.toHaveBeenCalled();
+        expect(writer.describe).not.toHaveBeenCalled();
         expect(followUps.suggest).not.toHaveBeenCalled();
     });
 
     it("does not record a turn for a clarification, so the reply is a fresh question", async () => {
-        grounding.check.mockResolvedValueOnce({
+        verify.screen.mockResolvedValueOnce({
             verdict: "wrong_subject",
             missing: "nothing covers rollback",
             alternativeQuestions: ["How is the MRF pipeline rolled back?"],
@@ -282,7 +289,7 @@ describe("AnswerFlowService", () => {
     });
 
     it("answers anyway when the gate objects but offers no usable question", async () => {
-        grounding.check.mockResolvedValueOnce({
+        verify.screen.mockResolvedValueOnce({
             verdict: "wrong_subject",
             missing: "partial coverage",
             alternativeQuestions: [],
@@ -308,13 +315,13 @@ describe("AnswerFlowService", () => {
 
         expect(result.answer).toContain("SMILE");
         expect(knowledgeBase.retrieve).not.toHaveBeenCalled();
-        expect(mentor.answer).not.toHaveBeenCalled();
+        expect(writer.describe).not.toHaveBeenCalled();
     });
 
     it("never asks for clarification twice in a row", async () => {
         // The bug this guards: each suggested rephrasing failed the gate in turn, walking the user
         // through eight rounds of questions without ever producing an answer.
-        grounding.check.mockResolvedValue({
+        verify.screen.mockResolvedValue({
             verdict: "wrong_subject",
             missing: "not covered",
             alternativeQuestions: ["a sharper question?"],
@@ -461,12 +468,354 @@ describe("AnswerFlowService", () => {
         expect(session.digest?.summary).toBe("s");
     });
 
-    it("still answers when retrieval fails, falling back to the probe chunks", async () => {
+    it("still answers when retrieval fails but the router's probe already returned chunks", async () => {
+        const probeChunks = [{ content: "from the probe", location: "s3://b/probe.md" }];
+        router.route.mockResolvedValue({ kind: "resolved", project: smile, probeChunks });
         knowledgeBase.retrieve.mockRejectedValueOnce(new Error("bedrock down"));
 
         const result = await flow.ask("how do refunds work?", chooser);
 
         expect(result.answer).toBe("mentor answer");
-        expect(result.chunks).toEqual([]);
+        expect(result.chunks).toEqual(probeChunks);
+        expect(result.coverage).toBe(AnswerCoverage.DOCUMENTED);
+    });
+
+    describe("answers assembled in code", () => {
+        const ask = (intent: QuestionIntent, question: string) => {
+            classifier.classify.mockResolvedValue({
+                intent,
+                projectHints: [],
+                crossProject: false,
+                resolvedQuestion: question,
+                reasoning: "",
+            });
+            return flow.ask(question, chooser);
+        };
+
+        it("spends no model call beyond the classifier on a greeting", async () => {
+            await ask(QuestionIntent.SMALL_TALK, "hi");
+
+            // No model wrote the greeting and no document backs it, so there is nothing to
+            // summarise and nothing to audit.
+            expect(followUps.suggest).not.toHaveBeenCalled();
+            expect(writer.summarize).not.toHaveBeenCalled();
+            expect(verify.audit).not.toHaveBeenCalled();
+        });
+
+        it("offers the indexed projects instead of model-invented follow-ups", async () => {
+            const result = await ask(QuestionIntent.SMALL_TALK, "hi");
+
+            expect(result.followUps).toEqual([{ question: "Tell me about SMILE", rationale: "" }]);
+        });
+
+        it("offers projects after a corpus question too", async () => {
+            const result = await ask(QuestionIntent.META, "what can you tell me about?");
+
+            expect(result.followUps).toEqual([{ question: "Tell me about SMILE", rationale: "" }]);
+            expect(followUps.suggest).not.toHaveBeenCalled();
+        });
+
+        it("offers nothing to follow after a recap, which would talk over itself", async () => {
+            const result = await ask(QuestionIntent.CONVERSATION, "what did we cover?");
+
+            expect(result.followUps).toEqual([]);
+        });
+
+        it("suggests nothing rather than something generic when no project is indexed", async () => {
+            registry.load.mockResolvedValue({ projects: [] });
+
+            const result = await ask(QuestionIntent.SMALL_TALK, "hi");
+
+            expect(result.followUps).toEqual([]);
+        });
+
+        it("still records the turn, with a gist written in code", async () => {
+            await ask(QuestionIntent.META, "what can you tell me about?");
+
+            const session = await loadCurrent();
+            expect(session.turns[0].answerGist).toBe("listed the projects currently indexed");
+        });
+
+        it("keeps the full batch for an answer a model actually wrote", async () => {
+            await flow.ask("how do refunds work?", chooser);
+
+            expect(followUps.suggest).toHaveBeenCalled();
+            expect(writer.summarize).toHaveBeenCalled();
+            expect(verify.audit).toHaveBeenCalled();
+        });
+    });
+
+    describe("general questions checked against the corpus", () => {
+        const askGeneral = (question = "how should retries be handled?") => {
+            classifier.classify.mockResolvedValue({
+                intent: QuestionIntent.GENERAL_TECHNICAL,
+                projectHints: [],
+                crossProject: false,
+                resolvedQuestion: question,
+                reasoning: "",
+            });
+            return flow.ask(question, chooser);
+        };
+
+        it("searches our documentation even though the classifier called the question general", async () => {
+            await askGeneral();
+
+            expect(knowledgeBase.retrieve).toHaveBeenCalled();
+        });
+
+        it("hands what it found to the general answerer, so it can show how we actually do it", async () => {
+            const chunks = [{ content: "we retry twice then dead-letter", location: "s3://b/retry.md" }];
+            knowledgeBase.retrieve.mockResolvedValue(chunks);
+
+            const result = await askGeneral();
+
+            expect(writer.general).toHaveBeenCalledWith(expect.objectContaining({ chunks }));
+            expect(result.coverage).toBe(AnswerCoverage.BLENDED);
+            expect(result.chunks).toEqual(chunks);
+        });
+
+        it("answers generally when the corpus has nothing on it", async () => {
+            knowledgeBase.retrieve.mockResolvedValue([]);
+
+            const result = await askGeneral();
+
+            expect(writer.general).toHaveBeenCalledWith(expect.objectContaining({ chunks: [] }));
+            expect(result.coverage).toBe(AnswerCoverage.NOT_APPLICABLE);
+        });
+
+        it("skips the search entirely when nothing is indexed", async () => {
+            registry.load.mockResolvedValue({ projects: [] });
+
+            const result = await askGeneral();
+
+            expect(knowledgeBase.retrieve).not.toHaveBeenCalled();
+            expect(result.answer).toBe("general answer");
+        });
+
+        it("still answers generally when the knowledge base is unreachable", async () => {
+            knowledgeBase.retrieve.mockRejectedValue(new Error("bedrock down"));
+
+            const result = await askGeneral();
+
+            // The explanation never depended on retrieval, so a broken corpus must not withhold it.
+            expect(result.answer).toBe("general answer");
+            expect(result.coverage).toBe(AnswerCoverage.NOT_APPLICABLE);
+        });
+
+        it("never routes a general question to a project", async () => {
+            await askGeneral();
+
+            expect(router.route).not.toHaveBeenCalled();
+            expect(writer.describe).not.toHaveBeenCalled();
+        });
+    });
+
+    describe("change and impact questions", () => {
+        const askChange = (question = "what do I change to move the schedule to Friday?") => {
+            classifier.classify.mockResolvedValue({
+                intent: QuestionIntent.CHANGE_IMPACT,
+                projectHints: [],
+                crossProject: false,
+                resolvedQuestion: question,
+                reasoning: "",
+            });
+            return flow.ask(question, chooser);
+        };
+
+        it("plans several searches instead of searching the question once", async () => {
+            await askChange();
+
+            expect(planner.plan).toHaveBeenCalled();
+            expect(knowledgeBase.retrieve).toHaveBeenCalledTimes(2);
+            expect(knowledgeBase.retrieve).toHaveBeenCalledWith("where configured", expect.anything());
+            expect(knowledgeBase.retrieve).toHaveBeenCalledWith("what triggers it", expect.anything());
+        });
+
+        it("scopes every planned search to the routed project", async () => {
+            await askChange();
+
+            for (const call of knowledgeBase.retrieve.mock.calls) {
+                expect(call[1]).toMatchObject({ project: "smile" });
+            }
+        });
+
+        it("answers with a change plan rather than a description", async () => {
+            const result = await askChange();
+
+            expect(writer.advise).toHaveBeenCalled();
+            expect(writer.describe).not.toHaveBeenCalled();
+            expect(result.answer).toBe("change plan");
+        });
+
+        it("gives the planner the previous turn, so a follow-up change question stands alone", async () => {
+            await flow.ask("how does the scheduler work?", chooser);
+            await askChange("and how would I change it to Friday?");
+
+            expect(planner.plan).toHaveBeenCalledWith(expect.objectContaining({ priorSubject: "gist" }));
+        });
+
+        it("ranks a document several searches agree on above one only a single search found", async () => {
+            knowledgeBase.retrieve
+                .mockResolvedValueOnce([
+                    { content: "only in the first search", location: "s3://b/one.md", score: 0.9 },
+                    { content: "found by both", location: "s3://b/both.md", score: 0.4 },
+                ])
+                .mockResolvedValueOnce([{ content: "found by both", location: "s3://b/both.md", score: 0.5 }]);
+
+            const result = await askChange();
+
+            expect(result.chunks.map((c) => c.location)).toEqual(["s3://b/both.md", "s3://b/one.md"]);
+        });
+
+        it("keeps every chunk of the same document, since one document arrives as many chunks", async () => {
+            knowledgeBase.retrieve
+                .mockResolvedValueOnce([
+                    { content: "first half of the page", location: "s3://b/same.md", score: 0.7 },
+                    { content: "second half of the page", location: "s3://b/same.md", score: 0.6 },
+                ])
+                .mockResolvedValueOnce([]);
+
+            const result = await askChange();
+
+            expect(result.chunks).toHaveLength(2);
+        });
+
+        it("still answers when only some of the planned searches fail", async () => {
+            knowledgeBase.retrieve
+                .mockRejectedValueOnce(new Error("bedrock down"))
+                .mockResolvedValueOnce([{ content: "survived", location: "s3://b/ok.md" }]);
+
+            const result = await askChange();
+
+            expect(result.answer).toBe("change plan");
+            expect(result.chunks).toEqual([{ content: "survived", location: "s3://b/ok.md" }]);
+        });
+
+        it("refuses rather than planning a change from nothing when every search fails", async () => {
+            knowledgeBase.retrieve.mockRejectedValue(new Error("bedrock down"));
+
+            const result = await askChange();
+
+            expect(writer.advise).not.toHaveBeenCalled();
+            expect(result.coverage).toBe(AnswerCoverage.NOT_DOCUMENTED);
+            expect(result.answer).toContain("could not reach the knowledge base");
+        });
+
+        it("refuses when the searches succeed but find nothing", async () => {
+            knowledgeBase.retrieve.mockResolvedValue([]);
+
+            const result = await askChange();
+
+            expect(writer.advise).not.toHaveBeenCalled();
+            expect(result.coverage).toBe(AnswerCoverage.NOT_DOCUMENTED);
+        });
+
+        it("keeps a change question on one project even when the classifier marks it cross-project", async () => {
+            classifier.classify.mockResolvedValue({
+                intent: QuestionIntent.CHANGE_IMPACT,
+                projectHints: [],
+                crossProject: true,
+                resolvedQuestion: "what do I change everywhere?",
+                reasoning: "",
+            });
+
+            await flow.ask("what do I change everywhere?", chooser);
+
+            // You change one system at a time — routing must still run.
+            expect(router.route).toHaveBeenCalled();
+            expect(writer.advise).toHaveBeenCalledWith(expect.objectContaining({ projectDisplayName: "SMILE" }));
+        });
+
+        it("audits a change plan the same way it audits a description", async () => {
+            verify.audit.mockResolvedValue({ unsupportedClaims: ["restart nginx"] });
+
+            const result = await askChange();
+
+            expect(result.answer).toContain("change plan");
+            expect(result.answer).toContain("restart nginx");
+        });
+    });
+
+    describe("guardrails", () => {
+        it("refuses to answer from an empty retrieval instead of letting the model fill the gap", async () => {
+            knowledgeBase.retrieve.mockResolvedValue([]);
+
+            const result = await flow.ask("what is the kubernetes autoscaling policy?", chooser);
+
+            expect(writer.describe).not.toHaveBeenCalled();
+            expect(result.coverage).toBe(AnswerCoverage.NOT_DOCUMENTED);
+            expect(result.answer).toContain("could not find anything");
+            expect(result.answer).toContain("not going to guess");
+        });
+
+        it("names the project it searched, and what else is indexed, so the refusal is actionable", async () => {
+            knowledgeBase.retrieve.mockResolvedValue([]);
+
+            const result = await flow.ask("what is the kubernetes autoscaling policy?", chooser);
+
+            expect(result.answer).toContain("SMILE");
+        });
+
+        it("distinguishes a broken knowledge base from one that simply has nothing", async () => {
+            router.route.mockResolvedValue({ kind: "resolved", project: smile, probeChunks: [] });
+            knowledgeBase.retrieve.mockRejectedValue(new Error("bedrock down"));
+
+            const result = await flow.ask("how do refunds work?", chooser);
+
+            expect(writer.describe).not.toHaveBeenCalled();
+            expect(result.answer).toContain("could not reach the knowledge base");
+            expect(result.answer).toContain("try again");
+            // Nothing was searched, so listing the corpus would imply a search that never happened.
+            expect(result.answer).not.toContain("Indexed right now");
+        });
+
+        it("refuses on an empty retrieval even when a clarification was already offered", async () => {
+            knowledgeBase.retrieve.mockResolvedValue([]);
+
+            // allowClarification:false is the "never two clarifications in a row" rule. It must not
+            // become a licence to answer a question nothing was retrieved for.
+            const result = await flow.ask("something absent", chooser, { allowClarification: false });
+
+            expect(writer.describe).not.toHaveBeenCalled();
+            expect(result.coverage).toBe(AnswerCoverage.NOT_DOCUMENTED);
+        });
+
+        it("appends the audit's unsupported claims to the answer rather than dropping the answer", async () => {
+            verify.audit.mockResolvedValue({ unsupportedClaims: ["runs on Kubernetes", "retries three times"] });
+
+            const result = await flow.ask("how do refunds work?", chooser);
+
+            expect(result.answer).toContain("mentor answer");
+            expect(result.answer).toContain("Not found in the documentation");
+            expect(result.answer).toContain("runs on Kubernetes");
+            expect(result.unsupportedClaims).toEqual(["runs on Kubernetes", "retries three times"]);
+        });
+
+        it("leaves a clean answer untouched", async () => {
+            const result = await flow.ask("how do refunds work?", chooser);
+
+            expect(result.answer).toBe("mentor answer");
+            expect(result.unsupportedClaims).toEqual([]);
+        });
+
+        it("audits the finished answer against the chunks it was built from", async () => {
+            await flow.ask("how do refunds work?", chooser);
+
+            expect(verify.audit).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    answer: "mentor answer",
+                    chunks: [{ content: "c", location: "s3://b/a.md" }],
+                }),
+            );
+        });
+
+        it("persists the caveated answer, so a later recap does not quote the unflagged version", async () => {
+            verify.audit.mockResolvedValue({ unsupportedClaims: ["runs on Kubernetes"] });
+
+            await flow.ask("how do refunds work?", chooser);
+
+            const session = await loadCurrent();
+            expect(session.turns[0].answer).toContain("Not found in the documentation");
+        });
     });
 });

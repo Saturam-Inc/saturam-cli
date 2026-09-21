@@ -5,13 +5,20 @@ import {
     RetrievedChunk,
 } from "../../integrations/aws/services/bedrock-knowledge-base.service";
 import { ConfigService } from "../config-service";
+import { AnswerWriterAgent } from "./agents/answer-writer.agent";
+import { RetrievalPlannerAgent } from "./agents/retrieval-planner.agent";
 import { FollowUp, FollowUpGeneratorAgent } from "./agents/follow-up-generator.agent";
-import { GeneralTechnicalAgent } from "./agents/general-technical.agent";
-import { GroundingCheckAgent, GroundingVerdict } from "./agents/grounding-check.agent";
 import { IntentClassifierAgent } from "./agents/intent-classifier.agent";
-import { MentorAnswererAgent } from "./agents/mentor-answerer.agent";
+import { GroundingVerdict, VerificationAgent } from "./agents/verification.agent";
 import { ProjectCandidate, ProjectRouterAgent } from "./agents/project-router.agent";
-import { CARRY_OVER_TURNS, ChatSession, ChatTurn, QuestionIntent, contextTurns } from "./chat-session.model";
+import {
+    CARRY_OVER_TURNS,
+    ChatSession,
+    ChatTurn,
+    QuestionIntent,
+    SessionDigest,
+    contextTurns,
+} from "./chat-session.model";
 import { SessionRef, describeOwner, getOwnerId, newSessionId } from "./session-identity";
 import { ConversationStoreProvider } from "./dynamodb-conversation-store";
 import { ProjectRegistryService, RegistryProject } from "./project-registry.service";
@@ -22,8 +29,42 @@ const logger = getLogger("AnswerFlow");
 /** Chunks retrieved for the answer itself, once a project is settled. */
 const ANSWER_RESULT_COUNT = 12;
 
+/**
+ * Chunks per sub-query on the change path. Lower than ANSWER_RESULT_COUNT because several
+ * searches run: the point is breadth across angles, not depth on any one of them.
+ */
+const PLANNED_RESULT_COUNT = 6;
+
+/** Ceiling on the merged set, so four searches cannot bury the answering prompt. */
+const MERGED_RESULT_CAP = 14;
+
+/**
+ * Chunks pulled when checking whether a general question also has a house answer. Deliberately
+ * small: this is a "do we have anything on this at all" probe, not the basis of the answer.
+ */
+const GENERAL_PROBE_RESULT_COUNT = 6;
+
+/** Projects offered as "tell me about X" after a greeting or a corpus question. */
+const ASSEMBLED_FOLLOW_UP_COUNT = 4;
+
 /** Previous sessions consulted when gathering carry-over context. */
 const CARRY_OVER_SESSION_LOOKBACK = 3;
+
+/**
+ * How well the retrieved documentation backed the answer. The CLI does not branch on this yet;
+ * it exists so "we could not answer that" is a first-class outcome the flow reports, rather than
+ * something a caller has to infer from the prose.
+ */
+export enum AnswerCoverage {
+    /** Answered from retrieved documentation. */
+    DOCUMENTED = "documented",
+    /** A general answer that our own documentation also had something to say about. */
+    BLENDED = "blended",
+    /** Nothing usable was retrieved, so the answer says so instead of guessing. */
+    NOT_DOCUMENTED = "not_documented",
+    /** Retrieval did not apply: general knowledge, small talk, recall, or a corpus description. */
+    NOT_APPLICABLE = "not_applicable",
+}
 
 /** What the user picked when asked to disambiguate a project. */
 export type ProjectChoice = { kind: "project"; slug: string } | { kind: "all" } | { kind: "rephrase" };
@@ -56,6 +97,10 @@ export interface AnswerResult {
     project?: RegistryProject;
     /** True when the user asked to rephrase instead of picking a project — nothing was answered. */
     cancelled: boolean;
+    /** How well the documentation backed this answer. */
+    coverage: AnswerCoverage;
+    /** Claims the post-answer audit could not find support for, already appended to `answer`. */
+    unsupportedClaims: string[];
     /** Present when the flow needs more from the user before it can answer. */
     clarification?: ClarificationRequest;
 }
@@ -79,9 +124,9 @@ export class AnswerFlowService {
     constructor(
         private readonly classifier: IntentClassifierAgent,
         private readonly router: ProjectRouterAgent,
-        private readonly general: GeneralTechnicalAgent,
-        private readonly grounding: GroundingCheckAgent,
-        private readonly mentor: MentorAnswererAgent,
+        private readonly planner: RetrievalPlannerAgent,
+        private readonly writer: AnswerWriterAgent,
+        private readonly verify: VerificationAgent,
         private readonly followUps: FollowUpGeneratorAgent,
         private readonly knowledgeBase: BedrockKnowledgeBaseService,
         private readonly registry: ProjectRegistryService,
@@ -122,27 +167,29 @@ export class AnswerFlowService {
         });
 
         if (outcome.cancelled) {
-            return { ...outcome, intent: classification.intent, followUps: [] };
+            return { ...outcome, intent: classification.intent, followUps: [], unsupportedClaims: [] };
         }
 
         // A clarification is not an answer: nothing is recorded, so the user's reply is treated as
         // a fresh question rather than a follow-up to something that was never said.
         if (outcome.clarification) {
-            return { ...outcome, intent: classification.intent, followUps: [] };
+            return { ...outcome, intent: classification.intent, followUps: [], unsupportedClaims: [] };
         }
 
-        // Independent of each other and both need the finished answer — run together so the user
-        // waits for one round trip rather than two.
-        const [followUps, answerGist] = await Promise.all([
-            this.followUps.suggest({
-                question: effectiveQuestion,
-                answer: outcome.answer,
-                chunks: outcome.chunks,
-                digest: session.digest,
-                projectDisplayName: outcome.project?.displayName,
-            }),
-            this.mentor.summarize(effectiveQuestion, outcome.answer),
-        ]);
+        // A greeting, a recap and "what do you know about?" are assembled in code from the
+        // registry and the session — no model wrote them and no document backs them, so there is
+        // nothing for the audit to check and nothing for a summariser to compress. Running the
+        // batch anyway cost two calls and produced the suggestions that made a greeting offer to
+        // explain "the role of an engineer on a project".
+        const { followUps, answerGist, unsupportedClaims } = this.isAssembledAnswer(classification.intent)
+            ? await this.completeAssembledTurn(classification.intent, outcome.answer)
+            : await this.completeWrittenTurn({
+                  question: effectiveQuestion,
+                  outcome,
+                  digest: session.digest,
+              });
+
+        const answer = this.withAuditCaveat(outcome.answer, unsupportedClaims);
 
         await this.recordTurn({
             store,
@@ -151,7 +198,7 @@ export class AnswerFlowService {
             turn: {
                 index: session.turns.length,
                 question,
-                answer: outcome.answer,
+                answer,
                 answerGist,
                 intent: classification.intent,
                 resolvedProject: outcome.project?.slug,
@@ -160,7 +207,84 @@ export class AnswerFlowService {
             },
         });
 
-        return { ...outcome, intent: classification.intent, followUps };
+        return { ...outcome, answer, intent: classification.intent, followUps, unsupportedClaims };
+    }
+
+    /** Whether this intent is answered from the registry or session history rather than by a model. */
+    private isAssembledAnswer(intent: QuestionIntent): boolean {
+        return (
+            intent === QuestionIntent.META ||
+            intent === QuestionIntent.SMALL_TALK ||
+            intent === QuestionIntent.CONVERSATION
+        );
+    }
+
+    /**
+     * Finishes a turn whose answer was assembled in code: no follow-up call, no summariser call,
+     * no audit. The gist is written here because it is already known, and the suggestions come
+     * from the registry, which offers something better than a model does — the projects actually
+     * indexed, by name, instead of a guess at what someone greeting us might want.
+     */
+    private async completeAssembledTurn(
+        intent: QuestionIntent,
+        answer: string,
+    ): Promise<{ followUps: FollowUp[]; answerGist: string; unsupportedClaims: string[] }> {
+        const gists: Record<string, string> = {
+            [QuestionIntent.META]: "listed the projects currently indexed",
+            [QuestionIntent.SMALL_TALK]: "exchanged a greeting",
+            [QuestionIntent.CONVERSATION]: "recapped what this conversation has covered",
+        };
+
+        // A recap offering "tell me about X" would talk over itself, so only the two intents that
+        // are genuinely an opening get project suggestions.
+        const suggestProjects = intent === QuestionIntent.META || intent === QuestionIntent.SMALL_TALK;
+        const { projects } = suggestProjects ? await this.registry.load() : { projects: [] };
+
+        return {
+            followUps: projects.slice(0, ASSEMBLED_FOLLOW_UP_COUNT).map((project) => ({
+                question: `Tell me about ${project.displayName}`,
+                rationale: "",
+            })),
+            answerGist: gists[intent] ?? answer.trim().slice(0, 200),
+            unsupportedClaims: [],
+        };
+    }
+
+    /**
+     * Finishes a turn a model wrote. All three calls need the finished answer and none needs the
+     * others, so they run together and the audit costs no extra waiting — only an extra call.
+     */
+    private async completeWrittenTurn(params: {
+        question: string;
+        outcome: { answer: string; chunks: RetrievedChunk[]; project?: RegistryProject };
+        digest?: SessionDigest;
+    }): Promise<{ followUps: FollowUp[]; answerGist: string; unsupportedClaims: string[] }> {
+        const { question, outcome, digest } = params;
+        const [followUps, answerGist, audit] = await Promise.all([
+            this.followUps.suggest({
+                question,
+                answer: outcome.answer,
+                chunks: outcome.chunks,
+                digest,
+                projectDisplayName: outcome.project?.displayName,
+            }),
+            this.writer.summarize(question, outcome.answer),
+            this.verify.audit({ question, answer: outcome.answer, chunks: outcome.chunks }),
+        ]);
+        return { followUps, answerGist, unsupportedClaims: audit.unsupportedClaims };
+    }
+
+    /**
+     * Appends what the audit could not verify, rather than deleting it.
+     *
+     * A single unsupported line in an otherwise good answer is worth flagging, not worth throwing
+     * the answer away over — and since the auditor can be wrong, the reader needs to see the claim
+     * to judge it. Suppression would hide both the claim and the mistake.
+     */
+    private withAuditCaveat(answer: string, unsupportedClaims: string[]): string {
+        if (unsupportedClaims.length === 0) return answer;
+        const lines = unsupportedClaims.map((claim) => `> - ${claim}`).join("\n");
+        return `${answer.trimEnd()}\n\n> **Not found in the documentation** — treat these as unverified and confirm before relying on them:\n${lines}`;
     }
 
     private async produceAnswer(params: {
@@ -178,37 +302,65 @@ export class AnswerFlowService {
         chunks: RetrievedChunk[];
         project?: RegistryProject;
         cancelled: boolean;
+        coverage: AnswerCoverage;
         clarification?: ClarificationRequest;
     }> {
         const { classification, question, session, recentTurns } = params;
+        const noRetrieval = { chunks: [], cancelled: false, coverage: AnswerCoverage.NOT_APPLICABLE };
 
         if (classification === QuestionIntent.META) {
-            return { answer: await this.describeCorpus(), chunks: [], cancelled: false };
+            return { answer: await this.describeCorpus(), ...noRetrieval };
         }
 
         if (classification === QuestionIntent.SMALL_TALK) {
-            return { answer: await this.greet(), chunks: [], cancelled: false };
+            return { answer: await this.greet(), ...noRetrieval };
         }
 
         if (classification === QuestionIntent.CONVERSATION) {
-            return { answer: await this.recall(session, params.sessionRef), chunks: [], cancelled: false };
+            return { answer: await this.recall(session, params.sessionRef), ...noRetrieval };
         }
 
         if (classification === QuestionIntent.GENERAL_TECHNICAL) {
-            const answer = await this.general.answer({ question, recentTurns, digest: session.digest });
-            return { answer, chunks: [], cancelled: false };
+            // Check the corpus even though the classifier called this general. The classifier
+            // judged the wording; only the corpus knows whether we have written anything about it,
+            // and answering "how should retries work?" from textbook knowledge while our own
+            // retry page sits unread is the failure this exists to prevent.
+            const chunks = await this.probeForHouseAnswer(question);
+            const answer = await this.writer.general({ question, recentTurns, digest: session.digest, chunks });
+            return {
+                answer,
+                chunks,
+                cancelled: false,
+                coverage: chunks.length > 0 ? AnswerCoverage.BLENDED : AnswerCoverage.NOT_APPLICABLE,
+            };
         }
 
         // A question spanning projects must not inherit the sticky project: narrowing it would
-        // report on one project in language that sounds like it covered them all.
-        if (params.crossProject) {
-            const chunks = await this.retrieveForAnswer(question, undefined, []);
-            const gate = await this.grounding.check({ question, chunks });
+        // report on one project in language that sounds like it covered them all. A change
+        // question is excluded: you change one system at a time, and a cross-project change plan
+        // would be a plan for nowhere in particular.
+        if (params.crossProject && classification !== QuestionIntent.CHANGE_IMPACT) {
+            const retrieved = await this.retrieveForAnswer(question, undefined, []);
+            const empty = await this.emptyContextOutcome(retrieved, undefined);
+            if (empty) return empty;
+
+            const gate = await this.verify.screen({ question, chunks: retrieved.chunks });
             if (this.shouldClarify(gate, params.allowClarification)) {
-                return { answer: "", chunks, cancelled: false, clarification: this.toClarification(gate) };
+                return {
+                    answer: "",
+                    chunks: retrieved.chunks,
+                    cancelled: false,
+                    coverage: AnswerCoverage.DOCUMENTED,
+                    clarification: this.toClarification(gate),
+                };
             }
-            const answer = await this.mentor.answer({ question, chunks, recentTurns, digest: session.digest });
-            return { answer, chunks, cancelled: false };
+            const answer = await this.writer.describe({
+                question,
+                chunks: retrieved.chunks,
+                recentTurns,
+                digest: session.digest,
+            });
+            return { answer, chunks: retrieved.chunks, cancelled: false, coverage: AnswerCoverage.DOCUMENTED };
         }
 
         const decision = await this.router.route({
@@ -223,29 +375,188 @@ export class AnswerFlowService {
         } else if (decision.kind === "ambiguous") {
             const choice = await params.chooser.choose(question, decision.candidates);
             if (choice.kind === "rephrase") {
-                return { answer: "", chunks: [], cancelled: true };
+                return { answer: "", chunks: [], cancelled: true, coverage: AnswerCoverage.NOT_APPLICABLE };
             }
             if (choice.kind === "project") {
                 project = decision.candidates.find((c) => c.project.slug === choice.slug)?.project;
             }
         }
 
-        const chunks = await this.retrieveForAnswer(question, project, decision.probeChunks);
+        // A change question needs several searches, not a deeper one, so it takes its own
+        // retrieval path — but only after routing, because the searches must be project-filtered.
+        const isChange = classification === QuestionIntent.CHANGE_IMPACT;
+        const retrieved = isChange
+            ? await this.retrieveForChange(question, project, recentTurns)
+            : await this.retrieveForAnswer(question, project, decision.probeChunks);
+        const empty = await this.emptyContextOutcome(retrieved, project);
+        if (empty) return empty;
 
-        const gate = await this.grounding.check({ question, chunks });
-        if (this.shouldClarify(gate, params.allowClarification)) {
-            return { answer: "", chunks, project, cancelled: false, clarification: this.toClarification(gate) };
+        if (isChange) {
+            const answer = await this.writer.advise({
+                question,
+                chunks: retrieved.chunks,
+                projectDisplayName: project?.displayName,
+                recentTurns,
+                digest: session.digest,
+            });
+            return { answer, chunks: retrieved.chunks, project, cancelled: false, coverage: AnswerCoverage.DOCUMENTED };
         }
 
-        const answer = await this.mentor.answer({
+        const gate = await this.verify.screen({ question, chunks: retrieved.chunks });
+        if (this.shouldClarify(gate, params.allowClarification)) {
+            return {
+                answer: "",
+                chunks: retrieved.chunks,
+                project,
+                cancelled: false,
+                coverage: AnswerCoverage.DOCUMENTED,
+                clarification: this.toClarification(gate),
+            };
+        }
+
+        const answer = await this.writer.describe({
             question,
-            chunks,
+            chunks: retrieved.chunks,
             projectDisplayName: project?.displayName,
             recentTurns,
             digest: session.digest,
         });
 
-        return { answer, chunks, project, cancelled: false };
+        return { answer, chunks: retrieved.chunks, project, cancelled: false, coverage: AnswerCoverage.DOCUMENTED };
+    }
+
+    /**
+     * Looks for a house answer to a general question. Failure is silent and returns nothing: the
+     * general answer is still worth giving, and an unreachable knowledge base is not a reason to
+     * withhold an explanation that never depended on it.
+     */
+    private async probeForHouseAnswer(question: string): Promise<RetrievedChunk[]> {
+        const { projects } = await this.registry.load();
+        if (projects.length === 0) return [];
+
+        try {
+            return await this.knowledgeBase.retrieve(question, { numberOfResults: GENERAL_PROBE_RESULT_COUNT });
+        } catch (err) {
+            logger.debug(`House-answer probe failed (${(err as Error).message}) — answering generally only.`);
+            return [];
+        }
+    }
+
+    /**
+     * Retrieval for a change question: plan several searches, run them together, merge the results.
+     *
+     * The searches are independent, so they run in parallel and cost one round trip rather than
+     * four. `allSettled` because one failed angle should narrow the answer, not lose it.
+     */
+    private async retrieveForChange(
+        question: string,
+        project: RegistryProject | undefined,
+        recentTurns: ChatTurn[],
+    ): Promise<{ chunks: RetrievedChunk[]; failed: boolean }> {
+        const plan = await this.planner.plan({
+            question,
+            projectDisplayName: project?.displayName,
+            priorSubject: recentTurns[recentTurns.length - 1]?.answerGist,
+        });
+
+        const settled = await Promise.allSettled(
+            plan.queries.map((query) =>
+                this.knowledgeBase.retrieve(query, {
+                    project: project?.slug,
+                    numberOfResults: PLANNED_RESULT_COUNT,
+                }),
+            ),
+        );
+
+        const failures = settled.filter((r) => r.status === "rejected").length;
+        if (failures > 0) {
+            logger.warn(`${failures} of ${plan.queries.length} planned retrievals failed.`);
+        }
+
+        const chunks = this.mergeChunks(
+            settled.flatMap((result) => (result.status === "fulfilled" ? result.value : [])),
+        );
+        logger.debug(`Planned retrieval merged to ${chunks.length} chunk(s) from ${plan.queries.length} search(es).`);
+
+        return { chunks, failed: chunks.length === 0 && failures === plan.queries.length };
+    }
+
+    /**
+     * Merges the per-query results into one ranked set.
+     *
+     * Overlap between the searches is expected and is itself a signal — a document several angles
+     * agree on is usually the one that matters — so a repeat keeps its best score and is ranked
+     * higher, rather than being thrown away.
+     */
+    private mergeChunks(chunks: RetrievedChunk[]): RetrievedChunk[] {
+        const byKey = new Map<string, { chunk: RetrievedChunk; hits: number; score: number }>();
+
+        for (const chunk of chunks) {
+            // Content, not location: a document arrives as several chunks under one S3 URI, and
+            // keying on the URI would discard every chunk of it but the first.
+            const key = `${chunk.location ?? ""}::${chunk.content.trim().slice(0, 200)}`;
+            const existing = byKey.get(key);
+            if (existing) {
+                existing.hits += 1;
+                existing.score = Math.max(existing.score, chunk.score ?? 0);
+                continue;
+            }
+            byKey.set(key, { chunk, hits: 1, score: chunk.score ?? 0 });
+        }
+
+        return [...byKey.values()]
+            .sort((a, b) => b.hits - a.hits || b.score - a.score)
+            .slice(0, MERGED_RESULT_CAP)
+            .map((entry) => entry.chunk);
+    }
+
+    /**
+     * The outcome for a question nothing was retrieved for, or `undefined` when there is context
+     * to answer from.
+     *
+     * This is the guardrail the reported behaviour was missing. Previously an empty retrieval
+     * still reached the answering model — the grounding check returned "wrong_subject" but with
+     * no alternative questions, which `shouldClarify` reads as "do not stop" — and the model was
+     * handed "(No relevant context was found)" and asked to answer anyway. Whatever it then wrote
+     * came from general knowledge wearing the voice of our documentation.
+     *
+     * The reply is assembled here rather than generated, because a model asked to say "I don't
+     * know" will often take one more guess at the answer on its way.
+     */
+    private async emptyContextOutcome(
+        retrieved: { chunks: RetrievedChunk[]; failed: boolean },
+        project: RegistryProject | undefined,
+    ): Promise<
+        | { answer: string; chunks: []; project?: RegistryProject; cancelled: false; coverage: AnswerCoverage }
+        | undefined
+    > {
+        if (retrieved.chunks.length > 0) return undefined;
+
+        const base = retrieved.failed
+            ? "I could not reach the knowledge base just now, so I have nothing to answer from. Please try again in a moment."
+            : project
+              ? `I could not find anything about that in the ${project.displayName} documentation, so I am not going to guess.`
+              : "I could not find anything about that in the indexed documentation, so I am not going to guess.";
+
+        const parts = [base];
+        if (!retrieved.failed) {
+            const { projects } = await this.registry.load();
+            if (projects.length > 0) {
+                parts.push("", `Indexed right now: ${projects.map((p) => p.displayName).join(", ")}.`);
+            }
+            parts.push(
+                "",
+                "If you think it should be there, it may be worded differently — try naming the specific file, table, screen or job you mean. If it genuinely is not documented, that gap is worth raising with whoever owns the project.",
+            );
+        }
+
+        return {
+            answer: parts.join("\n"),
+            chunks: [],
+            project,
+            cancelled: false,
+            coverage: AnswerCoverage.NOT_DOCUMENTED,
+        };
     }
 
     /**
@@ -285,24 +596,31 @@ export class AnswerFlowService {
      * Retrieves the chunks the answer is built from. The router's probe was unfiltered and
      * deliberately shallow, so a resolved project earns its own filtered retrieval; an unresolved
      * one reuses the probe rather than paying for an identical second call.
+     *
+     * `failed` separates "the corpus has nothing on this" from "we could not ask the corpus".
+     * Both end up with no chunks, but they are different things to tell someone, and only the
+     * second is worth retrying.
      */
     private async retrieveForAnswer(
         question: string,
         project: RegistryProject | undefined,
         probeChunks: RetrievedChunk[],
-    ): Promise<RetrievedChunk[]> {
+    ): Promise<{ chunks: RetrievedChunk[]; failed: boolean }> {
         try {
             if (project) {
-                return await this.knowledgeBase.retrieve(question, {
+                const chunks = await this.knowledgeBase.retrieve(question, {
                     project: project.slug,
                     numberOfResults: ANSWER_RESULT_COUNT,
                 });
+                return { chunks, failed: false };
             }
-            if (probeChunks.length > 0) return probeChunks;
-            return await this.knowledgeBase.retrieve(question, { numberOfResults: ANSWER_RESULT_COUNT });
+            if (probeChunks.length > 0) return { chunks: probeChunks, failed: false };
+            const chunks = await this.knowledgeBase.retrieve(question, { numberOfResults: ANSWER_RESULT_COUNT });
+            return { chunks, failed: false };
         } catch (err) {
             logger.warn(`Retrieval failed: ${(err as Error).message}`);
-            return probeChunks;
+            // The probe, if there was one, still came from the corpus — better than nothing.
+            return { chunks: probeChunks, failed: probeChunks.length === 0 };
         }
     }
 
