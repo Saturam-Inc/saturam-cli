@@ -21,7 +21,7 @@ describe("ProjectRegistryService", () => {
     });
 
     beforeEach(() => {
-        s3 = { getObject: jest.fn().mockResolvedValue(Buffer.from(registryJson)) };
+        s3 = { getStateObject: jest.fn().mockResolvedValue(Buffer.from(registryJson)) };
         config = { getPersonalConfigPath: jest.fn().mockReturnValue("/nonexistent/sateng/config.json") };
         service = new ProjectRegistryService(s3, config);
     });
@@ -30,18 +30,25 @@ describe("ProjectRegistryService", () => {
         const { projects } = await service.load();
 
         expect(projects.map((p) => p.slug)).toEqual(["smile", "billing-core"]);
-        expect(s3.getObject).toHaveBeenCalledWith("registry.json");
+    });
+
+    it("reads registry.json from the state prefix, where the pipeline writes it", async () => {
+        await service.load();
+
+        // Not getObject: the content prefix is what Bedrock ingests, and registry.json is
+        // deliberately kept out of it.
+        expect(s3.getStateObject).toHaveBeenCalledWith("registry.json");
     });
 
     it("caches the registry so every question does not pay an S3 round trip", async () => {
         await service.load();
         await service.load();
 
-        expect(s3.getObject).toHaveBeenCalledTimes(1);
+        expect(s3.getStateObject).toHaveBeenCalledTimes(1);
     });
 
     it("returns an empty registry rather than throwing when S3 and the local sync both fail", async () => {
-        s3.getObject.mockRejectedValue(new Error("no such key"));
+        s3.getStateObject.mockRejectedValue(new Error("no such key"));
 
         const { projects } = await service.load();
 
@@ -69,7 +76,7 @@ describe("ProjectRegistryService", () => {
     });
 
     it("tells the prompt plainly when nothing is indexed", async () => {
-        s3.getObject.mockRejectedValue(new Error("no such key"));
+        s3.getStateObject.mockRejectedValue(new Error("no such key"));
 
         await expect(service.describeForPrompt()).resolves.toBe("(no projects are indexed yet)");
     });

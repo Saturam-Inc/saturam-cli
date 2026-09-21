@@ -48,6 +48,38 @@ describe("S3Service", () => {
         );
     });
 
+    it("getStateObject reads from the state prefix, not the content prefix", async () => {
+        mockConfig.getS3Config.mockResolvedValue({
+            bucket: "my-bucket",
+            prefix: "onboarding",
+            statePrefix: "onboarding-state",
+            region: "us-east-1",
+        });
+        mockSend.mockResolvedValueOnce({
+            Body: { transformToByteArray: () => Promise.resolve(new Uint8Array([104, 105])) },
+        });
+
+        const result = await service.getStateObject("registry.json");
+
+        expect(result).toEqual(Buffer.from("hi"));
+        expect(mockSend).toHaveBeenCalledWith(
+            expect.objectContaining({ input: { Bucket: "my-bucket", Key: "onboarding-state/registry.json" } }),
+        );
+    });
+
+    it("getStateObject falls back to the bucket root when no state prefix is configured", async () => {
+        mockConfig.getS3Config.mockResolvedValue({ bucket: "my-bucket", prefix: "onboarding", region: "us-east-1" });
+        mockSend.mockResolvedValueOnce({
+            Body: { transformToByteArray: () => Promise.resolve(new Uint8Array([104, 105])) },
+        });
+
+        await service.getStateObject("registry.json");
+
+        expect(mockSend).toHaveBeenCalledWith(
+            expect.objectContaining({ input: { Bucket: "my-bucket", Key: "registry.json" } }),
+        );
+    });
+
     it("putObject writes to the prefixed key", async () => {
         mockSend.mockResolvedValueOnce({});
 
@@ -57,6 +89,18 @@ describe("S3Service", () => {
             expect.objectContaining({
                 input: { Bucket: "my-bucket", Key: "docs/file.md", Body: "content", ContentType: "text/markdown" },
             }),
+        );
+    });
+
+    it("listObjects scopes to whole path segments so a sibling prefix does not leak in", async () => {
+        mockSend.mockResolvedValueOnce({ Contents: [{ Key: "docs/a.md" }], IsTruncated: false });
+
+        await service.listObjects();
+
+        // Without the trailing slash, S3's literal prefix match would also return every key
+        // under a sibling such as "docs-state/".
+        expect(mockSend).toHaveBeenCalledWith(
+            expect.objectContaining({ input: expect.objectContaining({ Prefix: "docs/" }) }),
         );
     });
 

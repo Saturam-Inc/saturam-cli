@@ -65,6 +65,13 @@ export const CloudProviderConfigSchema = z.object({
         .object({
             bucket: z.string().describe("S3 bucket name"),
             prefix: z.string().optional().describe("Key prefix within the bucket"),
+            statePrefix: z
+                .string()
+                .optional()
+                .describe(
+                    'Key prefix holding ingestion state (registry.json, run status). Defaults to "<prefix>-state", ' +
+                        "which keeps state files out of the content prefix so Bedrock never ingests them as documents.",
+                ),
             region: z.string().optional().describe("Bucket region (defaults to awsRegion)"),
         })
         .optional()
@@ -616,7 +623,15 @@ export class ConfigService {
         return cloudConfig;
     }
 
-    public async getS3Config(): Promise<{ bucket: string; prefix?: string; region: string }> {
+    /**
+     * The bucket plus both prefixes the CLI reads and writes under.
+     *
+     * `prefix` holds the synced documents, which the Bedrock data source ingests. `statePrefix`
+     * holds what the ingestion pipeline writes about that corpus — registry.json and run status —
+     * and is deliberately a sibling of the content prefix rather than a folder inside it, so a
+     * state file is never picked up and indexed as if it were documentation.
+     */
+    public async getS3Config(): Promise<{ bucket: string; prefix?: string; statePrefix?: string; region: string }> {
         const cloudConfig = await this.getAWSCloudConfig();
         if (!cloudConfig.s3) {
             throw new Error(
@@ -632,8 +647,21 @@ export class ConfigService {
         return {
             bucket: cloudConfig.s3.bucket,
             prefix: cloudConfig.s3.prefix,
+            statePrefix: ConfigService.resolveStatePrefix(cloudConfig.s3.prefix, cloudConfig.s3.statePrefix),
             region,
         };
+    }
+
+    /**
+     * Where ingestion state lives, given the content prefix. An explicit setting always wins.
+     * Otherwise it is the content prefix with a "-state" suffix; with no content prefix at all
+     * there is nothing to sit beside, so state stays at the bucket root — which is also what the
+     * CLI did before this setting existed, so an existing config keeps resolving the same key.
+     */
+    public static resolveStatePrefix(prefix?: string, statePrefix?: string): string | undefined {
+        if (statePrefix?.trim()) return statePrefix.trim().replace(/\/+$/, "");
+        const trimmed = prefix?.trim().replace(/\/+$/, "");
+        return trimmed ? `${trimmed}-state` : undefined;
     }
 
     public async getBedrockKnowledgeBaseConfig(): Promise<{

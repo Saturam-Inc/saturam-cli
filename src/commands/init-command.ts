@@ -363,11 +363,19 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
             logger.info("\nS3 access:");
             logger.info("1. Go to: https://console.aws.amazon.com/s3/");
             logger.info("2. Create (or pick) a bucket, and note its name and region.");
-            logger.info("3. Attach an IAM policy to your user/role scoped to that bucket, e.g.:");
+            logger.info("3. Attach an IAM policy to your user/role scoped to that bucket.");
+            logger.info("   Paste this whole document into the IAM console's JSON tab — a bare");
+            logger.info('   statement without the "Version"/"Statement" wrapper is a syntax error,');
+            logger.info("   and s3:ListBucket must target the bucket ARN while the object actions");
+            logger.info("   target the /* ARN:");
             logger.info("   {");
-            logger.info('     "Effect": "Allow",');
-            logger.info('     "Action": ["s3:GetObject", "s3:PutObject", "s3:ListBucket"],');
-            logger.info('     "Resource": ["arn:aws:s3:::YOUR_BUCKET", "arn:aws:s3:::YOUR_BUCKET/*"]');
+            logger.info('     "Version": "2012-10-17",');
+            logger.info('     "Statement": [');
+            logger.info('       { "Effect": "Allow", "Action": "s3:ListBucket",');
+            logger.info('         "Resource": "arn:aws:s3:::YOUR_BUCKET" },');
+            logger.info('       { "Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject"],');
+            logger.info('         "Resource": "arn:aws:s3:::YOUR_BUCKET/*" }');
+            logger.info("     ]");
             logger.info("   }\n");
 
             const bucket = await input({
@@ -379,12 +387,24 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
                 message: "Key prefix within the bucket (optional):",
                 default: existing?.s3?.prefix ?? "",
             });
+            const defaultStatePrefix = ConfigService.resolveStatePrefix(prefix);
+            const statePrefix = await input({
+                message: defaultStatePrefix
+                    ? `State prefix holding registry.json and run status (leave empty for "${defaultStatePrefix}"):`
+                    : "State prefix holding registry.json and run status (leave empty for the bucket root):",
+                default: existing?.s3?.statePrefix ?? "",
+            });
             const s3Region = await input({
                 message: "Bucket region (leave empty to use the AWS region above):",
                 default: existing?.s3?.region ?? "",
             });
 
-            s3 = { bucket, prefix: prefix.trim() || undefined, region: s3Region.trim() || undefined };
+            s3 = {
+                bucket,
+                prefix: prefix.trim() || undefined,
+                statePrefix: statePrefix.trim() || undefined,
+                region: s3Region.trim() || undefined,
+            };
         }
 
         let bedrockKnowledgeBase: CloudProviderConfig["bedrockKnowledgeBase"] = existing?.bedrockKnowledgeBase;

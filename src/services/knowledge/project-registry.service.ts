@@ -9,7 +9,7 @@ import { slugify } from "../../utils/slug.util";
 
 const logger = getLogger("ProjectRegistry");
 
-/** Fixed key the ingestion pipeline writes, relative to the configured S3 prefix. */
+/** Fixed key the ingestion pipeline writes, relative to the configured S3 *state* prefix. */
 export const REGISTRY_S3_KEY = "registry.json";
 
 export const RegistryProjectSchema = z.object({
@@ -34,8 +34,8 @@ export type ProjectRegistry = z.infer<typeof ProjectRegistrySchema>;
  *
  * Automatic routing needs this and Bedrock cannot supply it: the Retrieve API filters on a
  * `project` metadata value but has no operation to enumerate the values present. So the registry
- * is read from S3 (written by the ingestion pipeline), and falls back to the locally synced
- * onboarding folders while that pipeline does not yet exist.
+ * is read from S3, where the ingestion pipeline writes it under the state prefix, and falls back
+ * to the locally synced onboarding folders when no pipeline has run against this bucket.
  *
  * Resolved once per process — the project list does not change mid-conversation, and every
  * question would otherwise pay an S3 round trip.
@@ -61,7 +61,7 @@ export class ProjectRegistryService {
 
     private async loadFromS3(): Promise<ProjectRegistry | undefined> {
         try {
-            const body = await this.s3.getObject(REGISTRY_S3_KEY);
+            const body = await this.s3.getStateObject(REGISTRY_S3_KEY);
             const parsed = ProjectRegistrySchema.parse(JSON.parse(body.toString("utf8")));
             logger.debug(`Loaded ${parsed.projects.length} project(s) from the S3 registry.`);
             return parsed;
@@ -72,9 +72,9 @@ export class ProjectRegistryService {
     }
 
     /**
-     * Derives a registry from the locally synced onboarding directories. This is a stopgap for
-     * the period before the ingestion pipeline writes registry.json: it has no aliases and no
-     * summaries, so disambiguation prompts are thinner, but routing still works.
+     * Derives a registry from the locally synced onboarding directories, for a bucket no
+     * ingestion pipeline has written a registry.json for yet. It has no aliases and no summaries,
+     * so disambiguation prompts are thinner, but routing still works.
      */
     private async loadFromLocalSync(): Promise<ProjectRegistry | undefined> {
         const baseDir = join(dirname(this.config.getPersonalConfigPath()), "onboarding");

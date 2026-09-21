@@ -219,7 +219,36 @@ describe("ConfigService Onboarding Credentials", () => {
                 },
             } as any);
             const s3Config = await service.getS3Config();
-            expect(s3Config).toEqual({ bucket: "my-bucket", prefix: "docs", region: "eu-west-1" });
+            expect(s3Config).toEqual({
+                bucket: "my-bucket",
+                prefix: "docs",
+                statePrefix: "docs-state",
+                region: "eu-west-1",
+            });
+        });
+
+        it("should prefer an explicitly configured statePrefix over the derived default", async () => {
+            jest.spyOn(service, "loadPersonalConfig").mockResolvedValue({
+                cloud: {
+                    [CloudProvider.AWS]: {
+                        enabled: true,
+                        awsRegion: "eu-west-1",
+                        s3: { bucket: "my-bucket", prefix: "onboarding", statePrefix: "pipeline-state" },
+                    },
+                },
+            } as any);
+            const s3Config = await service.getS3Config();
+            expect(s3Config.statePrefix).toBe("pipeline-state");
+        });
+
+        it("should leave statePrefix unset when there is no content prefix to sit beside", async () => {
+            jest.spyOn(service, "loadPersonalConfig").mockResolvedValue({
+                cloud: {
+                    [CloudProvider.AWS]: { enabled: true, awsRegion: "eu-west-1", s3: { bucket: "my-bucket" } },
+                },
+            } as any);
+            const s3Config = await service.getS3Config();
+            expect(s3Config.statePrefix).toBeUndefined();
         });
 
         it("should throw if S3 has no bucket region or AWS region", async () => {
