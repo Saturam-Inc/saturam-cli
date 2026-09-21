@@ -271,12 +271,17 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
                 await input({
                     message: "Remote URL:",
                     default: existing?.url ?? DEFAULT_REMOTE_URL,
+                    validate: (val) => {
+                        const trimmed = val.trim();
+                        if (!trimmed) return true;
+                        return trimmed.startsWith("https://") ||
+                            trimmed.startsWith("http://localhost") ||
+                            trimmed.startsWith("http://127.0.0.1")
+                            ? true
+                            : "Remote URL must use https:// to protect credentials in transit";
+                    },
                 })
             ).trim() || DEFAULT_REMOTE_URL;
-
-        if (!url.startsWith("https://") && !url.startsWith("http://localhost") && !url.startsWith("http://127.0.0.1")) {
-            logger.warn("Warning: Non-HTTPS remote URL configured. HTTPS (https://) is strongly recommended to protect credentials in transit.");
-        }
 
         const hint = existing?.token ? " (press enter to keep existing)" : " (optional, leave empty to skip)";
         const tokenInput = await password({
