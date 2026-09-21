@@ -3,8 +3,9 @@ import { RetrievedChunk } from "../../../integrations/aws/services/bedrock-knowl
 import { getChangeAdvisorMessages } from "../../../prompts/change-advisor.prompt";
 import { getGeneralTechnicalMessages } from "../../../prompts/general-technical.prompt";
 import { getAnswerGistMessages, getMentorAnswerMessages } from "../../../prompts/mentor-answer.prompt";
+import { getReviseAnswerMessages } from "../../../prompts/revise-answer.prompt";
 import { LlmService } from "../../llm-service";
-import { ChatTurn, SessionDigest } from "../chat-session.model";
+import { ChatTurn, LearnerStage, SessionDigest } from "../chat-session.model";
 import { ProjectRegistryService } from "../project-registry.service";
 
 /**
@@ -15,6 +16,8 @@ const DESCRIBE_TEMPERATURE = 0.4;
 const GENERAL_TEMPERATURE = 0.3;
 const ADVISE_TEMPERATURE = 0.2;
 const GIST_TEMPERATURE = 0;
+/** A revision changes only what it is told to; any latitude here is a chance to change more. */
+const REVISE_TEMPERATURE = 0;
 
 interface AnswerRequest {
     question: string;
@@ -22,6 +25,8 @@ interface AnswerRequest {
     projectDisplayName?: string;
     recentTurns: ChatTurn[];
     digest?: SessionDigest;
+    /** What the learner said they are here to do, if they said. */
+    learnerGoal?: string;
 }
 
 /**
@@ -42,8 +47,8 @@ export class AnswerWriterAgent {
         private readonly registry: ProjectRegistryService,
     ) {}
 
-    /** The mentoring explanation: what it is, why it exists, how it works, where to look. */
-    public async describe(params: AnswerRequest): Promise<string> {
+    /** The mentoring explanation, pitched to where the learner is in the conversation. */
+    public async describe(params: AnswerRequest & { stage: LearnerStage }): Promise<string> {
         return this.llm.prompt(getMentorAnswerMessages(params), undefined, { temperature: DESCRIBE_TEMPERATURE });
     }
 
@@ -62,6 +67,7 @@ export class AnswerWriterAgent {
         recentTurns: ChatTurn[];
         digest?: SessionDigest;
         chunks?: RetrievedChunk[];
+        learnerGoal?: string;
     }): Promise<string> {
         const { projects } = await this.registry.load();
         const messages = getGeneralTechnicalMessages({
@@ -70,6 +76,14 @@ export class AnswerWriterAgent {
             hasIndexedProjects: projects.length > 0,
         });
         return this.llm.prompt(messages, undefined, { temperature: GENERAL_TEMPERATURE });
+    }
+
+    /**
+     * Takes back identifiers the sources never mention. The list arrives from a string check, so
+     * there is no judgement to make — only names to remove or attribute. See unsupported-identifiers.ts.
+     */
+    public async revise(params: { question: string; answer: string; unsupported: string[] }): Promise<string> {
+        return this.llm.prompt(getReviseAnswerMessages(params), undefined, { temperature: REVISE_TEMPERATURE });
     }
 
     /**

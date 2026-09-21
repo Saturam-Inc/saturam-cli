@@ -2,7 +2,6 @@ import { getLogger } from "log4js";
 import { Service } from "typedi";
 import { z } from "zod";
 import { RetrievedChunk } from "../../../integrations/aws/services/bedrock-knowledge-base.service";
-import { ANSWER_AUDIT_SHAPE_HINT, getAnswerAuditMessages } from "../../../prompts/answer-audit.prompt";
 import { GROUNDING_CHECK_SHAPE_HINT, getGroundingCheckMessages } from "../../../prompts/grounding-check.prompt";
 import { StructuredOutputService } from "../structured-output";
 
@@ -13,9 +12,6 @@ const TEMPERATURE = 0;
 
 /** Rephrasings offered when the screen stops a question. */
 const MAX_ALTERNATIVES = 4;
-
-/** Flagging everything is the same as flagging nothing — a long list stops being read. */
-const MAX_CLAIMS = 3;
 
 export enum GroundingVerdict {
     SUFFICIENT = "sufficient",
@@ -31,27 +27,18 @@ export const GroundingResultSchema = z.object({
 
 export type GroundingResult = z.infer<typeof GroundingResultSchema>;
 
-export const AnswerAuditSchema = z.object({
-    unsupportedClaims: z.array(z.string()).default([]),
-});
-
-export type AnswerAudit = z.infer<typeof AnswerAuditSchema>;
-
 /**
- * Checks the answer against the documents, twice: once before it is written and once after.
+ * Checks, before an answer is written, that retrieval found the right subject.
  *
- * The two were separate agents and are one now because they are the same job at two moments, on
- * the same evidence, with the same dependency and the same conservative failure rule. Keeping
- * them apart implied they could be reasoned about independently, and they cannot — the screen is
- * biased to let things through precisely because the audit is behind it.
+ * A second check used to run after the answer, reading it back against its sources and flagging
+ * anything unsupported. It was removed: on the models this CLI has to support it could not tell
+ * invention from honest reporting, flagging file names and commands that sat plainly in the
+ * retrieved documents. A warning under a correct answer teaches the reader to distrust the
+ * answers, which is a worse outcome than the invention it was meant to catch.
  *
- * They do catch different failures, which is why both still run:
- *
- * - `screen` sees retrieval but no answer. It catches the near-miss — a question about AWS Lambda
- *   pulling back documents on the Llama API — before the expensive answering call is spent.
- * - `audit` sees the finished answer. It catches what the screen structurally cannot: right
- *   subject, thin coverage, and the model quietly filling the thin parts with how such a system
- *   usually looks.
+ * What guards invention now is what demonstrably works: the flow refuses outright when retrieval
+ * comes back empty, and the answering prompts are required to name their own gaps rather than
+ * fill them.
  */
 @Service()
 export class VerificationAgent {
@@ -99,48 +86,6 @@ export class VerificationAgent {
             // carries its own "never invent" rules, and the audit still runs afterwards.
             logger.debug(`Grounding check failed (${(err as Error).message}) — answering anyway.`);
             return { verdict: GroundingVerdict.SUFFICIENT, missing: "", alternativeQuestions: [] };
-        }
-    }
-
-    /**
-     * After answering: does the answer claim anything about our systems that the documents do
-     * not support?
-     *
-     * Findings are surfaced as a caveat under the answer rather than used to suppress it. A
-     * mostly-correct answer with one flagged line is more useful than no answer, and suppression
-     * would make a false alarm expensive.
-     */
-    public async audit(params: { question: string; answer: string; chunks: RetrievedChunk[] }): Promise<AnswerAudit> {
-        // With nothing retrieved there is no document to check against, so every claim would read
-        // as unsupported and the caveat would swamp the answer. The flow already refuses to answer
-        // from an empty context, so this only guards direct callers.
-        if (params.chunks.length === 0 || !params.answer.trim()) {
-            return { unsupportedClaims: [] };
-        }
-
-        try {
-            const result = await this.structured.invoke({
-                schema: AnswerAuditSchema,
-                name: "audit_answer",
-                shapeHint: ANSWER_AUDIT_SHAPE_HINT,
-                messages: getAnswerAuditMessages(params),
-                options: { temperature: TEMPERATURE },
-            });
-
-            const claims = result.unsupportedClaims
-                .map((claim) => claim.trim())
-                .filter(Boolean)
-                .slice(0, MAX_CLAIMS);
-
-            if (claims.length > 0) {
-                logger.debug(`Answer audit flagged ${claims.length} unsupported claim(s).`);
-            }
-            return { unsupportedClaims: claims };
-        } catch (err) {
-            // A failed audit must not cost the user their answer. Silence is the right failure
-            // here: the alternative is warning about claims nobody actually checked.
-            logger.debug(`Answer audit failed (${(err as Error).message}) — leaving the answer unannotated.`);
-            return { unsupportedClaims: [] };
         }
     }
 }

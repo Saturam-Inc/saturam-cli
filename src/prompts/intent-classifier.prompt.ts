@@ -30,6 +30,7 @@ Choose exactly one intent:
 - "meta" — about what this assistant or the knowledge base can do, rather than about any subject. Example: "What projects can you tell me about?"
 - "conversation" — about this conversation itself rather than about any subject: what was asked, what was covered, a recap. Examples: "What was I asking about?", "What have we covered so far?", "Remind me what you just said". These want a short recall of the conversation, not the topic explained again.
 - "small_talk" — ONLY a bare greeting, thanks, or pleasantry with no subject in it at all: "hi", "hello", "thanks", "ok", "good morning". These are NOT requests for a recap. Anything naming a subject, however briefly, is one of the other intents — never classify a real question as small talk.
+- "quiz" — the user asks to be tested on what they have learned: "quiz me", "test me on this", "check whether I understood", "ask me a question about what we covered". A question *about* a subject is never this; only a request to be questioned is.
 
 Rules:
 - A follow-up is not its own intent. Resolve pronouns and elisions ("it", "that", "and why?") against the conversation above, then classify the resolved question. "And how does it fail?" after a question about ${ex} is "project_knowledge".
@@ -41,6 +42,7 @@ Rules:
   - **It names its own subject** — "What are the guidelines for writing migration scripts?" — then projectHints gets a project only if that subject is itself a project name. A new subject that is not a project name gets EMPTY hints, even if another project was discussed a moment ago. Carrying the earlier project forward here is the most damaging mistake you can make: it pins the search to a corpus that cannot answer the question.
   - **It carries no subject of its own** — a pronoun, an ellipsis, or a bare continuation such as "and how does it fail?", "so what tech stacks are used", "tell me more", "what about the timings?" — then it continues the previous turn. Put the previous turn's project in projectHints, and rewrite resolvedQuestion into a standalone question naming that subject: after a question about ${ex}, "so what tech stacks are used" becomes "what tech stacks are used in ${ex}".
 - resolvedQuestion must stand on its own, but never invent scope. Resolve pronouns and ellipsis into the subject actually being discussed; do not widen a question to "our projects" or "all projects" unless the user genuinely asked across projects, and do not attach a project the user neither named nor was discussing.
+- Set statedGoal when the user says what they are trying to accomplish overall — "I need to get this running by Friday", "I'm on call for this next week", "I want to understand the scheduler before I touch it", "I'm just exploring". Put it in a few plain words ("get it running locally", "prepare for on-call", "move the weekly job to Friday", "exploring"). Leave it empty when the message only asks a question without saying why. Never infer a goal the user did not state.
 - Set crossProject to true when the question asks across projects rather than about one: "do any of our projects use Lambda?", "which project handles billing?", "where do we use Terraform?". Plural or indefinite phrasing ("our projects", "anywhere", "any of them") is the signal. When crossProject is true, leave projectHints empty unless the user named specific projects to compare.
 
 Projects currently indexed:
@@ -62,9 +64,10 @@ ${params.projectCatalogue}`,
 }
 
 export const INTENT_CLASSIFIER_SHAPE_HINT = `{
-  "intent": "general_technical" | "project_knowledge" | "change_impact" | "meta" | "conversation" | "small_talk",
+  "intent": "general_technical" | "project_knowledge" | "change_impact" | "meta" | "conversation" | "small_talk" | "quiz",
   "projectHints": string[],
   "crossProject": boolean,
+  "statedGoal": string,
   "resolvedQuestion": string,
   "reasoning": string
 }`;

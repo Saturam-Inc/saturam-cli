@@ -20,6 +20,8 @@ export const IntentClassificationSchema = z.object({
      * discussed last, and the answer reports on one project while sounding like it covered all.
      */
     crossProject: z.boolean().default(false),
+    /** What the user said they are here to do, in a few words — empty when they did not say. */
+    statedGoal: z.string().default(""),
     /** The question with pronouns and elisions resolved against the conversation. */
     resolvedQuestion: z.string(),
     reasoning: z.string().default(""),
@@ -72,6 +74,7 @@ export class IntentClassifierAgent {
                 intent: QuestionIntent.PROJECT_KNOWLEDGE,
                 projectHints: [],
                 crossProject: false,
+                statedGoal: "",
                 resolvedQuestion: params.question,
                 reasoning: "classification failed",
             };

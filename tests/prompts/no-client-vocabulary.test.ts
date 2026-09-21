@@ -1,4 +1,3 @@
-import { getAnswerAuditMessages } from "../../src/prompts/answer-audit.prompt";
 import { getChangeAdvisorMessages } from "../../src/prompts/change-advisor.prompt";
 import { getFollowUpMessages } from "../../src/prompts/follow-up.prompt";
 import { getGeneralTechnicalMessages } from "../../src/prompts/general-technical.prompt";
@@ -7,8 +6,11 @@ import { getIntentClassifierMessages } from "../../src/prompts/intent-classifier
 import { getKnowledgeBaseChatMessages } from "../../src/prompts/knowledge-base-chat.prompt";
 import { getMentorAnswerMessages } from "../../src/prompts/mentor-answer.prompt";
 import { getProjectRouterMessages } from "../../src/prompts/project-router.prompt";
+import { getQuizAssessMessages, getQuizPoseMessages } from "../../src/prompts/quiz.prompt";
 import { getRetrievalPlanMessages } from "../../src/prompts/retrieval-plan.prompt";
+import { getReviseAnswerMessages } from "../../src/prompts/revise-answer.prompt";
 import { getSessionDigestMessages } from "../../src/prompts/session-digest.prompt";
+import { LearnerStage, QuestionIntent } from "../../src/services/knowledge/chat-session.model";
 
 /**
  * Guards the rule that prompts carry no client's vocabulary.
@@ -63,7 +65,25 @@ function renderAll(): Array<{ name: string; text: string }> {
             }),
         ),
         flat("grounding-check", getGroundingCheckMessages({ question: NEUTRAL.question, chunks: [] })),
-        flat("mentor-answer", getMentorAnswerMessages({ question: NEUTRAL.question, chunks: [], recentTurns: [] })),
+        flat(
+            "mentor-answer",
+            getMentorAnswerMessages({
+                question: NEUTRAL.question,
+                chunks: [],
+                recentTurns: [],
+                stage: LearnerStage.ORIENTING,
+            }),
+        ),
+        flat(
+            "mentor-answer (deepening, with goal)",
+            getMentorAnswerMessages({
+                question: NEUTRAL.question,
+                chunks: [],
+                recentTurns: [],
+                stage: LearnerStage.DEEPENING,
+                learnerGoal: "get it running locally",
+            }),
+        ),
         flat("change-advisor", getChangeAdvisorMessages({ question: NEUTRAL.question, chunks: [], recentTurns: [] })),
         flat(
             "general-technical (nothing indexed)",
@@ -85,10 +105,47 @@ function renderAll(): Array<{ name: string; text: string }> {
         ),
         flat("retrieval-plan", getRetrievalPlanMessages({ question: NEUTRAL.question })),
         flat(
-            "answer-audit",
-            getAnswerAuditMessages({ question: NEUTRAL.question, answer: NEUTRAL.answer, chunks: [] }),
+            "follow-up",
+            getFollowUpMessages({
+                question: NEUTRAL.question,
+                answer: NEUTRAL.answer,
+                chunks: [],
+                stage: LearnerStage.ORIENTING,
+            }),
         ),
-        flat("follow-up", getFollowUpMessages({ question: NEUTRAL.question, answer: NEUTRAL.answer, chunks: [] })),
+        flat(
+            "revise-answer",
+            getReviseAnswerMessages({
+                question: NEUTRAL.question,
+                answer: NEUTRAL.answer,
+                unsupported: ["jobs/run.sh"],
+            }),
+        ),
+        flat(
+            "quiz-pose",
+            getQuizPoseMessages({
+                recentTurns: [
+                    {
+                        index: 0,
+                        question: NEUTRAL.question,
+                        answer: NEUTRAL.answer,
+                        answerGist: "the scheduler reads a table",
+                        intent: QuestionIntent.PROJECT_KNOWLEDGE,
+                        retrievedChunkIds: [],
+                        createdAt: "2026-01-01T00:00:00Z",
+                    },
+                ],
+            }),
+        ),
+        flat(
+            "quiz-assess",
+            getQuizAssessMessages({
+                question: "Quick check — what decides when a job runs?",
+                modelAnswer: "A table of jobs with due times.",
+                keyPoints: ["the table", "due times"],
+                learnerAnswer: "the table",
+            }),
+        ),
         flat(
             "project-router",
             getProjectRouterMessages({

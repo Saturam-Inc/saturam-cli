@@ -1,5 +1,15 @@
-import { AnswerCoverage, AnswerFlowService, ProjectChooser } from "../../../src/services/knowledge/answer-flow.service";
-import { QuestionIntent, createEmptySession } from "../../../src/services/knowledge/chat-session.model";
+import {
+    AnswerCoverage,
+    AnswerFlowService,
+    ORIENTATION_OPTIONS,
+    ProjectChooser,
+} from "../../../src/services/knowledge/answer-flow.service";
+import {
+    LearnerStage,
+    QUIZ_MENU_TEXT,
+    QuestionIntent,
+    createEmptySession,
+} from "../../../src/services/knowledge/chat-session.model";
 import { InMemoryConversationStore } from "../../../src/services/knowledge/conversation-store";
 import { getOwnerId } from "../../../src/services/knowledge/session-identity";
 
@@ -13,6 +23,7 @@ describe("AnswerFlowService", () => {
     let writer: any;
     let verify: any;
     let followUps: any;
+    let quiz: any;
     let knowledgeBase: any;
     let registry: any;
     let digest: any;
@@ -29,6 +40,9 @@ describe("AnswerFlowService", () => {
                 intent: QuestionIntent.PROJECT_KNOWLEDGE,
                 projectHints: [],
                 crossProject: false,
+                // A stated goal, so the default first ask is answered rather than met with the
+                // orientation question. Orientation has its own tests below.
+                statedGoal: "understanding how it works",
                 resolvedQuestion: "how do refunds work?",
                 reasoning: "",
             }),
@@ -42,12 +56,20 @@ describe("AnswerFlowService", () => {
             advise: jest.fn().mockResolvedValue("change plan"),
             general: jest.fn().mockResolvedValue("general answer"),
             summarize: jest.fn().mockResolvedValue("gist"),
+            revise: jest.fn().mockResolvedValue("revised answer"),
         };
         verify = {
             screen: jest.fn().mockResolvedValue({ verdict: "sufficient", missing: "", alternativeQuestions: [] }),
-            audit: jest.fn().mockResolvedValue({ unsupportedClaims: [] }),
         };
         followUps = { suggest: jest.fn().mockResolvedValue([{ question: "next?", rationale: "" }]) };
+        quiz = {
+            pose: jest.fn().mockResolvedValue({
+                question: "Quick check — what triggers the weekly run?",
+                modelAnswer: "The scheduler daemon.",
+                keyPoints: ["daemon"],
+            }),
+            assess: jest.fn().mockResolvedValue("You got the daemon part."),
+        };
         knowledgeBase = { retrieve: jest.fn().mockResolvedValue([{ content: "c", location: "s3://b/a.md" }]) };
         registry = { load: jest.fn().mockResolvedValue({ projects: [smile] }) };
         digest = { shouldRefresh: jest.fn().mockReturnValue(false), refresh: jest.fn() };
@@ -68,6 +90,7 @@ describe("AnswerFlowService", () => {
             writer,
             verify,
             followUps,
+            quiz,
             knowledgeBase,
             registry,
             digest,
@@ -178,6 +201,7 @@ describe("AnswerFlowService", () => {
     it("searches for the resolved question so pronouns reach retrieval", async () => {
         classifier.classify.mockResolvedValueOnce({
             intent: QuestionIntent.PROJECT_KNOWLEDGE,
+            statedGoal: "exploring",
             projectHints: [],
             resolvedQuestion: "how does SMILE refund processing fail?",
             reasoning: "",
@@ -240,6 +264,7 @@ describe("AnswerFlowService", () => {
         await store.saveActiveProject(ref("s1"), "smile");
         classifier.classify.mockResolvedValueOnce({
             intent: QuestionIntent.PROJECT_KNOWLEDGE,
+            statedGoal: "exploring",
             projectHints: [],
             crossProject: true,
             resolvedQuestion: "do any of our projects use Lambda?",
@@ -496,10 +521,9 @@ describe("AnswerFlowService", () => {
             await ask(QuestionIntent.SMALL_TALK, "hi");
 
             // No model wrote the greeting and no document backs it, so there is nothing to
-            // summarise and nothing to audit.
+            // summarise.
             expect(followUps.suggest).not.toHaveBeenCalled();
             expect(writer.summarize).not.toHaveBeenCalled();
-            expect(verify.audit).not.toHaveBeenCalled();
         });
 
         it("offers the indexed projects instead of model-invented follow-ups", async () => {
@@ -541,7 +565,6 @@ describe("AnswerFlowService", () => {
 
             expect(followUps.suggest).toHaveBeenCalled();
             expect(writer.summarize).toHaveBeenCalled();
-            expect(verify.audit).toHaveBeenCalled();
         });
     });
 
@@ -725,14 +748,308 @@ describe("AnswerFlowService", () => {
             expect(router.route).toHaveBeenCalled();
             expect(writer.advise).toHaveBeenCalledWith(expect.objectContaining({ projectDisplayName: "SMILE" }));
         });
+    });
 
-        it("audits a change plan the same way it audits a description", async () => {
-            verify.audit.mockResolvedValue({ unsupportedClaims: ["restart nginx"] });
+    describe("orientation — ask before answering when the goal is unclear", () => {
+        const project = {
+            intent: QuestionIntent.PROJECT_KNOWLEDGE,
+            projectHints: ["SMILE"],
+            crossProject: false,
+            statedGoal: "",
+            resolvedQuestion: "tell me about SMILE",
+            reasoning: "",
+        };
+        beforeEach(() => {
+            registry.findByName = jest.fn().mockResolvedValue([smile]);
+        });
+        const askProject = (question = "tell me about SMILE") => {
+            classifier.classify.mockResolvedValue({ ...project, resolvedQuestion: question });
+            return flow.ask(question, chooser);
+        };
 
-            const result = await askChange();
+        it("asks why they are here before answering the first project question", async () => {
+            const result = await askProject();
 
-            expect(result.answer).toContain("change plan");
-            expect(result.answer).toContain("restart nginx");
+            expect(result.orientation).toEqual({
+                prompt: expect.stringContaining("SMILE"),
+                options: ORIENTATION_OPTIONS,
+            });
+            expect(result.stage).toBe(LearnerStage.FIRST_CONTACT);
+            expect(result.answer).toBe("");
+            expect(writer.describe).not.toHaveBeenCalled();
+            expect(router.route).not.toHaveBeenCalled();
+        });
+
+        it("records nothing for the orientation itself", async () => {
+            await askProject();
+
+            expect(await store.findRecentSessionIds(getOwnerId(), 1)).toEqual([]);
+        });
+
+        it("answers once the goal is set, and hands the goal and stage to the writer", async () => {
+            await askProject();
+            await flow.setLearnerGoal("Getting it running");
+
+            const result = await askProject();
+
+            expect(result.orientation).toBeUndefined();
+            expect(result.answer).toBe("mentor answer");
+            expect(writer.describe).toHaveBeenCalledWith(
+                expect.objectContaining({ learnerGoal: "Getting it running", stage: LearnerStage.ORIENTING }),
+            );
+        });
+
+        it("never asks when the goal was stated in the question itself", async () => {
+            classifier.classify.mockResolvedValue({ ...project, statedGoal: "prepare for on-call" });
+
+            const result = await flow.ask("I'm on call next week — tell me about SMILE", chooser);
+
+            expect(result.orientation).toBeUndefined();
+            expect(writer.describe).toHaveBeenCalledWith(
+                expect.objectContaining({ learnerGoal: "prepare for on-call" }),
+            );
+        });
+
+        it("never asks for a change question — the change is the goal", async () => {
+            classifier.classify.mockResolvedValue({ ...project, intent: QuestionIntent.CHANGE_IMPACT });
+
+            const result = await flow.ask("how do I move the job to Friday?", chooser);
+
+            expect(result.orientation).toBeUndefined();
+            expect(writer.advise).toHaveBeenCalled();
+        });
+
+        it("never asks for a general question", async () => {
+            classifier.classify.mockResolvedValue({
+                ...project,
+                intent: QuestionIntent.GENERAL_TECHNICAL,
+                projectHints: [],
+            });
+
+            const result = await flow.ask("what is idempotency?", chooser);
+
+            expect(result.orientation).toBeUndefined();
+            expect(result.answer).toBe("general answer");
+        });
+
+        it("asks only once in a session", async () => {
+            await askProject();
+            await flow.setLearnerGoal("Just exploring");
+            await askProject();
+            writer.describe.mockClear();
+
+            const result = await askProject("and how does it fail?");
+
+            expect(result.orientation).toBeUndefined();
+            expect(writer.describe).toHaveBeenCalled();
+        });
+
+        it("carries the goal into a later session so it is never asked twice", async () => {
+            await askProject();
+            await flow.setLearnerGoal("Getting it running");
+            await askProject();
+
+            // A new process over the same store: fresh flow, new session id.
+            const later = new AnswerFlowService(
+                classifier,
+                router,
+                planner,
+                writer,
+                verify,
+                followUps,
+                quiz,
+                knowledgeBase,
+                registry,
+                digest,
+                stores,
+                config,
+            );
+            writer.describe.mockClear();
+
+            const result = await later.ask("tell me about SMILE", chooser);
+
+            expect(result.orientation).toBeUndefined();
+            expect(result.stage).toBe(LearnerStage.RETURNING);
+            expect(writer.describe).toHaveBeenCalledWith(
+                expect.objectContaining({ learnerGoal: "Getting it running" }),
+            );
+        });
+    });
+
+    describe("stage", () => {
+        it("moves from first contact, through orienting, to deepening as turns accumulate", async () => {
+            await flow.ask("how do refunds work?", chooser);
+            await flow.ask("and why?", chooser);
+            await flow.ask("what breaks?", chooser);
+
+            const stages = writer.describe.mock.calls.map((call: any[]) => call[0].stage);
+            expect(stages).toEqual([LearnerStage.FIRST_CONTACT, LearnerStage.ORIENTING, LearnerStage.DEEPENING]);
+        });
+
+        it("tells the follow-up generator the stage and goal too", async () => {
+            await flow.ask("how do refunds work?", chooser);
+
+            expect(followUps.suggest).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    stage: LearnerStage.FIRST_CONTACT,
+                    learnerGoal: "understanding how it works",
+                }),
+            );
+        });
+    });
+
+    describe("comprehension checks", () => {
+        it("poses a check from the menu entry without spending a classifier call", async () => {
+            await flow.ask("how do refunds work?", chooser);
+            classifier.classify.mockClear();
+
+            const result = await flow.ask(QUIZ_MENU_TEXT, chooser);
+
+            expect(classifier.classify).not.toHaveBeenCalled();
+            expect(quiz.pose).toHaveBeenCalled();
+            expect(result.intent).toBe(QuestionIntent.QUIZ);
+            expect(result.answer).toBe("Quick check — what triggers the weekly run?");
+            expect(result.followUps).toEqual([]);
+        });
+
+        it("treats the next input as the answer and gives feedback, offering another check", async () => {
+            await flow.ask("how do refunds work?", chooser);
+            await flow.ask(QUIZ_MENU_TEXT, chooser);
+            classifier.classify.mockClear();
+
+            const result = await flow.ask("the daemon does it", chooser);
+
+            expect(classifier.classify).not.toHaveBeenCalled();
+            expect(quiz.assess).toHaveBeenCalledWith(expect.objectContaining({ learnerAnswer: "the daemon does it" }));
+            expect(result.answer).toBe("You got the daemon part.");
+            expect(result.followUps).toEqual([{ question: QUIZ_MENU_TEXT, rationale: "" }]);
+        });
+
+        it("goes back to normal questions once the check is answered", async () => {
+            await flow.ask("how do refunds work?", chooser);
+            await flow.ask(QUIZ_MENU_TEXT, chooser);
+            await flow.ask("the daemon", chooser);
+            classifier.classify.mockClear();
+
+            await flow.ask("and how does it fail?", chooser);
+
+            expect(classifier.classify).toHaveBeenCalled();
+        });
+
+        it("does not record the check as turns of the conversation", async () => {
+            await flow.ask("how do refunds work?", chooser);
+            await flow.ask(QUIZ_MENU_TEXT, chooser);
+            await flow.ask("the daemon", chooser);
+
+            const session = await loadCurrent();
+            expect(session.turns).toHaveLength(1);
+        });
+
+        it("poses a check when the classifier recognises the request in free text", async () => {
+            classifier.classify.mockResolvedValue({
+                intent: QuestionIntent.QUIZ,
+                projectHints: [],
+                crossProject: false,
+                statedGoal: "",
+                resolvedQuestion: "quiz me",
+                reasoning: "",
+            });
+
+            const result = await flow.ask("quiz me on this", chooser);
+
+            expect(quiz.pose).toHaveBeenCalled();
+            expect(result.intent).toBe(QuestionIntent.QUIZ);
+        });
+
+        it("says so when there is nothing to check yet, and stays out of quiz mode", async () => {
+            quiz.pose.mockRejectedValue(new Error("nothing to check"));
+
+            const result = await flow.ask(QUIZ_MENU_TEXT, chooser);
+            classifier.classify.mockClear();
+            await flow.ask("how do refunds work?", chooser);
+
+            expect(result.answer).toContain("ask me a couple of things first");
+            expect(quiz.assess).not.toHaveBeenCalled();
+            expect(classifier.classify).toHaveBeenCalled();
+        });
+
+        it("offers a check every fourth written turn", async () => {
+            const results = [];
+            for (const q of ["one", "two", "three", "four"]) results.push(await flow.ask(q, chooser));
+
+            const offered = results.map((r) => r.followUps.some((f) => f.question === QUIZ_MENU_TEXT));
+            expect(offered).toEqual([false, false, false, true]);
+        });
+
+        it("drops a pending check when a new session is started", async () => {
+            await flow.ask("how do refunds work?", chooser);
+            await flow.ask(QUIZ_MENU_TEXT, chooser);
+
+            flow.startNewSession();
+            await flow.ask("how do refunds work?", chooser);
+
+            expect(quiz.assess).not.toHaveBeenCalled();
+        });
+    });
+
+    describe("silent guards on written answers", () => {
+        it("revises once when the answer names a file the sources never mention", async () => {
+            knowledgeBase.retrieve.mockResolvedValue([
+                { content: "The daemon runs cons.sh weekly.", location: "s3://b/a.md" },
+            ]);
+            writer.describe.mockResolvedValue("Edit `mrf_scheduler/table_scheduler.py`, then run cons.sh.");
+
+            const result = await flow.ask("how do refunds work?", chooser);
+
+            expect(writer.revise).toHaveBeenCalledWith(
+                expect.objectContaining({ unsupported: expect.arrayContaining(["mrf_scheduler/table_scheduler.py"]) }),
+            );
+            expect(result.answer).toBe("revised answer");
+        });
+
+        it("leaves an answer alone when every identifier is in the sources", async () => {
+            knowledgeBase.retrieve.mockResolvedValue([
+                { content: "The daemon runs cons.sh weekly.", location: "s3://b/a.md" },
+            ]);
+            writer.describe.mockResolvedValue("Run cons.sh on Sunday.");
+
+            const result = await flow.ask("how do refunds work?", chooser);
+
+            expect(writer.revise).not.toHaveBeenCalled();
+            expect(result.answer).toBe("Run cons.sh on Sunday.");
+        });
+
+        it("counts what was said earlier in the conversation as support", async () => {
+            knowledgeBase.retrieve
+                .mockResolvedValueOnce([{ content: "The reset lives in table_scheduler.py.", location: "s3://b/a.md" }])
+                .mockResolvedValueOnce([{ content: "unrelated", location: "s3://b/b.md" }]);
+            writer.describe
+                .mockResolvedValueOnce("The reset lives in table_scheduler.py.")
+                .mockResolvedValueOnce("As we saw, `table_scheduler.py` runs first.");
+
+            await flow.ask("how do refunds work?", chooser);
+            await flow.ask("and then?", chooser);
+
+            expect(writer.revise).not.toHaveBeenCalled();
+        });
+
+        it("keeps the original when the revision itself fails", async () => {
+            knowledgeBase.retrieve.mockResolvedValue([{ content: "nothing relevant", location: "s3://b/a.md" }]);
+            writer.describe.mockResolvedValue("Edit `nowhere/missing.py`.");
+            writer.revise.mockRejectedValue(new Error("model unavailable"));
+
+            const result = await flow.ask("how do refunds work?", chooser);
+
+            expect(result.answer).toBe("Edit `nowhere/missing.py`.");
+        });
+
+        it("redacts a credential before it is shown or stored", async () => {
+            writer.describe.mockResolvedValue("Connect with AKIAIOSFODNN7EXAMPLE and go.");
+
+            const result = await flow.ask("how do refunds work?", chooser);
+
+            expect(result.answer).toBe("Connect with [redacted] and go.");
+            expect((await loadCurrent()).turns[0].answer).toBe("Connect with [redacted] and go.");
         });
     });
 
@@ -778,44 +1095,6 @@ describe("AnswerFlowService", () => {
 
             expect(writer.describe).not.toHaveBeenCalled();
             expect(result.coverage).toBe(AnswerCoverage.NOT_DOCUMENTED);
-        });
-
-        it("appends the audit's unsupported claims to the answer rather than dropping the answer", async () => {
-            verify.audit.mockResolvedValue({ unsupportedClaims: ["runs on Kubernetes", "retries three times"] });
-
-            const result = await flow.ask("how do refunds work?", chooser);
-
-            expect(result.answer).toContain("mentor answer");
-            expect(result.answer).toContain("Not found in the documentation");
-            expect(result.answer).toContain("runs on Kubernetes");
-            expect(result.unsupportedClaims).toEqual(["runs on Kubernetes", "retries three times"]);
-        });
-
-        it("leaves a clean answer untouched", async () => {
-            const result = await flow.ask("how do refunds work?", chooser);
-
-            expect(result.answer).toBe("mentor answer");
-            expect(result.unsupportedClaims).toEqual([]);
-        });
-
-        it("audits the finished answer against the chunks it was built from", async () => {
-            await flow.ask("how do refunds work?", chooser);
-
-            expect(verify.audit).toHaveBeenCalledWith(
-                expect.objectContaining({
-                    answer: "mentor answer",
-                    chunks: [{ content: "c", location: "s3://b/a.md" }],
-                }),
-            );
-        });
-
-        it("persists the caveated answer, so a later recap does not quote the unflagged version", async () => {
-            verify.audit.mockResolvedValue({ unsupportedClaims: ["runs on Kubernetes"] });
-
-            await flow.ask("how do refunds work?", chooser);
-
-            const session = await loadCurrent();
-            expect(session.turns[0].answer).toContain("Not found in the documentation");
         });
     });
 });

@@ -33,7 +33,48 @@ export enum QuestionIntent {
     CONVERSATION = "conversation",
     /** A greeting, thanks, or other pleasantry — answered briefly, with no retrieval or recall. */
     SMALL_TALK = "small_talk",
+    /**
+     * The learner asks to be checked on what they have covered ("quiz me", "test me on this").
+     * Answered from the session's own recent answers, with no retrieval: the point is to find out
+     * what stuck, not to teach something new.
+     */
+    QUIZ = "quiz",
 }
+
+/**
+ * Where the learner is in the conversation, derived from the session rather than asked.
+ *
+ * This is what lets the same question get a different answer on turn one and turn eight. Without
+ * it every turn was answered as if it were the first — complete, self-contained, and the same
+ * length whether the reader had just arrived or had spent twenty minutes on the scheduler.
+ */
+export enum LearnerStage {
+    /** Nothing asked yet, nothing carried over, no goal known — the mentor should find out why they are here. */
+    FIRST_CONTACT = "first_contact",
+    /** Nothing asked in this run, but earlier sessions carried in — pick up where they left off. */
+    RETURNING = "returning",
+    /** Goal known, still early — orient them: the shape of the thing and the one point to hold onto. */
+    ORIENTING = "orienting",
+    /** Several turns in — go as deep as the question needs and build on what was covered. */
+    DEEPENING = "deepening",
+}
+
+export function deriveStage(session: ChatSession): LearnerStage {
+    if (session.turns.length === 0) {
+        if ((session.carriedTurns?.length ?? 0) > 0) return LearnerStage.RETURNING;
+        return session.digest?.learnerGoal ? LearnerStage.ORIENTING : LearnerStage.FIRST_CONTACT;
+    }
+    return session.turns.length < 2 ? LearnerStage.ORIENTING : LearnerStage.DEEPENING;
+}
+
+/** How many written turns between offers of a comprehension check. */
+export const QUIZ_OFFER_INTERVAL = 4;
+
+/**
+ * The menu entry that starts a check. Matched literally by the flow before classification, so
+ * choosing it never costs a classifier call and never depends on a weak model recognising it.
+ */
+export const QUIZ_MENU_TEXT = "Quick check — quiz me on what we've covered";
 
 export interface ChatTurn {
     /** Monotonic index within the session, 0-based — also the DynamoDB sort key. */
@@ -70,6 +111,13 @@ export interface SessionDigest {
     questionsAsked: string[];
     /** Turn index this digest covers up to (exclusive). */
     coversUpToIndex: number;
+    /**
+     * What the learner said they are here to do — "get it running locally", "understand the
+     * scheduler before on-call", "move the weekly job to Friday". Set the moment it is stated
+     * rather than at the next digest refresh, and carried into later sessions. Lives on the
+     * digest because the digest is already the one persisted, per-session summary object.
+     */
+    learnerGoal?: string;
 }
 
 export interface ChatSession {

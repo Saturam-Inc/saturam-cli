@@ -45,10 +45,16 @@ export class SessionDigestService {
                 schema: DigestSchema,
                 name: "update_session_digest",
                 shapeHint: SESSION_DIGEST_SHAPE_HINT,
-                messages: getSessionDigestMessages({ turns: newTurns, previousDigest: session.digest }),
+                messages: getSessionDigestMessages({
+                    turns: newTurns,
+                    // A digest holding only a learner goal has nothing summarised yet to build on.
+                    previousDigest: session.digest?.summary ? session.digest : undefined,
+                }),
                 options: { temperature: TEMPERATURE },
             });
-            return { ...result, coversUpToIndex: eligible.length };
+            // The model rebuilds the summary; the goal was stated by the learner and is not the
+            // model's to lose.
+            return { ...result, coversUpToIndex: eligible.length, learnerGoal: session.digest?.learnerGoal };
         } catch (err) {
             // Keep the previous digest rather than dropping history on a transient failure.
             logger.debug(`Digest refresh failed: ${(err as Error).message}`);

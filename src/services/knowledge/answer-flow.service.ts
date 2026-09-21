@@ -9,16 +9,23 @@ import { AnswerWriterAgent } from "./agents/answer-writer.agent";
 import { RetrievalPlannerAgent } from "./agents/retrieval-planner.agent";
 import { FollowUp, FollowUpGeneratorAgent } from "./agents/follow-up-generator.agent";
 import { IntentClassifierAgent } from "./agents/intent-classifier.agent";
+import { QuizAgent, QuizQuestion } from "./agents/quiz.agent";
 import { GroundingVerdict, VerificationAgent } from "./agents/verification.agent";
 import { ProjectCandidate, ProjectRouterAgent } from "./agents/project-router.agent";
 import {
     CARRY_OVER_TURNS,
     ChatSession,
     ChatTurn,
+    LearnerStage,
+    QUIZ_MENU_TEXT,
+    QUIZ_OFFER_INTERVAL,
     QuestionIntent,
     SessionDigest,
     contextTurns,
+    deriveStage,
 } from "./chat-session.model";
+import { redactSecrets } from "./redact-secrets";
+import { findUnsupportedIdentifiers } from "./unsupported-identifiers";
 import { SessionRef, describeOwner, getOwnerId, newSessionId } from "./session-identity";
 import { ConversationStoreProvider } from "./dynamodb-conversation-store";
 import { ProjectRegistryService, RegistryProject } from "./project-registry.service";
@@ -89,6 +96,25 @@ export interface ClarificationRequest {
     questions: string[];
 }
 
+/**
+ * Returned instead of an answer when the mentor wants to know why the learner is here first.
+ * Assembled in code, not generated: the goals a new engineer arrives with are few and universal,
+ * and a menu that is the same every time is one they learn to answer in a second.
+ */
+export interface OrientationRequest {
+    /** The mentor's question, in its own voice. */
+    prompt: string;
+    /** Selectable goals. The caller may also accept free text. */
+    options: string[];
+}
+
+export const ORIENTATION_OPTIONS = [
+    "Getting it running",
+    "Understanding how it works",
+    "Making a specific change",
+    "Just exploring",
+];
+
 export interface AnswerResult {
     answer: string;
     chunks: RetrievedChunk[];
@@ -99,10 +125,17 @@ export interface AnswerResult {
     cancelled: boolean;
     /** How well the documentation backed this answer. */
     coverage: AnswerCoverage;
-    /** Claims the post-answer audit could not find support for, already appended to `answer`. */
-    unsupportedClaims: string[];
+    /** Where the learner is in the conversation, as judged for this turn. */
+    stage: LearnerStage;
     /** Present when the flow needs more from the user before it can answer. */
     clarification?: ClarificationRequest;
+    /** Present when the mentor asks why they are here before answering; the question is not answered. */
+    orientation?: OrientationRequest;
+}
+
+/** A digest with nothing summarised yet, for a goal stated before the first refresh. */
+function emptyDigest(): SessionDigest {
+    return { summary: "", projectsDiscussed: [], jargonDefined: [], questionsAsked: [], coversUpToIndex: 0 };
 }
 
 /**
@@ -117,9 +150,14 @@ export class AnswerFlowService {
     /** The conversation this process is in, once resolved. */
     private currentRef: SessionRef | undefined;
     /** Context read once per run from the owner's previous sessions. */
-    private carried: { turns: ChatTurn[]; activeProject?: string } | undefined;
+    private carried: { turns: ChatTurn[]; activeProject?: string; learnerGoal?: string } | undefined;
     /** Set by startNewSession, consumed by the next resolve. */
     private forcedSession: SessionRef | undefined;
+    /**
+     * A check question the learner has not yet answered. Held in the process, not the store: a
+     * check abandoned by closing the terminal should simply be gone.
+     */
+    private pendingQuiz: QuizQuestion | undefined;
 
     constructor(
         private readonly classifier: IntentClassifierAgent,
@@ -128,6 +166,7 @@ export class AnswerFlowService {
         private readonly writer: AnswerWriterAgent,
         private readonly verify: VerificationAgent,
         private readonly followUps: FollowUpGeneratorAgent,
+        private readonly quiz: QuizAgent,
         private readonly knowledgeBase: BedrockKnowledgeBaseService,
         private readonly registry: ProjectRegistryService,
         private readonly digest: SessionDigestService,
@@ -144,6 +183,30 @@ export class AnswerFlowService {
         const store = await this.stores.get();
         const { ref, session } = await this.resolveSession(store);
         const recentTurns = contextTurns(session);
+        const stage = deriveStage(session);
+
+        // A check is in progress: this input is the learner's answer, not a question, so it goes
+        // straight to feedback and never near the classifier.
+        if (this.pendingQuiz) {
+            const quiz = this.pendingQuiz;
+            this.pendingQuiz = undefined;
+            const feedback = await this.quiz.assess({ quiz, learnerAnswer: question });
+            return {
+                answer: feedback,
+                chunks: [],
+                followUps: [{ question: QUIZ_MENU_TEXT, rationale: "" }],
+                intent: QuestionIntent.QUIZ,
+                cancelled: false,
+                coverage: AnswerCoverage.NOT_APPLICABLE,
+                stage,
+            };
+        }
+
+        // The menu entry is matched literally, so choosing it costs no classifier call and does
+        // not depend on a weak model recognising it.
+        if (question.trim() === QUIZ_MENU_TEXT) {
+            return this.poseQuiz(session, stage);
+        }
 
         const classification = await this.classifier.classify({
             question,
@@ -154,7 +217,39 @@ export class AnswerFlowService {
         // rather than the literal words "and why does it do that".
         const effectiveQuestion = classification.resolvedQuestion.trim() || question;
 
-        const outcome = await this.produceAnswer({
+        // A goal stated in passing is kept from that moment, not from the next digest refresh.
+        const statedGoal = (classification.statedGoal ?? "").trim();
+        if (statedGoal) {
+            await this.setLearnerGoal(statedGoal);
+            session.digest = { ...(session.digest ?? emptyDigest()), learnerGoal: statedGoal };
+        }
+        const learnerGoal = session.digest?.learnerGoal;
+
+        if (classification.intent === QuestionIntent.QUIZ) {
+            return this.poseQuiz(session, stage);
+        }
+
+        // Ask before answering when it is not yet clear why they are here. Only at first contact,
+        // only for a question about a project, and never for a change question — someone asking
+        // how to move a job to Friday has already said what they are here for.
+        if (
+            stage === LearnerStage.FIRST_CONTACT &&
+            !learnerGoal &&
+            classification.intent === QuestionIntent.PROJECT_KNOWLEDGE
+        ) {
+            return {
+                answer: "",
+                chunks: [],
+                followUps: [],
+                intent: classification.intent,
+                cancelled: false,
+                coverage: AnswerCoverage.NOT_APPLICABLE,
+                stage,
+                orientation: await this.orientationFor(classification.projectHints),
+            };
+        }
+
+        const produced = await this.produceAnswer({
             classification: classification.intent,
             projectHints: classification.projectHints,
             crossProject: classification.crossProject,
@@ -164,32 +259,51 @@ export class AnswerFlowService {
             recentTurns,
             chooser,
             allowClarification,
+            stage,
+            learnerGoal,
         });
 
-        if (outcome.cancelled) {
-            return { ...outcome, intent: classification.intent, followUps: [], unsupportedClaims: [] };
+        if (produced.cancelled) {
+            return { ...produced, intent: classification.intent, followUps: [], stage };
         }
 
         // A clarification is not an answer: nothing is recorded, so the user's reply is treated as
         // a fresh question rather than a follow-up to something that was never said.
-        if (outcome.clarification) {
-            return { ...outcome, intent: classification.intent, followUps: [], unsupportedClaims: [] };
+        if (produced.clarification) {
+            return { ...produced, intent: classification.intent, followUps: [], stage };
         }
 
+        const assembled = this.isAssembledAnswer(classification.intent);
+
+        // Two guards on anything a model wrote, both silent. Identifiers the sources never mention
+        // are taken back by a single revision; anything shaped like a credential is redacted. The
+        // reader sees the corrected answer, never a warning about it.
+        const answer = assembled
+            ? produced.answer
+            : this.withSecretsRedacted(
+                  await this.withUnsupportedIdentifiersRevised(
+                      effectiveQuestion,
+                      produced.answer,
+                      produced.chunks,
+                      recentTurns,
+                  ),
+              );
+        const outcome = { ...produced, answer };
+
         // A greeting, a recap and "what do you know about?" are assembled in code from the
-        // registry and the session — no model wrote them and no document backs them, so there is
-        // nothing for the audit to check and nothing for a summariser to compress. Running the
-        // batch anyway cost two calls and produced the suggestions that made a greeting offer to
-        // explain "the role of an engineer on a project".
-        const { followUps, answerGist, unsupportedClaims } = this.isAssembledAnswer(classification.intent)
+        // registry and the session — no model wrote them and nothing needs summarising. Running
+        // the batch anyway cost two calls and produced the suggestions that made a greeting offer
+        // to explain "the role of an engineer on a project".
+        const completed = assembled
             ? await this.completeAssembledTurn(classification.intent, outcome.answer)
             : await this.completeWrittenTurn({
                   question: effectiveQuestion,
                   outcome,
                   digest: session.digest,
+                  stage,
+                  learnerGoal,
               });
-
-        const answer = this.withAuditCaveat(outcome.answer, unsupportedClaims);
+        const followUps = this.withQuizOffer(completed.followUps, session, assembled);
 
         await this.recordTurn({
             store,
@@ -198,8 +312,8 @@ export class AnswerFlowService {
             turn: {
                 index: session.turns.length,
                 question,
-                answer,
-                answerGist,
+                answer: outcome.answer,
+                answerGist: completed.answerGist,
                 intent: classification.intent,
                 resolvedProject: outcome.project?.slug,
                 retrievedChunkIds: outcome.chunks.map((c) => c.location ?? "").filter(Boolean),
@@ -207,7 +321,108 @@ export class AnswerFlowService {
             },
         });
 
-        return { ...outcome, answer, intent: classification.intent, followUps, unsupportedClaims };
+        return { ...outcome, intent: classification.intent, followUps, stage };
+    }
+
+    /**
+     * Records what the learner is here to do. Called by the CLI after an orientation prompt, and
+     * by the flow itself when a goal is stated in passing. Persisted at once on the session's
+     * digest so the next turn — and the next session — has it.
+     */
+    public async setLearnerGoal(goal: string): Promise<void> {
+        const trimmed = goal.trim();
+        if (!trimmed) return;
+        const store = await this.stores.get();
+        const { ref, session } = await this.resolveSession(store);
+        await store.saveDigest(ref, { ...(session.digest ?? emptyDigest()), learnerGoal: trimmed });
+        logger.debug(`Learner goal: ${trimmed}`);
+    }
+
+    /** The mentor's opening question, naming the project when one was recognised. */
+    private async orientationFor(projectHints: string[]): Promise<OrientationRequest> {
+        const named = projectHints.length > 0 ? (await this.registry.findByName(projectHints[0]))[0] : undefined;
+        const subject = named ? named.displayName : "this";
+        return {
+            prompt: `Before I get into ${subject} — what are you here for? I'll pitch everything that follows to that.`,
+            options: ORIENTATION_OPTIONS,
+        };
+    }
+
+    /**
+     * Poses one check question from what was recently explained, and holds it until the next
+     * input. Not recorded as a turn: a recap that lists "quiz me" among the questions asked is
+     * noise, and the check is about the conversation rather than part of it.
+     */
+    private async poseQuiz(session: ChatSession, stage: LearnerStage): Promise<AnswerResult> {
+        const base = {
+            chunks: [],
+            followUps: [],
+            intent: QuestionIntent.QUIZ,
+            cancelled: false,
+            coverage: AnswerCoverage.NOT_APPLICABLE,
+            stage,
+        };
+        try {
+            const quiz = await this.quiz.pose({
+                turns: [...(session.carriedTurns ?? []), ...session.turns],
+                digest: session.digest,
+            });
+            this.pendingQuiz = quiz;
+            return { ...base, answer: quiz.question };
+        } catch (err) {
+            logger.debug(`Could not pose a check (${(err as Error).message}).`);
+            return {
+                ...base,
+                answer: "There isn't enough covered yet for a proper check — ask me a couple of things first and I'll quiz you on them.",
+            };
+        }
+    }
+
+    /**
+     * Takes back any file, path, script or table the answer named that appears in neither the
+     * sources nor the earlier conversation. A string check, not a judgement, so it does not
+     * suffer the false alarms a model-judged audit did on exactly this task — and the correction
+     * is applied to the answer rather than announced under it.
+     */
+    private async withUnsupportedIdentifiersRevised(
+        question: string,
+        answer: string,
+        chunks: RetrievedChunk[],
+        recentTurns: ChatTurn[],
+    ): Promise<string> {
+        if (chunks.length === 0) return answer;
+        const sources = chunks.map((chunk) => chunk.content).join("\n");
+        const unsupported = findUnsupportedIdentifiers(
+            answer,
+            sources,
+            recentTurns.map((turn) => turn.answer),
+        );
+        if (unsupported.length === 0) return answer;
+
+        logger.debug(
+            `Answer named ${unsupported.length} identifier(s) absent from the sources (${unsupported.join(", ")}) — revising once.`,
+        );
+        try {
+            const revised = await this.writer.revise({ question, answer, unsupported });
+            return revised.trim() || answer;
+        } catch (err) {
+            logger.debug(`Revision failed (${(err as Error).message}) — keeping the original answer.`);
+            return answer;
+        }
+    }
+
+    private withSecretsRedacted(answer: string): string {
+        const { text, redacted } = redactSecrets(answer);
+        if (redacted > 0) logger.warn(`Redacted ${redacted} credential-shaped value(s) from an answer.`);
+        return text;
+    }
+
+    /** Offers a comprehension check every QUIZ_OFFER_INTERVAL written turns, counting this one. */
+    private withQuizOffer(followUps: FollowUp[], session: ChatSession, assembled: boolean): FollowUp[] {
+        if (assembled) return followUps;
+        const written = session.turns.filter((turn) => !this.isAssembledAnswer(turn.intent)).length + 1;
+        if (written < QUIZ_OFFER_INTERVAL || written % QUIZ_OFFER_INTERVAL !== 0) return followUps;
+        return [...followUps, { question: QUIZ_MENU_TEXT, rationale: "" }];
     }
 
     /** Whether this intent is answered from the registry or session history rather than by a model. */
@@ -220,15 +435,15 @@ export class AnswerFlowService {
     }
 
     /**
-     * Finishes a turn whose answer was assembled in code: no follow-up call, no summariser call,
-     * no audit. The gist is written here because it is already known, and the suggestions come
+     * Finishes a turn whose answer was assembled in code: no follow-up call and no summariser
+     * call. The gist is written here because it is already known, and the suggestions come
      * from the registry, which offers something better than a model does — the projects actually
      * indexed, by name, instead of a guess at what someone greeting us might want.
      */
     private async completeAssembledTurn(
         intent: QuestionIntent,
         answer: string,
-    ): Promise<{ followUps: FollowUp[]; answerGist: string; unsupportedClaims: string[] }> {
+    ): Promise<{ followUps: FollowUp[]; answerGist: string }> {
         const gists: Record<string, string> = {
             [QuestionIntent.META]: "listed the projects currently indexed",
             [QuestionIntent.SMALL_TALK]: "exchanged a greeting",
@@ -246,45 +461,34 @@ export class AnswerFlowService {
                 rationale: "",
             })),
             answerGist: gists[intent] ?? answer.trim().slice(0, 200),
-            unsupportedClaims: [],
         };
     }
 
     /**
-     * Finishes a turn a model wrote. All three calls need the finished answer and none needs the
-     * others, so they run together and the audit costs no extra waiting — only an extra call.
+     * Finishes a turn a model wrote. Both calls need the finished answer and neither needs the
+     * other, so they run together and cost one round trip rather than two.
      */
     private async completeWrittenTurn(params: {
         question: string;
         outcome: { answer: string; chunks: RetrievedChunk[]; project?: RegistryProject };
         digest?: SessionDigest;
-    }): Promise<{ followUps: FollowUp[]; answerGist: string; unsupportedClaims: string[] }> {
-        const { question, outcome, digest } = params;
-        const [followUps, answerGist, audit] = await Promise.all([
+        stage: LearnerStage;
+        learnerGoal?: string;
+    }): Promise<{ followUps: FollowUp[]; answerGist: string }> {
+        const { question, outcome, digest, stage, learnerGoal } = params;
+        const [followUps, answerGist] = await Promise.all([
             this.followUps.suggest({
                 question,
                 answer: outcome.answer,
                 chunks: outcome.chunks,
                 digest,
                 projectDisplayName: outcome.project?.displayName,
+                stage,
+                learnerGoal,
             }),
             this.writer.summarize(question, outcome.answer),
-            this.verify.audit({ question, answer: outcome.answer, chunks: outcome.chunks }),
         ]);
-        return { followUps, answerGist, unsupportedClaims: audit.unsupportedClaims };
-    }
-
-    /**
-     * Appends what the audit could not verify, rather than deleting it.
-     *
-     * A single unsupported line in an otherwise good answer is worth flagging, not worth throwing
-     * the answer away over — and since the auditor can be wrong, the reader needs to see the claim
-     * to judge it. Suppression would hide both the claim and the mistake.
-     */
-    private withAuditCaveat(answer: string, unsupportedClaims: string[]): string {
-        if (unsupportedClaims.length === 0) return answer;
-        const lines = unsupportedClaims.map((claim) => `> - ${claim}`).join("\n");
-        return `${answer.trimEnd()}\n\n> **Not found in the documentation** — treat these as unverified and confirm before relying on them:\n${lines}`;
+        return { followUps, answerGist };
     }
 
     private async produceAnswer(params: {
@@ -297,6 +501,8 @@ export class AnswerFlowService {
         recentTurns: ChatTurn[];
         chooser: ProjectChooser;
         allowClarification: boolean;
+        stage: LearnerStage;
+        learnerGoal?: string;
     }): Promise<{
         answer: string;
         chunks: RetrievedChunk[];
@@ -305,7 +511,7 @@ export class AnswerFlowService {
         coverage: AnswerCoverage;
         clarification?: ClarificationRequest;
     }> {
-        const { classification, question, session, recentTurns } = params;
+        const { classification, question, session, recentTurns, stage, learnerGoal } = params;
         const noRetrieval = { chunks: [], cancelled: false, coverage: AnswerCoverage.NOT_APPLICABLE };
 
         if (classification === QuestionIntent.META) {
@@ -326,7 +532,13 @@ export class AnswerFlowService {
             // and answering "how should retries work?" from textbook knowledge while our own
             // retry page sits unread is the failure this exists to prevent.
             const chunks = await this.probeForHouseAnswer(question);
-            const answer = await this.writer.general({ question, recentTurns, digest: session.digest, chunks });
+            const answer = await this.writer.general({
+                question,
+                recentTurns,
+                digest: session.digest,
+                chunks,
+                learnerGoal,
+            });
             return {
                 answer,
                 chunks,
@@ -359,6 +571,8 @@ export class AnswerFlowService {
                 chunks: retrieved.chunks,
                 recentTurns,
                 digest: session.digest,
+                stage,
+                learnerGoal,
             });
             return { answer, chunks: retrieved.chunks, cancelled: false, coverage: AnswerCoverage.DOCUMENTED };
         }
@@ -398,6 +612,7 @@ export class AnswerFlowService {
                 projectDisplayName: project?.displayName,
                 recentTurns,
                 digest: session.digest,
+                learnerGoal,
             });
             return { answer, chunks: retrieved.chunks, project, cancelled: false, coverage: AnswerCoverage.DOCUMENTED };
         }
@@ -420,6 +635,8 @@ export class AnswerFlowService {
             projectDisplayName: project?.displayName,
             recentTurns,
             digest: session.digest,
+            stage,
+            learnerGoal,
         });
 
         return { answer, chunks: retrieved.chunks, project, cancelled: false, coverage: AnswerCoverage.DOCUMENTED };
@@ -659,6 +876,11 @@ export class AnswerFlowService {
             session: {
                 ...session,
                 carriedTurns: this.carried?.turns ?? [],
+                // A goal from an earlier session holds until the learner states a new one.
+                digest:
+                    session.digest?.learnerGoal || !this.carried?.learnerGoal
+                        ? session.digest
+                        : { ...(session.digest ?? emptyDigest()), learnerGoal: this.carried.learnerGoal },
                 // Only seed the project while this session has said nothing of its own; after that
                 // its own routing decisions take over.
                 activeProject:
@@ -672,22 +894,24 @@ export class AnswerFlowService {
         store: Awaited<ReturnType<ConversationStoreProvider["get"]>>,
         ownerId: string,
         currentSessionId: string,
-    ): Promise<{ turns: ChatTurn[]; activeProject?: string }> {
+    ): Promise<{ turns: ChatTurn[]; activeProject?: string; learnerGoal?: string }> {
         const recent = (await store.findRecentSessionIds(ownerId, CARRY_OVER_SESSION_LOOKBACK)).filter(
             (id) => id !== currentSessionId,
         );
 
         const turns: ChatTurn[] = [];
         let activeProject: string | undefined;
+        let learnerGoal: string | undefined;
         for (const sessionId of recent) {
             const previous = await store.load({ ownerId, sessionId });
             // Sessions arrive newest first, so each older block goes in front of what we have.
             turns.unshift(...previous.turns);
             activeProject ??= previous.activeProject;
+            learnerGoal ??= previous.digest?.learnerGoal;
             if (turns.length >= CARRY_OVER_TURNS) break;
         }
 
-        return { turns: turns.slice(-CARRY_OVER_TURNS), activeProject };
+        return { turns: turns.slice(-CARRY_OVER_TURNS), activeProject, learnerGoal };
     }
 
     /**
@@ -794,6 +1018,7 @@ export class AnswerFlowService {
 
     /** Starts a fresh conversation for the next question, ignoring whatever is in progress. */
     public startNewSession(): void {
+        this.pendingQuiz = undefined;
         this.forcedSession = { ownerId: getOwnerId(), sessionId: newSessionId() };
         this.currentRef = undefined;
         this.carried = undefined;

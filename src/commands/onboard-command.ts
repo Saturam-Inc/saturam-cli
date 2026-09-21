@@ -2,12 +2,14 @@ import { input, select } from "@inquirer/prompts";
 import { getLogger } from "log4js";
 import { Marked } from "marked";
 import { markedTerminal } from "marked-terminal";
+import * as colors from "yoctocolors-cjs";
 import { Service } from "typedi";
 import { z } from "zod";
 import { KnowledgeBaseChatService } from "../services/knowledge/knowledge-base-chat.service";
-import { AnswerFlowService, ProjectChooser } from "../services/knowledge/answer-flow.service";
+import { AnswerFlowService, OrientationRequest, ProjectChooser } from "../services/knowledge/answer-flow.service";
 import { AutoProjectChooser, InteractiveProjectChooser } from "../services/knowledge/cli-project-chooser";
 import { FollowUp } from "../services/knowledge/agents/follow-up-generator.agent";
+import { QuestionIntent } from "../services/knowledge/chat-session.model";
 import { ConfigService } from "../services/config-service";
 import { OnboardConfig } from "../services/onboarding/onboarding-config.schema";
 import { OnboardingConfigService } from "../services/onboarding/onboarding-config.service";
@@ -245,7 +247,7 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
      * a non-interactive stdin (a pipe/redirect can't be typed into and, with `terminal: true`
      * forced by inquirer, may hang instead of ever closing).
      */
-    private async promptQuestion(): Promise<string | null> {
+    private async promptQuestion(message = "Ask Saturam-CLI :"): Promise<string | null> {
         if (!process.stdin.isTTY) {
             logger.error("stdin is not a TTY — this interactive mode requires a terminal.");
             return null;
@@ -254,7 +256,7 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
         let question: string;
         try {
             question = await input({
-                message: "Ask Saturam-CLI :",
+                message,
                 theme: { prefix: { idle: "🤖", done: "🤖" } },
             });
         } catch (err) {
@@ -370,7 +372,12 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
         const width = process.stdout.columns || 100;
         if (!this.terminalMarkdown || this.terminalMarkdown.width !== width) {
             this.terminalMarkdown = {
-                renderer: new Marked(markedTerminal({ width, reflowText: false })),
+                // marked-terminal's defaults already colour headings, code and links. The one
+                // override is the blockquote: an answer that quotes a document should read as a
+                // different voice, and the default gray italic disappears on a dark terminal.
+                renderer: new Marked(
+                    markedTerminal({ width, reflowText: false, blockquote: (text: string) => colors.yellow(text) }),
+                ),
                 width,
             };
         }
@@ -401,8 +408,10 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
         );
         if (sources.length === 0) return;
 
-        logger.info("Sources:");
-        sources.forEach((source) => logger.info(`- ${source}`));
+        // Dimmed: sources are for checking, not reading, and a dozen full-brightness URLs after
+        // every answer otherwise compete with the answer itself for the eye.
+        logger.info(colors.dim("Sources:"));
+        sources.forEach((source) => logger.info(colors.dim(`- ${source}`)));
         logger.info("");
     }
 
@@ -441,10 +450,14 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
         let queuedQuestion: string | undefined;
         // The question after a clarification must produce an answer, never another clarification.
         let answeringAClarification = false;
+        // After a check question is posed, the next input is the learner's answer to it.
+        let awaitingQuizAnswer = false;
 
         for (;;) {
-            const question = queuedQuestion ?? (await this.promptQuestion());
+            const question =
+                queuedQuestion ?? (await this.promptQuestion(awaitingQuizAnswer ? "Your answer :" : undefined));
             queuedQuestion = undefined;
+            awaitingQuizAnswer = false;
             if (question === null || question === undefined) {
                 logger.info("Exiting.");
                 return;
@@ -480,9 +493,28 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
                     continue;
                 }
 
-                if (result.project) logger.info(`\n[${result.project.displayName}]`);
+                // The mentor wants to know why they are here before answering. The goal is saved
+                // and the same question is asked again with it known.
+                if (result.orientation) {
+                    const goal = await this.promptOrientation(result.orientation);
+                    if (goal === null) {
+                        logger.info("Exiting.");
+                        return;
+                    }
+                    await this.answerFlow.setLearnerGoal(goal);
+                    queuedQuestion = question;
+                    continue;
+                }
+
+                if (result.project) logger.info(`\n${colors.bold(colors.cyan(`[${result.project.displayName}]`))}`);
                 logger.info(`\n${this.renderAnswer(result.answer)}\n`);
                 this.printSources(result.chunks);
+
+                // A posed check has no menu: the learner types their answer at the next prompt.
+                if (result.intent === QuestionIntent.QUIZ && result.followUps.length === 0) {
+                    awaitingQuizAnswer = true;
+                    continue;
+                }
 
                 const next = await this.promptFollowUp(result.followUps);
                 if (next === null) {
@@ -493,6 +525,34 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
             } catch (err) {
                 logger.error(`Chat failed: ${(err as Error).message}\n`);
             }
+        }
+    }
+
+    /**
+     * The mentor's opening question: a fixed set of goals plus free text. Returns the goal, or null
+     * to exit. Without a terminal there is nobody to ask, so the most open-ended goal is assumed.
+     */
+    private async promptOrientation(orientation: OrientationRequest): Promise<string | null> {
+        if (!process.stdin.isTTY) return orientation.options[orientation.options.length - 1] ?? "exploring";
+
+        const OTHER = "__other__";
+        logger.info(`\n${orientation.prompt}\n`);
+        try {
+            const choice = await select<string>({
+                message: "I'm here for:",
+                choices: [
+                    ...orientation.options.map((option) => ({ name: option, value: option })),
+                    { name: "Something else…", value: OTHER },
+                ],
+                pageSize: orientation.options.length + 1,
+            });
+            if (choice !== OTHER) return choice;
+
+            const typed = await input({ message: "Tell me in a few words:" });
+            return typed.trim() || orientation.options[orientation.options.length - 1];
+        } catch (err) {
+            if (err instanceof Error && err.name === "ExitPromptError") return null;
+            throw err;
         }
     }
 
