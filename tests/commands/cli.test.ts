@@ -15,8 +15,8 @@ describe("Cli hyphenated option mapping", () => {
     it("maps a hyphenated flag like --project-name back to inputs['project-name'] (not the camelCased key Commander produces)", async () => {
         const execute = jest.fn().mockResolvedValue(undefined);
         const command: TypedCommand = {
-            name: "onboard",
-            description: "test onboard command",
+            name: "demo",
+            description: "synthetic command exercising flag mapping",
             category: "common",
             aliases: [],
             inputs: [
@@ -32,7 +32,7 @@ describe("Cli hyphenated option mapping", () => {
         };
 
         const cli = new Cli(mockConfig);
-        await cli.run(["node", "sat-cli", "onboard", "--project-name", "Saturam"], { common: [command] });
+        await cli.run(["node", "sat-cli", "demo", "--project-name", "Saturam"], { common: [command] });
 
         expect(execute).toHaveBeenCalledWith(expect.objectContaining({ "project-name": "Saturam" }));
         expect(execute).not.toHaveBeenCalledWith(expect.objectContaining({ projectName: expect.anything() }));

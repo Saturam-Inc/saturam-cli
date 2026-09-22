@@ -1,6 +1,13 @@
 # Project Onboarding Integrations Overview
 
-This document summarizes the onboarding integrations, sample responses, normalization logic, configuration, and commands available in the CLI.
+This document covers how onboarding documentation is queried from the CLI, and how the corpus it
+queries is produced.
+
+> **Ingestion moved out of the CLI.** Fetching Confluence pages, Jira tickets and Google Drive
+> files, normalizing them to Markdown, and uploading them to S3 for Bedrock to ingest now runs as
+> a scheduled AWS Lambda off a Google Sheet — see the `on-boarding` service in
+> `sat-cli-internal-infra` (`README.md`, `DEPLOY.md`, and `SHEET-COLUMNS.md` for the sheet
+> format). `sat-cli onboard` no longer syncs anything; it is now purely the query side.
 
 ---
 
@@ -67,15 +74,11 @@ Each integration service wraps target REST APIs and handles authorization intern
 
 ---
 
-## 2. Reusable Knowledge Adapters & Normalization Pipelines
+## 2. Normalization Pipelines
 
-Raw payloads are converted into standard Markdown or structured JSON via adapters implementing the `KnowledgeSource` model:
-
-### Knowledge Source Adapters ([src/services/knowledge/](src/services/knowledge/))
-
-- **`ConfluenceKnowledgeSource`**: Syncs Confluence page storage format into Markdown using HTML normalizers.
-- **`JiraKnowledgeSource`**: Syncs Jira issues and their comments into Markdown using ADF normalizers.
-- **`GoogleDriveKnowledgeSource`**: Syncs Google Docs and Drive binary files into Markdown/raw formats.
+The Lambda applies the same normalization this repo does, converting raw payloads into Markdown
+before they are indexed. The normalizer services below still live here and are used by anything in
+the CLI that needs the same conversion.
 
 ### Normalizer Services ([src/services/normalizers/](src/services/normalizers/))
 
@@ -86,59 +89,23 @@ Raw payloads are converted into standard Markdown or structured JSON via adapter
 
 ---
 
-## 3. Orchestration & Configuration
+## 3. Where the Corpus Comes From
 
-### Orchestrator ([onboard.service.ts](src/services/onboarding/onboard.service.ts))
+The CLI reads an already-indexed corpus; it does not build one. Ingestion — resolving each
+project's Confluence pages, Jira tickets and Google Drive files from a Google Sheet, normalizing
+them, writing them to S3 under `<project>/<category>/`, and emitting the `registry.json` the CLI's
+project routing reads — runs in the `on-boarding` Lambda in `sat-cli-internal-infra`.
 
-The orchestrator reads project configuration lists, triggers parallel fetch requests, resolves URLs found in Google Sheets, and routes tasks to the appropriate knowledge adapters.
+Two things that pipeline produces are contracts this repo depends on:
 
-### Google Sheets URL Resolution & Project Tab Mapping
-
-When syncing via Google Sheets, the orchestrator:
-
-1. **Scans Cells for Document Links**: Cells are recursively searched for Confluence pages, Jira tickets, Google Docs, and nested Google Sheets.
-2. **Dynamic Tab Discovery**: If `range` is omitted in the configuration, all sheet tabs are automatically discovered and processed in an optimized batch network call.
-3. **Tab-to-Project name mapping**: Tab titles (e.g. `ProjectA`, `ProjectB`) are treated as project folder names, syncing their resolved documents under corresponding directories (e.g. `onboarding/projecta/confluence/...`).
-4. **Nested Sheets Sync**: Extracted Google Sheet links inside spreadsheet cells are processed recursively as sub-sheet tasks, saving their raw data as JSON sidecar structures.
-
-### Project-Level Configuration (`.sateng/onboarding.json`)
-
-To synchronize project onboarding documents locally, create a `.sateng/onboarding.json` file in your repository root with the following structure:
-
-```json
-{
-    "_comment": "This is a configuration template for project onboarding. Replace placeholders with actual values.",
-    "confluence": {
-        "baseUrl": "https://your-domain.atlassian.net"
-    },
-    "jira": {
-        "baseUrl": "https://your-domain.atlassian.net"
-    },
-    "projects": {
-        "ExampleProject": {
-            "confluence": {
-                "pages": ["123456789"],
-                "space": "PROJ"
-            },
-            "jira": {
-                "tickets": ["PROJ-123"]
-            },
-            "googleDocs": {
-                "docs": ["your-google-doc-id-here"]
-            },
-            "googleSheets": {
-                "spreadsheetId": "your-google-sheet-id-here",
-                "range": "Sheet1!A1:E100"
-            },
-            "onboardingSheets": [
-                {
-                    "spreadsheetId": "your-onboarding-links-sheet-id-here"
-                }
-            ]
-        }
-    }
-}
-```
+- **`<content-key>.metadata.json`** beside each content object, holding `metadataAttributes`
+  (`title`, `source`, `url`, `category`, `project`, `updatedAt`, `author`). Bedrock turns these
+  into query-time filters, which is what `--knowledge-base --project` and the agent's
+  project-scoped searches use, and what supplies the source URLs printed under a `--chat` answer.
+- **`registry.json`** under the S3 _state_ prefix (a sibling of the content prefix, so Bedrock
+  never ingests it as a document), listing the indexed projects. `ProjectRegistryService` reads it
+  to know which projects exist — Bedrock can filter on a `project` value but cannot enumerate the
+  values present.
 
 ### Personal Configuration (`config.json`)
 
@@ -158,96 +125,9 @@ npx ts-node src/entrypoints/main.ts init
 
 This lets you configure AI providers, SCM platforms, Atlassian integrations, and Google Drive integrations at the top level.
 
-### Sync Onboarding Content (Dual-Mode)
+### Querying the Knowledge Base
 
-#### Mode A: Sync from Local Configuration
-
-Fetch and synchronize documents based on the `.sateng/onboarding.json` targets:
-
-```bash
-npx ts-node src/entrypoints/main.ts onboard
-```
-
-#### Generating a Sample Config
-
-If you don't have a `.sateng/onboarding.json` yet, generate one with example Confluence, Jira, and Google Drive (Docs/Sheets) entries:
-
-```bash
-sat-cli onboard --format
-```
-
-This writes the template to `.sateng/onboarding.json` at the repository root. If that file already exists, it writes to `.sateng/onboarding.sample.json` instead so your existing config is never overwritten. Edit the generated file with your real page IDs, ticket keys, and document IDs, then run `sat-cli onboard` to sync.
-
-#### Mode B: Sync Directly from a Google Sheet
-
-Fetch and synchronize documents directly from a Google Sheet URL or spreadsheet ID without needing local config files:
-
-```bash
-npx ts-node src/entrypoints/main.ts onboard <spreadsheet_url_or_id>
-```
-
-`sat-cli onboard` reads the first tab of the sheet and picks one of two modes based on its header row:
-
-- **Structured project sheet** — if the header row contains a `project_name` column, the sheet is parsed directly into the same shape as `.sateng/onboarding.json` (one row per project). See [`onboarding-sheet-template.csv`](onboarding-sheet-template.csv) for the full column reference — import it into Google Sheets (File → Import) as a starting point, or copy its header row into a new sheet. Multi-value columns (`confluence_pages`, `jira_tickets`, `google_docs`, `onboarding_sheet_ids`) are comma-separated within a cell. The resolved config is also written to `.sateng/onboarding.json` at the repository root before syncing (tagged with a `_sourceGoogleSheetId` field, for reference only — it's not what drives re-checking, see below).
-
-    **Re-checking the sheet on later runs**: the sheet's ID is remembered in your personal config (`~/.config/sateng/config.json`, alongside your Google access token), not in the local `.sateng/onboarding.json` file. That means plain `sat-cli onboard` (no argument) — **run from any directory** — automatically re-fetches that same sheet and overwrites `.sateng/onboarding.json` at the repository root each time, so editing values in the sheet and just running `sat-cli onboard` again always picks up the latest columns. Passing an explicit config file path (`sat-cli onboard path/to/config.json`) always bypasses this and loads that file directly instead.
-
-- **Sheet of links** (legacy) — if there's no `project_name` column, every cell is scanned for Confluence/Jira/Google Doc/Sheet URLs instead, with each sheet tab treated as its own project (see [Google Sheets URL Resolution & Project Tab Mapping](#google-sheets-url-resolution--project-tab-mapping) above).
-
-#### Syncing a Single Project
-
-By default, `sat-cli onboard` syncs every source in `.sateng/onboarding.json` — global (non-project) entries and every `projects.*` section. Pass `--project-name <name>` to restrict the run to just the matching `projects.<name>` section (matched case/punctuation-insensitively against the config key):
-
-```bash
-sat-cli onboard --project-name "SMILE"
-sat-cli onboard --project-name "SMILE" --upload-to-s3
-```
-
-This resolves and fetches only that project's Confluence pages/spaces, Jira tickets/JQL, Google Docs, Google Sheets, and onboarding-sheet-resolved links — skipping every other project and any global (non-project) config entries. Output folders are named after `<project-name>` (e.g. `onboarding/smile/confluence/...`), and (with `--upload-to-s3`) only that project's files are uploaded. If no project matches, the command warns and lists the available project names from your config.
-
-For the Google Sheet direct-sync mode (`sat-cli onboard <spreadsheet_url_or_id>`), `--project-name` restricts the run to just the matching project: the `project_name` row for a structured project sheet, or the sheet tab whose title matches in sheet-of-links mode.
-
-#### Uploading to S3
-
-Pass `--upload-to-s3` to upload every file written during the run to the configured S3 bucket (see [Cloud (AWS S3 & Bedrock Knowledge Base)](README.md#cloud-aws-s3--bedrock-knowledge-base) in the README for how to configure S3 via `sat-cli init`):
-
-```bash
-sat-cli onboard --project-name "Saturam Core" --upload-to-s3
-```
-
-For each content file, this:
-
-1. Ensures the destination "folder" prefix exists in the bucket (creates it if not — S3 has no real folders, so this is a marker object under that prefix).
-2. Checks whether the content object already exists at that key in S3.
-3. If not, uploads the content **plus a Bedrock Knowledge Base-compliant metadata sidecar** at `<key>.metadata.json` — e.g. alongside `saturam-core/google-docs/golden-record.md`, it writes `saturam-core/google-docs/golden-record.md.metadata.json` containing:
-
-    ```json
-    {
-        "metadataAttributes": {
-            "title": "...",
-            "source": "google-docs",
-            "url": "...",
-            "category": "google-docs",
-            "project": "saturam-core",
-            "updatedAt": "...",
-            "author": "..."
-        }
-    }
-    ```
-
-    Already-present content is left untouched and reported as skipped.
-
-This naming — `<content-key>.metadata.json` in the same prefix as the content object — is the exact convention Amazon Bedrock Knowledge Bases uses to attach filterable metadata to a source document during ingestion. It is **not** the same as the local `<file>.json` bookkeeping sidecar written by `sat-cli onboard` (which stores full document metadata for `--list` and isn't uploaded to S3 under its own name) — uploading that bare `.json` next to the content would make Bedrock ingest it as its own separate document instead of recognizing it as metadata.
-
-Local content files always mirror their path under `~/.config/sateng/onboarding/` as the S3 key (e.g. `saturam-core/google-docs/golden-record.md`), optionally under the bucket's configured prefix. Once synced, point a Bedrock Knowledge Base's S3 data source at that bucket/prefix and run an ingestion job (`StartIngestionJob`, or via the console) to chunk, embed, and index the content — the `metadataAttributes` become filterable at query time (e.g. retrieve only chunks where `project = saturam-core`).
-
-#### Listing Synced Documents
-
-`--list` reads what's already synced locally (no network calls) and prints it grouped by project name and source category:
-
-```bash
-sat-cli onboard --list
-```
+Both modes read the corpus the Lambda indexed; neither fetches from Confluence, Jira or Drive.
 
 #### Testing Bedrock Knowledge Base Retrieval
 

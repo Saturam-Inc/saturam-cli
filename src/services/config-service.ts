@@ -7,7 +7,6 @@ import { z } from "zod";
 import { getLogger } from "log4js";
 import { LLMModel } from "../constants/llm-models";
 import { WorkingDirectory } from "../utils/working-directory";
-import { OnboardConfig, OnboardConfigSchema } from "./onboarding/onboarding-config.schema";
 
 const logger = getLogger("ConfigService");
 
@@ -142,13 +141,6 @@ export const PersonalConfigurationSchema = z.object({
     atlassianEmail: z.string().optional().describe("Atlassian account email (Jira & Confluence)"),
     atlassianToken: z.string().optional().describe("Atlassian API token (Jira & Confluence)"),
     googleAccessToken: z.string().optional().describe("Google OAuth access token (Drive / Docs / Sheets)"),
-    onboardingSheetId: z
-        .string()
-        .optional()
-        .describe(
-            "Google Sheet ID of the last structured project sheet synced via 'sat-cli onboard <sheet-url>' — " +
-                "used by 'sat-cli onboard' (no argument) to re-check that sheet for the latest values on every run",
-        ),
     cloud: z
         .record(z.nativeEnum(CloudProvider), CloudProviderConfigSchema)
         .optional()
@@ -434,7 +426,7 @@ export class ConfigService {
 
     // --- Project Config (repo-level: .sateng/) ---
 
-    /** The single source of truth for the repo-level ".sateng" directory (project config, onboarding config, ...). */
+    /** The single source of truth for the repo-level ".sateng" directory. */
     public getProjectConfigDir(): string {
         return join(this.dir.repoRoot, ".sateng");
     }
@@ -608,18 +600,6 @@ export class ConfigService {
         );
     }
 
-    // --- Onboarding Sheet Tracking (for 'sat-cli onboard' with no argument) ---
-
-    public async getOnboardingSheetId(): Promise<string | undefined> {
-        const config = await this.loadPersonalConfig();
-        return config.onboardingSheetId;
-    }
-
-    public async setOnboardingSheetId(spreadsheetId: string | undefined): Promise<void> {
-        const config = await this.loadPersonalConfig();
-        await this.savePersonalConfig({ ...config, onboardingSheetId: spreadsheetId });
-    }
-
     // --- Cloud Provider Config (AWS/Azure/GCP: storage & retrieval) ---
 
     public async getCloudConfig(provider: CloudProvider): Promise<CloudProviderConfig | undefined> {
@@ -766,14 +746,6 @@ export class ConfigService {
             };
         }
         return this.getGenericAtlassianCredentials();
-    }
-
-    public async loadOnboardingConfig(configPath: string): Promise<OnboardConfig> {
-        if (!existsSync(configPath)) {
-            throw new Error(`Configuration file not found: ${configPath}`);
-        }
-        const rawContent = await readFile(configPath, "utf8");
-        return OnboardConfigSchema.parse(JSON.parse(rawContent));
     }
 
     // --- Static helpers ---

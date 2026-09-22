@@ -1,7 +1,9 @@
 /**
  * Canonical domain type for a piece of knowledge fetched from any external source
  * (Jira, Confluence, Google Drive, etc.).
- * Used by KnowledgeSource adapters, OnboardService, and future indexing/ask features.
+ * The adapters that produced these now live in the `on-boarding` Lambda; what remains here is the
+ * shared vocabulary its output is described in — notably KnowledgeSourceType, whose values are the
+ * folder names the pipeline writes under and the `source`/`category` metadata the CLI filters on.
  */
 
 /** Strongly-typed discriminator for the integration that produced a KnowledgeDocument. */
@@ -15,10 +17,10 @@ export enum KnowledgeSourceType {
 /**
  * Every source category, and therefore every folder name a synced document can live under.
  *
- * Derived from the enum rather than written out again, because it was written out again — twice,
- * in the sync service and in the project registry. A fourth source added to the enum but missed
- * in one of those copies silently stops its documents being counted, and the project they belong
- * to disappears from the registry with nothing failing.
+ * Derived from the enum rather than written out again: a source added to the enum but missed in a
+ * hand-written copy silently stops its documents being counted, and the project they belong to
+ * disappears from the registry with nothing failing. The sync that writes these folders now runs
+ * in Lambda, so this has to keep agreeing with the categories that pipeline produces.
  */
 export const KNOWLEDGE_SOURCE_CATEGORIES: readonly string[] = Object.values(KnowledgeSourceType);
 
@@ -33,9 +35,9 @@ export interface KnowledgeDocument {
         author?: string;
         labels?: string[];
     };
-    /** Raw spreadsheet rows (header row + data rows), set only by GoogleSheetsKnowledgeSource. */
+    /** Raw spreadsheet rows (header row + data rows), set only for a spreadsheet source. */
     sheetRows?: string[][];
-    /** The A1-notation range actually fetched, set only by GoogleSheetsKnowledgeSource. */
+    /** The A1-notation range actually fetched, set only for a spreadsheet source. */
     sheetRange?: string;
 }
 

@@ -302,30 +302,4 @@ describe("ConfigService Onboarding Credentials", () => {
             );
         });
     });
-
-    describe("loadOnboardingConfig", () => {
-        it("should load and parse onboarding config successfully", async () => {
-            (existsSync as jest.Mock).mockReturnValue(true);
-            (readFile as jest.Mock).mockResolvedValue(
-                JSON.stringify({
-                    confluence: { baseUrl: "https://saturam.atlassian.net" },
-                }),
-            );
-
-            const config = await service.loadOnboardingConfig("/mock/path.json");
-            expect(config).toEqual({
-                confluence: { baseUrl: "https://saturam.atlassian.net" },
-            });
-            expect(existsSync).toHaveBeenCalledWith("/mock/path.json");
-            expect(readFile).toHaveBeenCalledWith("/mock/path.json", "utf8");
-        });
-
-        it("should throw error if configuration file is missing", async () => {
-            (existsSync as jest.Mock).mockReturnValue(false);
-
-            await expect(service.loadOnboardingConfig("/mock/nonexistent.json")).rejects.toThrow(
-                "Configuration file not found: /mock/nonexistent.json",
-            );
-        });
-    });
 });

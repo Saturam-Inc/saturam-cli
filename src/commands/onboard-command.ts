@@ -9,29 +9,12 @@ import { KnowledgeBaseChatService } from "../services/knowledge/knowledge-base-c
 import { AnswerFlowService } from "../services/knowledge/answer-flow.service";
 import { FollowUp } from "../services/knowledge/agents/follow-up-generator.agent";
 import { ConfigService } from "../services/config-service";
-import { OnboardConfig } from "../services/onboarding/onboarding-config.schema";
-import { OnboardingConfigService } from "../services/onboarding/onboarding-config.service";
-import { OnboardService } from "../services/onboarding/onboard.service";
 import { slugify } from "../utils/slug.util";
-import { WorkingDirectory } from "../utils/working-directory";
 import { TypedCommand, TypedInputs } from "./base";
 
 const logger = getLogger("OnboardCommand");
 
 const INPUTS = [
-    {
-        name: "configOrSheet",
-        description:
-            "Path to the onboarding config JSON file, or Google Sheet URL/ID (default: .sateng/onboarding.json)",
-        schema: z.string().optional(),
-        argument: true,
-    },
-    {
-        name: "project-name",
-        description:
-            "Limit sync (and --upload-to-s3) to just the matching '<project-name>' section of your onboarding config (case-insensitive), and use it as the output folder name (e.g. onboarding/<project-name>/confluence/...). Non-project (global) config entries are skipped when this is set.",
-        schema: z.string().optional(),
-    },
     {
         name: "project",
         description:
@@ -39,38 +22,15 @@ const INPUTS = [
         schema: z.string().optional(),
     },
     {
-        name: "upload-to-s3",
-        description:
-            "Upload the documents synced in this run to the configured S3 bucket (requires AWS S3 to be configured via 'sat-cli init' → Cloud)",
-        schema: z.boolean().optional(),
-    },
-    {
-        name: "list",
-        description: "List locally synced onboarding documents, grouped by project name, instead of syncing",
-        schema: z.boolean().optional(),
-    },
-    {
         name: "knowledge-base",
         description:
-            "Interactively ask questions against the configured Bedrock Knowledge Base and print retrieved chunks (Retrieve only — no answer generation), instead of syncing. Requires Bedrock Knowledge Base to be configured via 'sat-cli init' → Cloud",
+            "Interactively ask questions against the configured Bedrock Knowledge Base and print retrieved chunks (Retrieve only — no answer generation). Requires Bedrock Knowledge Base to be configured via 'sat-cli init' → Cloud",
         schema: z.boolean().optional(),
     },
     {
         name: "chat",
         description:
-            "Ask questions and get a mentoring answer grounded in the Bedrock Knowledge Base, instead of syncing. The project is determined automatically per question (you are asked only when it is genuinely ambiguous), and each answer comes with follow-up questions you can select. Requires both an AI/LLM provider (sat-cli init → AI / LLM providers) and Bedrock Knowledge Base (sat-cli init → Cloud) to be configured",
-        schema: z.boolean().optional(),
-    },
-    {
-        name: "format",
-        description:
-            "Write a sample .sateng/onboarding.json config (with example Confluence, Jira, and Google Drive entries) to the repository root, instead of syncing",
-        schema: z.boolean().optional(),
-    },
-    {
-        name: "forget-sheet",
-        description:
-            "Forget the remembered onboarding Google Sheet (see: last synced sheet re-checked by plain 'sat-cli onboard'), instead of syncing",
+            "Ask questions and get a mentoring answer grounded in the Bedrock Knowledge Base. The project is determined automatically per question (you are asked only when it is genuinely ambiguous), and each answer comes with follow-up questions you can select. Requires both an AI/LLM provider (sat-cli init → AI / LLM providers) and Bedrock Knowledge Base (sat-cli init → Cloud) to be configured",
         schema: z.boolean().optional(),
     },
     {
@@ -78,49 +38,39 @@ const INPUTS = [
         description: "Start --chat with a fresh conversation history instead of continuing the previous session",
         schema: z.boolean().optional(),
     },
-    {
-        name: "force",
-        description:
-            "When syncing from a Google Sheet, overwrite .sateng/onboarding.json even if it wasn't itself generated from a sheet",
-        schema: z.boolean().optional(),
-    },
 ] as const;
 
+/**
+ * Question-answering over the onboarding corpus.
+ *
+ * This command used to also *build* that corpus — fetching Confluence pages, Jira tickets and
+ * Google Drive files, writing them locally, and uploading them to S3 for Bedrock to ingest. That
+ * whole side now runs in AWS Lambda (see the `on-boarding` service in sat-cli-internal-infra),
+ * on a schedule and off a Google Sheet, so it no longer needs a developer to run it by hand.
+ * What is left here is the half a developer actually invokes: asking the indexed corpus questions.
+ */
 @Service()
 export class OnboardCommand implements TypedCommand<typeof INPUTS> {
     readonly name = "onboard";
-    readonly description =
-        "Fetch and sync project onboarding documents locally (e.g. Confluence pages, Jira tickets, and Google Drive files)";
+    readonly description = "Ask questions about your projects, answered from the indexed onboarding documentation";
     readonly category = "common" as const;
     readonly aliases = ["ob", "onboarding"];
     readonly inputs = INPUTS;
+    /** Bare `sat-cli onboard` selects no mode, so show the modes rather than exiting silently. */
+    readonly helpWhenNoInputs = true;
 
     constructor(
-        private readonly onboardService: OnboardService,
         private readonly configService: ConfigService,
-        private readonly onboardingConfig: OnboardingConfigService,
         private readonly chatService: KnowledgeBaseChatService,
         private readonly answerFlow: AnswerFlowService,
-        private readonly dir: WorkingDirectory,
     ) {}
 
-    private static readonly EXCLUSIVE_MODE_FLAGS = [
-        "format",
-        "chat",
-        "knowledge-base",
-        "list",
-        "forget-sheet",
-    ] as const;
+    private static readonly EXCLUSIVE_MODE_FLAGS = ["chat", "knowledge-base"] as const;
 
     public async execute(inputs: Partial<TypedInputs<typeof INPUTS>>): Promise<void> {
         const activeModes = OnboardCommand.EXCLUSIVE_MODE_FLAGS.filter((flag) => inputs[flag]);
         if (activeModes.length > 1) {
             throw new Error(`--${activeModes.join(", --")} are mutually exclusive — pass only one of them at a time.`);
-        }
-
-        if (inputs.format) {
-            this.onboardingConfig.writeSampleConfig();
-            return;
         }
 
         if (inputs.chat) {
@@ -136,99 +86,11 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
             return;
         }
 
-        if (inputs.list) {
-            await this.onboardService.listSyncedDocuments();
-            return;
-        }
-
-        if (inputs["forget-sheet"]) {
-            await this.configService.setOnboardingSheetId(undefined);
-            logger.info("Forgot the remembered onboarding Google Sheet.");
-            return;
-        }
-
-        const arg = inputs.configOrSheet;
-        const projectNameOverride = inputs["project-name"];
-        const uploadToS3 = inputs["upload-to-s3"];
-        const force = inputs.force;
-
-        const sheetId = arg ? this.onboardingConfig.parseSheetArg(arg) : null;
-        if (sheetId) {
-            logger.info(`Running onboarding sync directly from Google Sheet ID: ${sheetId}`);
-            await this.syncFromSheet(sheetId, projectNameOverride, uploadToS3, force);
-            return;
-        }
-
-        // Explicit arg always wins. Otherwise, a remembered sheet is always re-checked on every
-        // run (the local .sateng/onboarding.json it produced is just a cache of it, refreshed each
-        // time) — UNLESS the local file is hand-written (no _sourceGoogleSheetId marker), in which
-        // case it must never be silently shadowed by a sheet remembered from a different, unrelated
-        // repo. If the remembered sheet's sync fails (e.g. an expired Google token, or the sheet was
-        // deleted), fall back to the local file if one exists.
-        if (!arg && !this.onboardingConfig.isLocalConfigHandWritten()) {
-            const rememberedSheetId = await this.configService.getOnboardingSheetId();
-            if (rememberedSheetId) {
-                logger.info(
-                    `Using the last synced onboarding Google Sheet (${rememberedSheetId}) — re-checking it for the latest values...`,
-                );
-                try {
-                    await this.syncFromSheet(rememberedSheetId, projectNameOverride, uploadToS3, force);
-                    return;
-                } catch (err) {
-                    if (!this.onboardingConfig.localConfigExists()) throw err;
-                    logger.warn(
-                        `Failed to sync the remembered onboarding sheet: ${(err as Error).message}. Falling back to the local .sateng/onboarding.json.`,
-                    );
-                }
-            }
-        }
-
-        const configPath = arg ? this.onboardingConfig.resolveConfigArgPath(arg) : this.onboardingConfig.configPath;
-
-        logger.info(`Loading onboarding configuration from: ${configPath}`);
-        const parsedConfig = await this.configService.loadOnboardingConfig(configPath);
-        await this.runSync(parsedConfig, projectNameOverride, uploadToS3);
-    }
-
-    /** Runs sync() + optional S3 upload, and fails the process (non-zero exit) if every document failed. */
-    private async runSync(
-        parsedConfig: OnboardConfig,
-        projectNameOverride: string | undefined,
-        uploadToS3: boolean | undefined,
-    ): Promise<void> {
-        const { filesWritten, fetched, failed } = await this.onboardService.sync(
-            parsedConfig,
-            this.dir.cwd,
-            projectNameOverride,
+        // Reached when flags were passed but no mode was selected (e.g. --project on its own).
+        // A bare `sat-cli onboard` never gets here — the CLI prints this command's help instead.
+        throw new Error(
+            "No mode selected — pass --chat to ask a question, or --knowledge-base to inspect raw retrieval results.",
         );
-        if (uploadToS3) await this.onboardService.uploadToS3(filesWritten);
-
-        if (failed > 0 && fetched === 0) {
-            logger.error(`All ${failed} document(s) failed to sync.`);
-            process.exitCode = 1;
-        }
-    }
-
-    /**
-     * Resolves a structured project config from the given sheet, mirrors it to
-     * .sateng/onboarding.json for local inspection, remembers the sheet ID in the personal
-     * config so a later plain `sat-cli onboard` re-checks it, and syncs it. The mirror is only
-     * saved and the sheet only remembered after a successful sync, so a failed first sync never
-     * installs an override that then shadows a local config on future runs.
-     */
-    private async syncFromSheet(
-        spreadsheetId: string,
-        projectNameOverride: string | undefined,
-        uploadToS3: boolean | undefined,
-        force: boolean | undefined,
-    ): Promise<void> {
-        const parsedConfig = await this.onboardService.resolveConfigFromSheet(spreadsheetId);
-        await this.runSync(parsedConfig, projectNameOverride, uploadToS3);
-
-        if (parsedConfig.projects && Object.keys(parsedConfig.projects).length > 0) {
-            this.onboardingConfig.saveResolvedConfig(parsedConfig, spreadsheetId, force);
-            await this.configService.setOnboardingSheetId(spreadsheetId);
-        }
     }
 
     private static readonly KB_EXIT_COMMANDS = new Set(["exit", "quit", ":q"]);
@@ -392,8 +254,8 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
 
     private printSources(chunks: Array<{ location?: string; metadata?: Record<string, unknown> }>): void {
         // Prefer the original document URL (Confluence/Jira/Drive) carried in the metadata
-        // sidecar we uploaded alongside the content — `location` is the S3 URI Bedrock ingested
-        // from, which isn't something a person can usefully open.
+        // sidecar the ingestion pipeline uploaded alongside the content — `location` is the S3 URI
+        // Bedrock ingested from, which isn't something a person can usefully open.
         const sources = Array.from(
             new Set(
                 chunks

@@ -88,36 +88,14 @@ sat-cli init
 
 ### `sat-cli onboard`
 
-Sync project onboarding documentation locally from Atlassian (Jira & Confluence) and Google Drive (Docs & Sheets).
+Ask questions about your projects, answered from the onboarding documentation indexed in the Bedrock Knowledge Base.
 
 ```bash
-# Sync using local config file (.sateng/onboarding.json)
-sat-cli onboard
-
-# Sync directly from a Google Sheet URL or ID — either a structured project sheet
-# (one row per project, see onboarding-sheet-template.csv) or a "sheet of links"
-# (cells scanned for Confluence/Jira/Drive URLs), auto-detected from the header row
-sat-cli onboard <spreadsheet-url-or-id>
-
-# Write a sample .sateng/onboarding.json (Confluence/Jira/Google Drive examples) to the
-# repository root, instead of syncing — never overwrites an existing onboarding.json
-sat-cli onboard --format
-
-# Restrict the sync to just the matching projects.<project-name> section of your onboarding
-# config (global, non-project entries are skipped), and use it as the output folder name
-# (e.g. onboarding/<project-name>/confluence/... instead of each config/tab-derived name)
-sat-cli onboard --project-name "Saturam Core"
-sat-cli onboard <spreadsheet-url-or-id> --project-name "Saturam Core"
-
-# Upload the documents synced in this run to the configured S3 bucket
-# (requires AWS S3 to be configured — see "Cloud" below)
-sat-cli onboard --project-name "Saturam Core" --upload-to-s3
-
-# List locally synced documents, grouped by project name, without syncing
-sat-cli onboard --list
-
 # Interactively test the configured Bedrock Knowledge Base using retrieval only
 sat-cli onboard --knowledge-base
+
+# Restrict retrieval to one project's indexed documents
+sat-cli onboard --knowledge-base --project "Saturam"
 
 # Ask questions and get a mentoring answer grounded in the Knowledge Base.
 # The project is worked out per question — no --project flag needed.
@@ -126,6 +104,15 @@ sat-cli onboard --chat
 # Start over with a fresh conversation instead of continuing the last one
 sat-cli onboard --chat --new-session
 ```
+
+Run it with no options to see the modes above.
+
+> **Syncing is no longer a CLI command.** Fetching Confluence pages, Jira tickets and Google
+> Drive files, and uploading them to S3 for Bedrock to ingest, now runs as a scheduled AWS Lambda
+> off a Google Sheet — see the `on-boarding` service in `sat-cli-internal-infra`. The retired
+> flags (`--format`, `--project-name`, `--list`, `--upload-to-s3`, `--forget-sheet`) and the
+> `sat-cli onboard <spreadsheet-url-or-id>` form now fail with an "unknown option" error rather
+> than silently doing nothing, so any script still calling them is told plainly.
 
 ### How `--chat` answers
 
@@ -138,9 +125,7 @@ Each question runs through a small chain of agents rather than a single retrieva
 
 Conversation history is kept so follow-ups work: "and how does it fail?" is understood against the previous answer. History lives in memory by default, or in DynamoDB when a `conversationTable` is configured (see "Cloud" below), which is what lets a later run continue the same conversation.
 
-Once you've synced from a structured project sheet, its ID is remembered in your personal config — plain `sat-cli onboard` (no argument, from any directory) automatically re-checks that same sheet for the latest values on every run, instead of relying on a possibly-stale local file. Passing an explicit config path always overrides this and loads that file directly.
-
-For more details on onboarding sync configuration and features — including the full structured-sheet column reference ([`onboarding-sheet-template.csv`](onboarding-sheet-template.csv)) — see [ONBOARDING.md](ONBOARDING.md).
+For more on how the corpus is built and queried, see [ONBOARDING.md](ONBOARDING.md). The sheet format that drives ingestion is documented with the Lambda that reads it, in `sat-cli-internal-infra/on-boarding` (`SHEET-COLUMNS.md`).
 
 `--knowledge-base` opens an interactive prompt in the terminal. Enter a question to display the ranked chunks, relevance scores, source locations, and metadata returned by Bedrock. This uses the Knowledge Base `Retrieve` API—the equivalent of the AWS console's **Standard retrieval only** mode—and does not generate an AI answer. Submit an empty question, type `exit`, `quit`, or `:q`, or press Ctrl+C to leave the prompt.
 

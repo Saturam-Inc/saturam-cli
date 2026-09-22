@@ -58,7 +58,7 @@ export class JiraService {
      */
     public async getIssue(baseUrl: string, issueKey: string): Promise<JiraIssueApiResponse> {
         const apiBase = this.getApiBase(baseUrl);
-        // Narrowed to what JiraKnowledgeSource actually renders — the full issue payload also
+        // Narrowed to the fields a rendered issue actually uses — the full issue payload also
         // carries attachments, worklogs, and every custom field, which is unnecessary weight here.
         // Comments are still capped to Jira's default page here; use listAllComments() for the
         // complete, paginated list on issues that may have more than that.
