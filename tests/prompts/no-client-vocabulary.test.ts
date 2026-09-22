@@ -17,7 +17,9 @@ import { KNOWLEDGE_TOOL_DEFINITIONS } from "../../src/services/knowledge/agent/k
  * client's terms are noticed in a prompt; the test is the reason they will not be there for long.
  *
  * This used to render twelve prompts. It renders four, plus the tool descriptions — which are now
- * prompt text too, and are the one place a new capability gets described to the model.
+ * prompt text too, and are the one place a new capability gets described to the model. What the
+ * mentor prompt actually instructs is asserted in mentor-agent.prompt.test.ts; this file only
+ * guards vocabulary.
  */
 const CLIENT_TERMS = [
     /\bMRF\b/,
@@ -78,32 +80,5 @@ describe("prompts carry no client vocabulary", () => {
     it.each(renderAll())("$name", ({ text }) => {
         const found = CLIENT_TERMS.filter((term) => term.test(text)).map(String);
         expect(found).toEqual([]);
-    });
-
-    it("names no project of its own, so the agent learns them only by searching", () => {
-        const [system] = getMentorAgentMessages({ question: NEUTRAL.question, recentTurns: [] });
-        const text = String(system.content);
-
-        // The old classifier prompt had to be handed an example project name to write its
-        // instructions around. This one describes the job, so there is no name to inject.
-        expect(text).toContain("search the documentation");
-        expect(text).not.toMatch(/\[slug:/);
-    });
-
-    it("tells the agent to search again rather than answer around a miss", () => {
-        const [system] = getMentorAgentMessages({ question: NEUTRAL.question, recentTurns: [] });
-        expect(String(system.content)).toContain("search again with different wording");
-    });
-
-    it("drops the search guidance when the provider cannot call tools", () => {
-        const [system] = getMentorAgentMessages({
-            question: NEUTRAL.question,
-            recentTurns: [],
-            preGatheredContext: "(nothing retrieved)",
-        });
-
-        const text = String(system.content);
-        expect(text).toContain("You cannot run searches yourself");
-        expect(text).not.toContain("search again with different wording");
     });
 });
