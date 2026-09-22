@@ -42,8 +42,8 @@ export class FindingParser {
         const parsed = this.extractLastJsonArray(rawJson);
 
         if (!parsed) {
-            logger.debug("Could not find JSON array in LLM response, falling back to regex parser");
-            logger.debug(`Response (last 500 chars): ${rawJson.slice(-500)}`);
+            logger.warn("Could not find JSON array in LLM response, falling back to regex parser");
+            logger.warn(`Response (last 500 chars): ${rawJson.slice(-500)}`);
             return this.parseAuditOutput(rawAudit, diff);
         }
 
@@ -458,7 +458,7 @@ ${rows.join("\n")}`;
 
     public formatAuditMarkdown(audit: AuditResult, prNumber: number, durationFormatted?: string): string {
         const timeInfo = durationFormatted ? `\n\n⏱️ **Time taken for review:** ${durationFormatted}` : "";
-        if (audit.rawMarkdown) return audit.rawMarkdown + timeInfo;
+        if (audit.rawMarkdown) return audit.rawMarkdown.trimEnd() + timeInfo;
 
         const sections: string[] = [];
         const emoji = audit.verdict === "approve" ? "✅" : "🚫";

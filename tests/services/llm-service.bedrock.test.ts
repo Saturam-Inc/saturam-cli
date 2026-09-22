@@ -1,3 +1,4 @@
+import { HumanMessage } from "@langchain/core/messages";
 import { LLMModel } from "../../src/constants/llm-models";
 import { AIProvider } from "../../src/services/config-service";
 import type { ConfigService, ProviderConfig, RemoteConfig } from "../../src/services/config-service";
@@ -8,8 +9,16 @@ import type { RemoteCredentialService, AwsCredentials } from "../../src/services
 const bedrockConstructorArgs: any[] = [];
 jest.mock("@langchain/aws", () => ({
     ChatBedrockConverse: class {
+        public args: any;
         constructor(args: any) {
+            this.args = args;
             bedrockConstructorArgs.push(args);
+        }
+        async invoke(_messages: any) {
+            if (typeof this.args?.credentials === "function") {
+                await this.args.credentials();
+            }
+            return { content: "Mock Bedrock response" };
         }
     },
 }));
@@ -44,31 +53,53 @@ describe("LlmService Bedrock credential resolution", () => {
         delete process.env.AWS_PROFILE;
     });
 
-    it("uses dynamic remote credentials provider when remote mode is configured", async () => {
-        const remoteCredentials: AwsCredentials = {
-            accessKeyId: "AKIA_REMOTE",
-            secretAccessKey: "SECRET_REMOTE",
+    it("fetches fresh static credentials on each prompt and bypasses client caching", async () => {
+        const remoteCredentials1: AwsCredentials = {
+            accessKeyId: "AKIA_REMOTE_1",
+            secretAccessKey: "SECRET_REMOTE_1",
+            sessionToken: "SESSION_1",
         };
-        const remoteCreds = makeRemoteCreds(remoteCredentials);
+        const remoteCredentials2: AwsCredentials = {
+            accessKeyId: "AKIA_REMOTE_2",
+            secretAccessKey: "SECRET_REMOTE_2",
+            sessionToken: "SESSION_2",
+        };
+        const remoteCreds = {
+            getCredentials: jest
+                .fn()
+                .mockResolvedValueOnce(remoteCredentials1)
+                .mockResolvedValueOnce(remoteCredentials2),
+        } as unknown as RemoteCredentialService;
+
         const config = makeConfig({
             providerConfig: { enabled: true, awsRegion: "us-east-1" },
-            remote: { url: "https://example.com" },
+            remote: { url: "https://example.com", token: "tok" },
         });
 
         const service = new LlmService(config, remoteCreds);
-        await service.getModel(LLMModel.BEDROCK_CLAUDE_4_SONNET);
+
+        // First prompt invocation with same model & options
+        const res1 = await service.prompt([new HumanMessage("hello")], LLMModel.BEDROCK_CLAUDE_4_SONNET);
+        expect(res1).toBe("Mock Bedrock response");
+        expect(remoteCreds.getCredentials).toHaveBeenCalledTimes(1);
+        expect(bedrockConstructorArgs[0].credentials).toEqual({
+            accessKeyId: "AKIA_REMOTE_1",
+            secretAccessKey: "SECRET_REMOTE_1",
+            sessionToken: "SESSION_1",
+        });
+
+        // Second prompt invocation with identical model & options
+        const res2 = await service.prompt([new HumanMessage("world")], LLMModel.BEDROCK_CLAUDE_4_SONNET);
+        expect(res2).toBe("Mock Bedrock response");
+        expect(remoteCreds.getCredentials).toHaveBeenCalledTimes(2);
+        expect(bedrockConstructorArgs[1].credentials).toEqual({
+            accessKeyId: "AKIA_REMOTE_2",
+            secretAccessKey: "SECRET_REMOTE_2",
+            sessionToken: "SESSION_2",
+        });
 
         expect(fromIniMock).not.toHaveBeenCalled();
-        expect(typeof bedrockConstructorArgs[0].credentials).toBe("function");
-
-        // Execute provider function to verify dynamic credential retrieval
-        const creds = await bedrockConstructorArgs[0].credentials();
-        expect(creds).toEqual(remoteCredentials);
-        expect(remoteCreds.getCredentials).toHaveBeenCalledTimes(1);
-
-        // Verify dynamic refresh on subsequent invocations
-        await bedrockConstructorArgs[0].credentials();
-        expect(remoteCreds.getCredentials).toHaveBeenCalledTimes(2);
+        expect(bedrockConstructorArgs).toHaveLength(2);
     });
 
     it("uses the local AWS profile when remote mode is not configured", async () => {

@@ -107,14 +107,18 @@ export class LlmService {
 
     public async getModel(model?: LLMModel, options?: LLMOptions): Promise<ChatModel> {
         const selectedModel = model ?? (await this.config.getModel());
+        const isRemoteBedrock = isBedrockModel(selectedModel) && !!(await this.config.getRemoteConfig());
+
         const key = `${selectedModel}:${JSON.stringify(options ?? {})}`;
 
-        if (this.llms.has(key)) {
+        if (!isRemoteBedrock && this.llms.has(key)) {
             return this.llms.get(key)!;
         }
 
         const llm = await this.createModel(selectedModel, options);
-        this.llms.set(key, llm);
+        if (!isRemoteBedrock) {
+            this.llms.set(key, llm);
+        }
         return llm;
     }
 
@@ -157,14 +161,25 @@ export class LlmService {
         const region = providerConfig?.awsRegion ?? process.env.AWS_REGION ?? "us-east-1";
         const profile = providerConfig?.awsProfile ?? process.env.AWS_PROFILE;
 
-        // Remote mode: fetch AWS credentials from the configured endpoint dynamically
-        // via a provider function so tokens can be refreshed automatically when expired.
-        // Falls back to local profile / default credential chain when remote mode is disabled.
+        // Credential resolution precedence:
+        // 1. Remote credential mode (SAT_REMOTE_URL / SATENG_REMOTE_URL or config.remote)
+        // 2. AWS Profile (providerConfig.awsProfile or AWS_PROFILE)
+        // 3. Default AWS credential chain (environment variables / IAM roles / ~/.aws/credentials)
+        //
+        // When remote mode is enabled, fresh credentials are affirmatively fetched via
+        // getCredentials() before invocation and passed as static credentials into a
+        // client used for that one invocation (bypassing this.llms client caching and
+        // AWS SDK credential memoization).
         const remote = await this.config.getRemoteConfig();
-        let credentials: (() => Promise<AwsCredentials>) | undefined;
+        let credentials: any;
         if (remote) {
-            logger.info("Using remote AWS credentials for Bedrock.");
-            credentials = () => this.remoteCredentials.getCredentials();
+            logger.debug("Fetching fresh remote AWS credentials for Bedrock invocation.");
+            const remoteCreds = await this.remoteCredentials.getCredentials();
+            credentials = {
+                accessKeyId: remoteCreds.accessKeyId,
+                secretAccessKey: remoteCreds.secretAccessKey,
+                ...(remoteCreds.sessionToken ? { sessionToken: remoteCreds.sessionToken } : {}),
+            };
         } else if (profile) {
             credentials = (await import("@aws-sdk/credential-providers")).fromIni({ profile });
         } else {

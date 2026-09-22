@@ -1,5 +1,5 @@
 import { existsSync } from "fs";
-import { mkdir, readFile, writeFile } from "fs/promises";
+import { mkdir, readFile, rename, writeFile } from "fs/promises";
 import { homedir } from "os";
 import { dirname, join } from "path";
 import { Service } from "typedi";
@@ -43,8 +43,10 @@ export const ProviderConfigSchema = z.object({
 
 export type ProviderConfig = z.infer<typeof ProviderConfigSchema>;
 
-/** Default endpoint used to fetch AWS credentials when remote mode is enabled. */
-export const DEFAULT_REMOTE_URL = "https://2o4yp5p890.execute-api.us-east-1.amazonaws.com";
+export function isLoopbackHostname(hostname: string): boolean {
+    const cleanHost = hostname.replace(/^\[|\]$/g, "").toLowerCase();
+    return cleanHost === "localhost" || cleanHost === "127.0.0.1" || cleanHost === "::1" || cleanHost === "0.0.0.0";
+}
 
 /**
  * Generic remote configuration. When set, SAT-CLI fetches AWS credentials from
@@ -52,7 +54,7 @@ export const DEFAULT_REMOTE_URL = "https://2o4yp5p890.execute-api.us-east-1.amaz
  * credentials for Bedrock.
  */
 export const RemoteConfigSchema = z.object({
-    url: z.string().default(DEFAULT_REMOTE_URL).describe("Remote endpoint that returns AWS credentials"),
+    url: z.string().min(1, "Remote URL is required").describe("Remote endpoint that returns AWS credentials"),
     token: z.string().optional().describe("Optional token sent with the remote request"),
 });
 
@@ -229,8 +231,7 @@ export class ConfigService {
                 raw = await readFile(configPath, "utf8");
             } catch (err) {
                 logger.error(`Failed to read personal config file at ${configPath}: ${err}`);
-                this.personalConfig = PersonalConfigurationSchema.parse({});
-                return this.personalConfig;
+                throw new Error(`Failed to read personal config file at ${configPath}: ${err instanceof Error ? err.message : String(err)}`);
             }
 
             let json: unknown;
@@ -238,8 +239,7 @@ export class ConfigService {
                 json = JSON.parse(raw);
             } catch (err) {
                 logger.error(`Failed to parse personal config file at ${configPath}: Invalid JSON syntax`, err);
-                this.personalConfig = PersonalConfigurationSchema.parse({});
-                return this.personalConfig;
+                throw new Error(`Failed to parse personal config file at ${configPath}: Invalid JSON syntax`);
             }
 
             const normalized = this.normalizePersonalConfig(json);
@@ -247,9 +247,14 @@ export class ConfigService {
             if (parsed.success) {
                 this.personalConfig = parsed.data;
             } else {
-                logger.warn(`Personal config schema validation failed for ${configPath}:`, parsed.error.issues);
+                const sanitizedIssues = parsed.error.issues.map((i) => ({
+                    path: i.path.join("."),
+                    code: i.code,
+                    message: i.message,
+                }));
+                logger.warn(`Personal config schema validation failed for ${configPath}:`, sanitizedIssues);
                 // Attempt graceful recovery: preserve valid providers, tokens, and remote settings
-                if (normalized && typeof normalized === "object") {
+                if (normalized && typeof normalized === "object" && !Array.isArray(normalized)) {
                     const fallbackObj = { ...(normalized as Record<string, unknown>) };
                     delete fallbackObj.defaultModel;
                     delete fallbackObj.defaultProvider;
@@ -259,16 +264,30 @@ export class ConfigService {
                         logger.info("Recovered personal configuration while stripping invalid default model/provider.");
                         this.personalConfig = fallbackParsed.data;
                     } else {
-                        logger.error("Failed full schema recovery. Preserving raw providers and secret tokens as fallback.");
-                        const baseConfig = PersonalConfigurationSchema.parse({});
+                        logger.error("Failed full schema recovery. Preserving validated providers and secret tokens as fallback.");
+                        const baseConfig: PersonalConfiguration = { providers: {} };
                         const rec = normalized as Record<string, unknown>;
-                        if (rec.providers && typeof rec.providers === "object") {
-                            baseConfig.providers = rec.providers as any;
+                        if (rec.providers && typeof rec.providers === "object" && !Array.isArray(rec.providers)) {
+                            const parsedProviders: Record<string, ProviderConfig> = {};
+                            for (const [providerKey, providerVal] of Object.entries(rec.providers as Record<string, unknown>)) {
+                                const parsedProvider = ProviderConfigSchema.safeParse(providerVal);
+                                if (parsedProvider.success) {
+                                    parsedProviders[providerKey as AIProvider] = parsedProvider.data;
+                                }
+                            }
+                            baseConfig.providers = parsedProviders;
                         }
                         if (typeof rec.githubToken === "string") baseConfig.githubToken = rec.githubToken;
                         if (typeof rec.bitbucketToken === "string") baseConfig.bitbucketToken = rec.bitbucketToken;
                         if (typeof rec.gitlabToken === "string") baseConfig.gitlabToken = rec.gitlabToken;
-                        if (rec.remote && typeof rec.remote === "object") baseConfig.remote = rec.remote as any;
+                        if (rec.remote && typeof rec.remote === "object" && !Array.isArray(rec.remote)) {
+                            const remoteParsed = RemoteConfigSchema.safeParse(rec.remote);
+                            if (remoteParsed.success) {
+                                baseConfig.remote = remoteParsed.data;
+                            } else {
+                                logger.warn("Ignoring invalid remote configuration block during fallback recovery.");
+                            }
+                        }
                         this.personalConfig = baseConfig;
                     }
                 } else {
@@ -401,8 +420,11 @@ export class ConfigService {
 
     public async savePersonalConfig(config: PersonalConfiguration): Promise<void> {
         const configPath = this.getPersonalConfigPath();
-        await mkdir(dirname(configPath), { recursive: true });
-        await writeFile(configPath, JSON.stringify(config, null, 4), "utf8");
+        const dir = dirname(configPath);
+        await mkdir(dir, { recursive: true });
+        const tmpPath = `${configPath}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
+        await writeFile(tmpPath, JSON.stringify(config, null, 4), { encoding: "utf8", mode: 0o600 });
+        await rename(tmpPath, configPath);
         this.personalConfig = config;
     }
 
@@ -490,24 +512,27 @@ export class ConfigService {
     // --- Remote credential retrieval ---
 
     /**
-     * Returns the remote configuration when remote mode is enabled, with the
-     * default URL applied. Returns undefined when remote mode is not configured.
+     * Returns the remote configuration when remote mode is enabled.
+     * Merges environment variables (SAT_REMOTE_URL / SATENG_REMOTE_URL and
+     * SAT_REMOTE_TOKEN / SATENG_REMOTE_TOKEN) with stored config.
+     * Note: Setting SAT_REMOTE_URL or SATENG_REMOTE_URL in environment enables remote mode.
+     * Precedence: Environment variables take precedence over config file settings per field.
      */
     public async getRemoteConfig(): Promise<RemoteConfig | undefined> {
         const envUrl = process.env.SAT_REMOTE_URL ?? process.env.SATENG_REMOTE_URL;
         const envToken = process.env.SAT_REMOTE_TOKEN ?? process.env.SATENG_REMOTE_TOKEN;
-        if (envUrl) {
-            return {
-                url: envUrl,
-                token: envToken,
-            };
-        }
 
         const config = await this.loadPersonalConfig();
-        if (!config.remote) return undefined;
+        const configuredUrl = envUrl || config.remote?.url;
+        const configuredToken = envToken || config.remote?.token;
+
+        if (!configuredUrl) {
+            return undefined;
+        }
+
         return {
-            url: config.remote.url || DEFAULT_REMOTE_URL,
-            token: config.remote.token || envToken,
+            url: configuredUrl,
+            token: configuredToken,
         };
     }
 

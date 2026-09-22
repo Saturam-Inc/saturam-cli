@@ -5,7 +5,7 @@ import { LLMModel } from "../constants/llm-models";
 import {
     AIProvider,
     ConfigService,
-    DEFAULT_REMOTE_URL,
+    isLoopbackHostname,
     KEYLESS_PROVIDERS,
     PersonalConfiguration,
     ProviderConfig,
@@ -103,6 +103,60 @@ function getBearerAuthHeaders(accessToken?: string): Record<string, string> | un
     return accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined;
 }
 
+function validateRemoteUrl(val: string): true | string {
+    const trimmed = val.trim();
+    if (!trimmed) {
+        return "Remote URL is required.";
+    }
+    let parsed: URL;
+    try {
+        parsed = new URL(trimmed);
+    } catch {
+        return "Invalid URL format. Please enter a valid URL (e.g. https://api.example.com).";
+    }
+    if (parsed.username || parsed.password) {
+        return "Remote URL must not contain user credentials (username/password).";
+    }
+    if (parsed.search) {
+        return "Remote URL must not contain query parameters.";
+    }
+    if (parsed.protocol === "https:") {
+        return true;
+    }
+    if (parsed.protocol === "http:") {
+        if (isLoopbackHostname(parsed.hostname)) {
+            return true;
+        }
+        return "Plain HTTP is only allowed for loopback addresses (localhost/127.0.0.1). Use HTTPS for remote servers.";
+    }
+    return "Remote URL must use https:// or http:// (loopback only).";
+}
+
+async function probeRemoteCredentials(url: string, token?: string): Promise<{ success: boolean; message: string }> {
+    const credUrl = `${normalizeBaseUrl(url)}/credentials`;
+    const headers: Record<string, string> = { Accept: "application/json" };
+    if (token && token.trim()) {
+        headers.Authorization = `Bearer ${token.trim()}`;
+    }
+    try {
+        const res = await fetch(credUrl, {
+            method: "GET",
+            headers,
+            redirect: "error",
+            signal: AbortSignal.timeout(SETUP_CONNECTIVITY_TIMEOUT_MS),
+        });
+        if (res.ok) {
+            return { success: true, message: `Successfully authenticated with ${credUrl}` };
+        }
+        if (res.status === 401 || res.status === 403) {
+            return { success: false, message: `Authentication failed (HTTP ${res.status}). Verify your token.` };
+        }
+        return { success: false, message: `Endpoint returned HTTP ${res.status}.` };
+    } catch (err) {
+        return { success: false, message: `Could not reach ${credUrl}: ${err instanceof Error ? err.message : String(err)}` };
+    }
+}
+
 @Service()
 export class InitCommand implements TypedCommand<typeof INPUTS> {
     readonly name = "init";
@@ -146,13 +200,25 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
                 });
                 if (enableRemote) {
                     const remote = await this.configureRemote(existing.remote);
-                    await this.config.savePersonalConfig({ ...existing, remote });
+                    const updatedConfig: PersonalConfiguration = { ...existing, remote };
+                    if (updatedConfig.providers?.bedrock?.awsProfile) {
+                        logger.info("Clearing local awsProfile from Bedrock provider configuration since remote mode is now enabled.");
+                        updatedConfig.providers.bedrock = {
+                            ...updatedConfig.providers.bedrock,
+                            awsProfile: undefined,
+                        };
+                    }
+                    await this.config.savePersonalConfig(updatedConfig);
                     logger.info("\nRemote credential configuration saved.");
                 } else {
                     const newConfig = { ...existing };
                     delete newConfig.remote;
+                    if (newConfig.providers?.bedrock?.awsProfile) {
+                        logger.info(`Remote mode disabled. Bedrock will use configured AWS profile '${newConfig.providers.bedrock.awsProfile}'.`);
+                    } else {
+                        logger.info("\nRemote credential mode disabled. Bedrock will use the default AWS credential chain.");
+                    }
                     await this.config.savePersonalConfig(newConfig);
-                    logger.info("\nRemote credential mode disabled.");
                 }
                 return;
             }
@@ -205,7 +271,11 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
             providers[provider] = res.providerConfig;
             if (provider === AIProvider.BEDROCK) {
                 bedrockConfiguredInWizard = true;
-                remoteConfig = res.remoteConfig;
+                if (res.remoteConfig) {
+                    remoteConfig = res.remoteConfig;
+                } else if (res.remoteExplicitlyDisabled) {
+                    remoteConfig = undefined;
+                }
             } else if (res.remoteConfig) {
                 remoteConfig = res.remoteConfig;
             }
@@ -264,40 +334,60 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         return this.configureRemote(existing);
     }
 
-    /** Prompts for the remote URL (with default) and an optional token. */
+    /** Prompts for the remote URL and token, with validation and connectivity probe. */
     private async configureRemote(existing?: RemoteConfig): Promise<RemoteConfig> {
-        const url =
-            (
-                await input({
-                    message: "Remote URL:",
-                    default: existing?.url ?? DEFAULT_REMOTE_URL,
-                    validate: (val) => {
-                        const trimmed = val.trim();
-                        if (!trimmed) return true;
-                        return trimmed.startsWith("https://") ||
-                            trimmed.startsWith("http://localhost") ||
-                            trimmed.startsWith("http://127.0.0.1")
-                            ? true
-                            : "Remote URL must use https:// to protect credentials in transit";
-                    },
-                })
-            ).trim() || DEFAULT_REMOTE_URL;
+        const url = (
+            await input({
+                message: "Remote credential API URL:",
+                default: existing?.url,
+                validate: validateRemoteUrl,
+            })
+        ).trim();
 
-        const hint = existing?.token ? " (press enter to keep existing)" : " (optional, leave empty to skip)";
+        let parsed: URL;
+        try {
+            parsed = new URL(url);
+        } catch {
+            throw new Error(`Invalid URL: ${url}`);
+        }
+        const isLoopback = isLoopbackHostname(parsed.hostname);
+
+        const hint = existing?.token
+            ? " (press enter to keep existing)"
+            : " (optional, leave empty to skip)";
         const tokenInput = await password({
             message: `Remote token${hint}:`,
             mask: "*",
         });
-        const token = tokenInput || existing?.token;
+        const token = (tokenInput || existing?.token)?.trim() || undefined;
 
-        return { url, token: token || undefined };
+        logger.info(`Resolved remote URL: ${url}`);
+        logger.info(`Token configured: ${token ? "Yes" : "No"}`);
+
+        // Probe endpoint
+        logger.info("Probing remote credential endpoint...");
+        const probeResult = await probeRemoteCredentials(url, token);
+        if (probeResult.success) {
+            logger.info(`✓ ${probeResult.message}`);
+        } else {
+            logger.warn(`⚠ ${probeResult.message}`);
+            const proceed = await confirm({
+                message: "Endpoint verification failed. Do you want to save this configuration anyway?",
+                default: false,
+            });
+            if (!proceed) {
+                return this.configureRemote(existing);
+            }
+        }
+
+        return { url, token };
     }
 
     private async configureProvider(
         provider: AIProvider,
         existing?: ProviderConfig,
         existingRemote?: RemoteConfig,
-    ): Promise<{ providerConfig: ProviderConfig; remoteConfig?: RemoteConfig }> {
+    ): Promise<{ providerConfig: ProviderConfig; remoteConfig?: RemoteConfig; remoteExplicitlyDisabled?: boolean }> {
         logger.info(`\nConfiguring ${PROVIDER_DISPLAY_NAMES[provider]}...`);
 
         if (provider === AIProvider.BEDROCK) {
@@ -324,17 +414,26 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
     private async configureBedrockProvider(
         existing?: ProviderConfig,
         existingRemote?: RemoteConfig,
-    ): Promise<{ providerConfig: ProviderConfig; remoteConfig?: RemoteConfig }> {
+    ): Promise<{ providerConfig: ProviderConfig; remoteConfig?: RemoteConfig; remoteExplicitlyDisabled?: boolean }> {
         logger.info("\n--- AWS Bedrock Credentials ---");
 
         const useRemote = await confirm({
             message: "Configure remote AWS credential API URL for Bedrock?",
-            default: existingRemote ? true : existing?.awsProfile ? false : true,
+            default: existingRemote ? true : false,
         });
 
         let remoteConfig: RemoteConfig | undefined;
+        let remoteExplicitlyDisabled = false;
         if (useRemote) {
             remoteConfig = await this.configureRemote(existingRemote);
+        } else if (existingRemote) {
+            const disableExistingRemote = await confirm({
+                message: "Remote credential retrieval is currently configured. Disable remote credentials?",
+                default: false,
+            });
+            if (disableExistingRemote) {
+                remoteExplicitlyDisabled = true;
+            }
         }
 
         const awsProfile = useRemote
@@ -509,7 +608,7 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
             })),
         });
 
-        const { providerConfig, remoteConfig } = await this.configureProvider(
+        const { providerConfig, remoteConfig, remoteExplicitlyDisabled } = await this.configureProvider(
             provider,
             existing.providers?.[provider],
             existing.remote,
@@ -522,7 +621,7 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         if (provider === AIProvider.BEDROCK) {
             if (remoteConfig) {
                 config.remote = remoteConfig;
-            } else {
+            } else if (remoteExplicitlyDisabled) {
                 delete config.remote;
             }
         } else if (remoteConfig) {
