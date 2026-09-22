@@ -1,3 +1,0 @@
-project_name,confluence_base_url,confluence_pages,confluence_space,jira_base_url,jira_tickets,jira_jql,google_docs,google_sheet_id,google_sheet_range,onboarding_sheet_ids
-Saturam Core,https://your-domain.atlassian.net,"123456789,987654321",PROJ,https://your-domain.atlassian.net,"PROJ-123,PROJ-456",,your-google-doc-id-here,your-google-sheet-id-here,Sheet1!A1:E100,your-onboarding-links-sheet-id-here
-Acme Project,,,ACME,,,project = ACME AND status != Done,,,,
