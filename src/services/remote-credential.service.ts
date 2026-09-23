@@ -168,7 +168,10 @@ function parseCredentials(payload: unknown): AwsCredentials {
     }
 
     const raw = payload as Record<string, unknown>;
-    const data = (raw["Credentials"] && typeof raw["Credentials"] === "object"
+    if (raw["Credentials"] !== undefined && raw["Credentials"] !== null && Array.isArray(raw["Credentials"])) {
+        throw new Error("Remote credential response contains an invalid Credentials payload (expected object, received array).");
+    }
+    const data = (raw["Credentials"] && typeof raw["Credentials"] === "object" && !Array.isArray(raw["Credentials"])
         ? raw["Credentials"]
         : raw) as Record<string, unknown>;
 

@@ -84,7 +84,7 @@ const MODEL_DISPLAY_NAMES: Record<LLMModel, string> = {
     [LLMModel.SELF_HOSTED_CUSTOM]: "Self Hosted LLM",
 };
 
-function isRemoteOllamaUrl(baseUrl: string): string | boolean {
+function isRemoteOllamaUrl(baseUrl: string): boolean {
     try {
         const hostname = new URL(baseUrl).hostname.toLowerCase();
         return !["localhost", "127.0.0.1", "::1"].includes(hostname);
@@ -115,8 +115,8 @@ function validateRemoteUrl(val: string): true | string {
     if (parsed.username || parsed.password) {
         return "Remote URL must not contain user credentials (username/password).";
     }
-    if (parsed.search) {
-        return "Remote URL must not contain query parameters.";
+    if (parsed.search || parsed.hash) {
+        return "Remote URL must not contain query parameters or URL fragments.";
     }
     if (parsed.protocol === "https:") {
         return true;
