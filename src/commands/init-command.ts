@@ -170,7 +170,12 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
     public async execute(_inputs: TypedInputs<typeof INPUTS>): Promise<void> {
         logger.info("Welcome to Saturam Engineering CLI setup!\n");
 
-        const existing = await this.config.loadPersonalConfig();
+        let existing: PersonalConfiguration = { providers: {} };
+        try {
+            existing = await this.config.loadPersonalConfig();
+        } catch (err) {
+            logger.warn(`Could not load existing config (${err instanceof Error ? err.message : String(err)}). Proceeding with fresh setup.`);
+        }
         const hasExisting = Object.keys(existing.providers ?? {}).length > 0;
 
         if (hasExisting) {

@@ -597,10 +597,27 @@ export class ConfigService {
         // 3. gh CLI
         const { execSync } = await import("child_process");
         try {
-            return execSync("gh auth token", { encoding: "utf8" }).trim();
+            const token = execSync("gh auth token", { encoding: "utf8" }).trim();
+            if (token) return token;
         } catch {
-            throw new Error("No GitHub token found. Set GITHUB_TOKEN, run 'sat-cli init', or run 'gh auth login'.");
+            // gh auth token might not be supported on older gh CLI versions
         }
+
+        // 4. Fallback: ~/.config/gh/hosts.yml (for older gh CLI versions)
+        const ghHostsPath = join(homedir(), ".config", "gh", "hosts.yml");
+        if (existsSync(ghHostsPath)) {
+            try {
+                const hostsContent = await readFile(ghHostsPath, "utf8");
+                const match = hostsContent.match(/oauth_token:\s*([^\s\r\n]+)/);
+                if (match && match[1]) {
+                    return match[1];
+                }
+            } catch {
+                // Ignore file read error and fall through
+            }
+        }
+
+        throw new Error("No GitHub token found. Set GITHUB_TOKEN, run 'sat-cli init', or run 'gh auth login'.");
     }
 
     // --- GitLab Token ---
