@@ -77,3 +77,35 @@ describe("ConfigService.getRemoteConfig", () => {
         expect(result).toBeUndefined();
     });
 });
+
+describe("RemoteConfigSchema validation", () => {
+    const { RemoteConfigSchema } = require("../../src/services/config-service");
+
+    it("accepts loopback URL without token", () => {
+        const result = RemoteConfigSchema.safeParse({ url: "http://localhost:8000" });
+        expect(result.success).toBe(true);
+    });
+
+    it("accepts loopback 127.0.0.1 URL without token", () => {
+        const result = RemoteConfigSchema.safeParse({ url: "http://127.0.0.1:8000" });
+        expect(result.success).toBe(true);
+    });
+
+    it("accepts non-loopback HTTPS URL with token", () => {
+        const result = RemoteConfigSchema.safeParse({ url: "https://api.example.com", token: "secret" });
+        expect(result.success).toBe(true);
+    });
+
+    it("rejects non-loopback URL without token", () => {
+        const result = RemoteConfigSchema.safeParse({ url: "https://api.example.com" });
+        expect(result.success).toBe(false);
+        if (!result.success) {
+            expect(result.error.issues[0].message).toMatch(/Authentication token is required/);
+        }
+    });
+
+    it("rejects non-loopback URL with empty/whitespace token", () => {
+        const result = RemoteConfigSchema.safeParse({ url: "https://api.example.com", token: "   " });
+        expect(result.success).toBe(false);
+    });
+});

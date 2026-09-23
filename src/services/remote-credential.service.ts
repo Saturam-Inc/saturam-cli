@@ -69,6 +69,13 @@ export class RemoteCredentialService {
 
         const sanitizedBase = normalizeBaseUrl(`${parsedUrl.protocol}//${parsedUrl.host}${parsedUrl.pathname}`);
         const url = `${sanitizedBase}${CREDENTIALS_PATH}`;
+
+        if (!isLoopback && (!remote.token || !remote.token.trim())) {
+            throw new Error(
+                `Remote credential endpoint "${sanitizedBase}" requires an authentication token. Set SAT_REMOTE_TOKEN or run 'sat-cli init'.`,
+            );
+        }
+
         const headers: Record<string, string> = { Accept: "application/json" };
         if (remote.token && remote.token.trim()) {
             headers.Authorization = `Bearer ${remote.token.trim()}`;

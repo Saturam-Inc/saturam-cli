@@ -96,19 +96,11 @@ describe("RemoteCredentialService", () => {
         await expect(service.getCredentials()).rejects.toThrow(/userinfo/i);
     });
 
-    it("omits Authorization header when token is not configured on remote host", async () => {
-        const fetchMock = jest
-            .fn()
-            .mockResolvedValue(jsonResponse({ accessKeyId: "AKIA_TEST", secretAccessKey: "B" }));
-        global.fetch = fetchMock as unknown as typeof fetch;
-
+    it("throws when token is missing for non-loopback remote endpoint", async () => {
         const service = new RemoteCredentialService(
             makeConfig({ url: "https://example.com" }),
         );
-        await service.getCredentials();
-
-        const [, options] = fetchMock.mock.calls[0];
-        expect(options.headers.Authorization).toBeUndefined();
+        await expect(service.getCredentials()).rejects.toThrow(/requires an authentication token/i);
     });
 
     it("strips trailing slashes from the configured URL", async () => {

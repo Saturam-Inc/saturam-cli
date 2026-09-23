@@ -352,12 +352,19 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         }
         const isLoopback = isLoopbackHostname(parsed.hostname);
 
-        const hint = existing?.token
-            ? " (press enter to keep existing)"
-            : " (optional, leave empty to skip)";
+        const hint = !isLoopback
+            ? (existing?.token ? " (press enter to keep existing)" : " (required for remote endpoint)")
+            : (existing?.token ? " (press enter to keep existing)" : " (optional for loopback, leave empty to skip)");
+
         const tokenInput = await password({
             message: `Remote token${hint}:`,
             mask: "*",
+            validate: (value) => {
+                if (!isLoopback && !existing?.token && (!value || !value.trim())) {
+                    return "Remote token is required for non-loopback endpoints.";
+                }
+                return true;
+            },
         });
         const token = (tokenInput || existing?.token)?.trim() || undefined;
 

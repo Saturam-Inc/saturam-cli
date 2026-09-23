@@ -53,10 +53,30 @@ export function isLoopbackHostname(hostname: string): boolean {
  * `url` (optionally authenticated with `token`) instead of using local AWS
  * credentials for Bedrock.
  */
-export const RemoteConfigSchema = z.object({
-    url: z.string().min(1, "Remote URL is required").describe("Remote endpoint that returns AWS credentials"),
-    token: z.string().optional().describe("Optional token sent with the remote request"),
-});
+export const RemoteConfigSchema = z
+    .object({
+        url: z.string().min(1, "Remote URL is required").describe("Remote endpoint that returns AWS credentials"),
+        token: z.string().optional().describe("Optional token sent with the remote request"),
+    })
+    .superRefine((data, ctx) => {
+        try {
+            const parsed = new URL(data.url);
+            const isLoopback = isLoopbackHostname(parsed.hostname);
+            if (!isLoopback && (!data.token || data.token.trim().length === 0)) {
+                ctx.addIssue({
+                    code: z.ZodIssueCode.custom,
+                    path: ["token"],
+                    message: "Authentication token is required for remote (non-loopback) credential endpoints.",
+                });
+            }
+        } catch {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ["url"],
+                message: "Invalid remote URL.",
+            });
+        }
+    });
 
 export type RemoteConfig = z.infer<typeof RemoteConfigSchema>;
 
