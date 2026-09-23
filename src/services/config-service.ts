@@ -82,10 +82,22 @@ export type RemoteConfig = z.infer<typeof RemoteConfigSchema>;
 
 const migrateModelId = (val: unknown) => {
     if (typeof val !== "string") return val;
-    let model = val.replace(/^(us|eu|ap)\./, "");
-    if (model === "anthropic.claude-sonnet-4-6") model = "anthropic.claude-sonnet-4-6-v1:0";
-    if (model === "anthropic.claude-opus-4-6-v1" || model === "anthropic.claude-opus-4-6") model = "anthropic.claude-opus-4-6-v1:0";
-    return model;
+    // Strip regional routing prefixes (e.g. us.anthropic..., eu.anthropic...)
+    const stripped = val.replace(/^(us|eu|ap)\./, "");
+
+    const knownModels = Object.values(LLMModel) as string[];
+    if (knownModels.includes(stripped)) {
+        return stripped;
+    }
+
+    // Generic suffix matching: find canonical model ID if base names match
+    const matched = knownModels.find((model) => {
+        const baseKnown = model.replace(/(-v\d+)?:\d+$/, "").replace(/-v\d+$/, "");
+        const baseInput = stripped.replace(/(-v\d+)?:\d+$/, "").replace(/-v\d+$/, "");
+        return baseKnown === baseInput;
+    });
+
+    return matched ?? stripped;
 };
 const modelField = z.preprocess(migrateModelId, z.nativeEnum(LLMModel).optional());
 
