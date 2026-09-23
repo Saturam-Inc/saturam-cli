@@ -80,8 +80,13 @@ export const RemoteConfigSchema = z
 
 export type RemoteConfig = z.infer<typeof RemoteConfigSchema>;
 
-const migrateModelId = (val: unknown) =>
-    typeof val === "string" ? val.replace(/^(us|eu|ap)\./, "") : val;
+const migrateModelId = (val: unknown) => {
+    if (typeof val !== "string") return val;
+    let model = val.replace(/^(us|eu|ap)\./, "");
+    if (model === "anthropic.claude-sonnet-4-6") model = "anthropic.claude-sonnet-4-6-v1:0";
+    if (model === "anthropic.claude-opus-4-6-v1" || model === "anthropic.claude-opus-4-6") model = "anthropic.claude-opus-4-6-v1:0";
+    return model;
+};
 const modelField = z.preprocess(migrateModelId, z.nativeEnum(LLMModel).optional());
 
 export const PersonalConfigurationSchema = z.object({
