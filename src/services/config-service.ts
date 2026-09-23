@@ -300,12 +300,23 @@ export class ConfigService {
                         if (typeof rec.githubToken === "string") baseConfig.githubToken = rec.githubToken;
                         if (typeof rec.bitbucketToken === "string") baseConfig.bitbucketToken = rec.bitbucketToken;
                         if (typeof rec.gitlabToken === "string") baseConfig.gitlabToken = rec.gitlabToken;
-                        if (rec.remote && typeof rec.remote === "object" && !Array.isArray(rec.remote)) {
-                            const remoteParsed = RemoteConfigSchema.safeParse(rec.remote);
-                            if (remoteParsed.success) {
-                                baseConfig.remote = remoteParsed.data;
+                        if (rec.remote !== undefined && rec.remote !== null) {
+                            if (typeof rec.remote === "object" && !Array.isArray(rec.remote)) {
+                                const remoteParsed = RemoteConfigSchema.safeParse(rec.remote);
+                                if (remoteParsed.success) {
+                                    baseConfig.remote = remoteParsed.data;
+                                } else {
+                                    const reasons = remoteParsed.error.issues.map((i) => i.message).join("; ");
+                                    logger.error(`Corrupted remote credential configuration in ${configPath}: ${reasons}`);
+                                    throw new Error(
+                                        `Corrupted remote credential configuration in ${configPath}: ${reasons}. Remote credential mode cannot be safely verified. Run 'sat-cli init' or fix ${configPath}.`,
+                                    );
+                                }
                             } else {
-                                logger.warn("Ignoring invalid remote configuration block during fallback recovery.");
+                                logger.error(`Invalid remote configuration block in ${configPath}: expected an object.`);
+                                throw new Error(
+                                    `Invalid remote configuration block in ${configPath}. Run 'sat-cli init' or fix ${configPath}.`,
+                                );
                             }
                         }
                         this.personalConfig = baseConfig;

@@ -38,4 +38,21 @@ describe("ConfigService loadPersonalConfig resilience", () => {
         expect(loaded.remote).toEqual({ url: "https://remote.example.com", token: "my-remote-token" });
         expect(loaded.defaultModel).toBeUndefined();
     });
+
+    it("fails closed and throws when remote configuration block is corrupted in config file", async () => {
+        (existsSync as jest.Mock).mockReturnValue(true);
+        const corruptRemoteConfigJson = JSON.stringify({
+            defaultProvider: "bedrock",
+            defaultModel: "invalid-model",
+            providers: {
+                bedrock: { enabled: true, awsRegion: "us-east-1" },
+            },
+            // Corrupted remote config (e.g. non-loopback URL with missing token)
+            remote: { url: "https://remote.example.com" },
+        });
+        (readFile as jest.Mock).mockResolvedValue(corruptRemoteConfigJson);
+
+        const service = new ConfigService({ repoRoot: "/tmp" } as any);
+        await expect(service.loadPersonalConfig()).rejects.toThrow(/Corrupted remote credential configuration/);
+    });
 });
