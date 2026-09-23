@@ -1,11 +1,14 @@
 import { existsSync } from "fs";
-import { mkdir, readFile, writeFile } from "fs/promises";
+import { mkdir, readFile, rename, writeFile } from "fs/promises";
 import { homedir } from "os";
 import { dirname, join } from "path";
 import { Service } from "typedi";
 import { z } from "zod";
+import { getLogger } from "log4js";
 import { LLMModel } from "../constants/llm-models";
 import { WorkingDirectory } from "../utils/working-directory";
+
+const logger = getLogger("ConfigService");
 
 // --- Schemas ---
 
@@ -40,8 +43,62 @@ export const ProviderConfigSchema = z.object({
 
 export type ProviderConfig = z.infer<typeof ProviderConfigSchema>;
 
-const migrateModelId = (val: unknown) =>
-    typeof val === "string" ? val.replace(/^(us|eu|ap)\./, "") : val;
+export function isLoopbackHostname(hostname: string): boolean {
+    const cleanHost = hostname.replace(/^\[|\]$/g, "").toLowerCase();
+    return cleanHost === "localhost" || cleanHost === "127.0.0.1" || cleanHost === "::1" || cleanHost === "0.0.0.0";
+}
+
+/**
+ * Generic remote configuration. When set, SAT-CLI fetches AWS credentials from
+ * `url` (optionally authenticated with `token`) instead of using local AWS
+ * credentials for Bedrock.
+ */
+export const RemoteConfigSchema = z
+    .object({
+        url: z.string().min(1, "Remote URL is required").describe("Remote endpoint that returns AWS credentials"),
+        token: z.string().optional().describe("Optional token sent with the remote request"),
+    })
+    .superRefine((data, ctx) => {
+        try {
+            const parsed = new URL(data.url);
+            const isLoopback = isLoopbackHostname(parsed.hostname);
+            if (!isLoopback && (!data.token || data.token.trim().length === 0)) {
+                ctx.addIssue({
+                    code: z.ZodIssueCode.custom,
+                    path: ["token"],
+                    message: "Authentication token is required for remote (non-loopback) credential endpoints.",
+                });
+            }
+        } catch {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ["url"],
+                message: "Invalid remote URL.",
+            });
+        }
+    });
+
+export type RemoteConfig = z.infer<typeof RemoteConfigSchema>;
+
+const migrateModelId = (val: unknown) => {
+    if (typeof val !== "string") return val;
+    // Strip regional routing prefixes (e.g. us.anthropic..., eu.anthropic...)
+    const stripped = val.replace(/^(us|eu|ap)\./, "");
+
+    const knownModels = Object.values(LLMModel) as string[];
+    if (knownModels.includes(stripped)) {
+        return stripped;
+    }
+
+    // Generic suffix matching: find canonical model ID if base names match
+    const matched = knownModels.find((model) => {
+        const baseKnown = model.replace(/(-v\d+)?:\d+$/, "").replace(/-v\d+$/, "");
+        const baseInput = stripped.replace(/(-v\d+)?:\d+$/, "").replace(/-v\d+$/, "");
+        return baseKnown === baseInput;
+    });
+
+    return matched ?? stripped;
+};
 const modelField = z.preprocess(migrateModelId, z.nativeEnum(LLMModel).optional());
 
 export const PersonalConfigurationSchema = z.object({
@@ -61,6 +118,7 @@ export const PersonalConfigurationSchema = z.object({
         .string()
         .optional()
         .describe("GitLab instance base URL (for self-hosted, e.g. https://gitlab.example.com)"),
+    remote: RemoteConfigSchema.optional().describe("Remote credential retrieval settings"),
 });
 
 export type PersonalConfiguration = z.infer<typeof PersonalConfigurationSchema>;
@@ -85,15 +143,21 @@ export type SessionConfiguration = z.infer<typeof SessionConfigurationSchema>;
 
 export const PROVIDER_MODELS: Record<AIProvider, LLMModel[]> = {
     [AIProvider.ANTHROPIC]: [
+        LLMModel.ANTHROPIC_CLAUDE_4_6_SONNET,
+        LLMModel.ANTHROPIC_CLAUDE_4_6_OPUS,
         LLMModel.ANTHROPIC_CLAUDE_4_SONNET,
         LLMModel.ANTHROPIC_CLAUDE_4_5_SONNET,
-        LLMModel.ANTHROPIC_CLAUDE_4_6_OPUS,
     ],
     [AIProvider.BEDROCK]: [
-        LLMModel.BEDROCK_CLAUDE_4_SONNET,
+        LLMModel.BEDROCK_CLAUDE_4_6_SONNET,
         LLMModel.BEDROCK_CLAUDE_4_5_SONNET,
         LLMModel.BEDROCK_CLAUDE_4_6_OPUS,
+        LLMModel.BEDROCK_CLAUDE_3_7_SONNET,
+        LLMModel.BEDROCK_CLAUDE_3_5_SONNET,
+        LLMModel.BEDROCK_CLAUDE_3_5_HAIKU,
+        LLMModel.BEDROCK_CLAUDE_4_SONNET,
         LLMModel.BEDROCK_NOVA_PRO,
+        LLMModel.BEDROCK_CUSTOM,
     ],
     [AIProvider.GOOGLE]: [
         LLMModel.GEMINI_2_5_PRO,
@@ -199,8 +263,115 @@ export class ConfigService {
 
         const configPath = this.getPersonalConfigPath();
         if (existsSync(configPath)) {
-            const raw = await readFile(configPath, "utf8");
-            this.personalConfig = PersonalConfigurationSchema.parse(this.normalizePersonalConfig(JSON.parse(raw)));
+            let raw: string;
+            try {
+                raw = await readFile(configPath, "utf8");
+            } catch (err) {
+                logger.error(`Failed to read personal config file at ${configPath}: ${err}`);
+                throw new Error(`Failed to read personal config file at ${configPath}: ${err instanceof Error ? err.message : String(err)}`);
+            }
+
+            let json: unknown;
+            try {
+                json = JSON.parse(raw);
+            } catch (err) {
+                logger.error(`Failed to parse personal config file at ${configPath}: Invalid JSON syntax`, err);
+                throw new Error(`Failed to parse personal config file at ${configPath}: Invalid JSON syntax`);
+            }
+
+            const normalized = this.normalizePersonalConfig(json);
+            const parsed = PersonalConfigurationSchema.safeParse(normalized);
+            if (parsed.success) {
+                this.personalConfig = parsed.data;
+            } else {
+                const sanitizedIssues = parsed.error.issues.map((i) => ({
+                    path: i.path.join("."),
+                    code: i.code,
+                    message: i.message,
+                }));
+                logger.warn(`Personal config schema validation failed for ${configPath}:`, sanitizedIssues);
+                // Attempt graceful recovery: preserve valid providers, tokens, and remote settings
+                if (normalized && typeof normalized === "object" && !Array.isArray(normalized)) {
+                    const fallbackObj = { ...(normalized as Record<string, unknown>) };
+                    delete fallbackObj.defaultModel;
+                    delete fallbackObj.defaultProvider;
+
+                    const fallbackParsed = PersonalConfigurationSchema.safeParse(fallbackObj);
+                    if (fallbackParsed.success) {
+                        logger.info("Recovered personal configuration while stripping invalid default model/provider.");
+                        this.personalConfig = fallbackParsed.data;
+                    } else {
+                        logger.error("Failed full schema recovery. Preserving validated providers, secret tokens, and scalar fields as fallback.");
+                        const rec = normalized as Record<string, unknown>;
+                        const droppedFields: string[] = [];
+                        const baseConfig: Record<string, unknown> = { providers: {} };
+
+                        // 1. Iterate over all top-level schema shape keys and safeParse each field independently
+                        const shape = PersonalConfigurationSchema.shape;
+                        for (const key of Object.keys(shape) as Array<keyof typeof shape>) {
+                            if (key === "providers" || key === "remote" || key === "defaultModel" || key === "defaultProvider") {
+                                continue;
+                            }
+                            if (rec[key] !== undefined && rec[key] !== null) {
+                                const fieldSchema = shape[key];
+                                const fieldParsed = fieldSchema.safeParse(rec[key]);
+                                if (fieldParsed.success) {
+                                    baseConfig[key] = fieldParsed.data;
+                                } else {
+                                    droppedFields.push(key);
+                                }
+                            }
+                        }
+
+                        // 2. Per-provider salvage for providers
+                        if (rec.providers && typeof rec.providers === "object" && !Array.isArray(rec.providers)) {
+                            const parsedProviders: Record<string, ProviderConfig> = {};
+                            for (const [providerKey, providerVal] of Object.entries(rec.providers as Record<string, unknown>)) {
+                                const parsedProvider = ProviderConfigSchema.safeParse(providerVal);
+                                if (parsedProvider.success) {
+                                    parsedProviders[providerKey as AIProvider] = parsedProvider.data;
+                                } else {
+                                    droppedFields.push(`providers.${providerKey}`);
+                                }
+                            }
+                            baseConfig.providers = parsedProviders;
+                        }
+
+                        // 3. Remote credential handling (fail-closed throw on corruption)
+                        if (rec.remote !== undefined && rec.remote !== null) {
+                            if (typeof rec.remote === "object" && !Array.isArray(rec.remote)) {
+                                const remoteParsed = RemoteConfigSchema.safeParse(rec.remote);
+                                if (remoteParsed.success) {
+                                    baseConfig.remote = remoteParsed.data;
+                                } else {
+                                    const reasons = remoteParsed.error.issues.map((i) => i.message).join("; ");
+                                    logger.error(`Corrupted remote credential configuration in ${configPath}: ${reasons}`);
+                                    throw new Error(
+                                        `Corrupted remote credential configuration in ${configPath}: ${reasons}. Remote credential mode cannot be safely verified. Run 'sat-cli init' or fix ${configPath}.`,
+                                    );
+                                }
+                            } else {
+                                logger.error(`Invalid remote configuration block in ${configPath}: expected an object.`);
+                                throw new Error(
+                                    `Invalid remote configuration block in ${configPath}. Run 'sat-cli init' or fix ${configPath}.`,
+                                );
+                            }
+                        }
+
+                        if (droppedFields.length > 0) {
+                            logger.warn(
+                                `Recovered personal configuration at ${configPath}, but dropped invalid or corrupted fields: ${droppedFields.join(", ")}`,
+                            );
+                        } else {
+                            logger.info(`Recovered valid configuration fields from ${configPath}.`);
+                        }
+
+                        this.personalConfig = baseConfig as PersonalConfiguration;
+                    }
+                } else {
+                    this.personalConfig = PersonalConfigurationSchema.parse({});
+                }
+            }
         } else {
             this.personalConfig = PersonalConfigurationSchema.parse({});
         }
@@ -327,8 +498,11 @@ export class ConfigService {
 
     public async savePersonalConfig(config: PersonalConfiguration): Promise<void> {
         const configPath = this.getPersonalConfigPath();
-        await mkdir(dirname(configPath), { recursive: true });
-        await writeFile(configPath, JSON.stringify(config, null, 4), "utf8");
+        const dir = dirname(configPath);
+        await mkdir(dir, { recursive: true });
+        const tmpPath = `${configPath}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
+        await writeFile(tmpPath, JSON.stringify(config, null, 4), { encoding: "utf8", mode: 0o600 });
+        await rename(tmpPath, configPath);
         this.personalConfig = config;
     }
 
@@ -413,6 +587,33 @@ export class ConfigService {
         return config.providers?.[provider];
     }
 
+    // --- Remote credential retrieval ---
+
+    /**
+     * Returns the remote configuration when remote mode is enabled.
+     * Merges environment variables (SAT_REMOTE_URL / SATENG_REMOTE_URL and
+     * SAT_REMOTE_TOKEN / SATENG_REMOTE_TOKEN) with stored config.
+     * Note: Setting SAT_REMOTE_URL or SATENG_REMOTE_URL in environment enables remote mode.
+     * Precedence: Environment variables take precedence over config file settings per field.
+     */
+    public async getRemoteConfig(): Promise<RemoteConfig | undefined> {
+        const envUrl = process.env.SAT_REMOTE_URL ?? process.env.SATENG_REMOTE_URL;
+        const envToken = process.env.SAT_REMOTE_TOKEN ?? process.env.SATENG_REMOTE_TOKEN;
+
+        const config = await this.loadPersonalConfig();
+        const configuredUrl = envUrl || config.remote?.url;
+        const configuredToken = envToken || config.remote?.token;
+
+        if (!configuredUrl) {
+            return undefined;
+        }
+
+        return {
+            url: configuredUrl,
+            token: configuredToken,
+        };
+    }
+
     // --- GitHub Token ---
 
     public async getGitHubToken(): Promise<string> {
@@ -426,10 +627,27 @@ export class ConfigService {
         // 3. gh CLI
         const { execSync } = await import("child_process");
         try {
-            return execSync("gh auth token", { encoding: "utf8" }).trim();
+            const token = execSync("gh auth token", { encoding: "utf8" }).trim();
+            if (token) return token;
         } catch {
-            throw new Error("No GitHub token found. Set GITHUB_TOKEN, run 'sat-cli init', or run 'gh auth login'.");
+            // gh auth token might not be supported on older gh CLI versions
         }
+
+        // 4. Fallback: ~/.config/gh/hosts.yml (for older gh CLI versions)
+        const ghHostsPath = join(homedir(), ".config", "gh", "hosts.yml");
+        if (existsSync(ghHostsPath)) {
+            try {
+                const hostsContent = await readFile(ghHostsPath, "utf8");
+                const match = hostsContent.match(/oauth_token:\s*([^\s\r\n]+)/);
+                if (match && match[1]) {
+                    return match[1];
+                }
+            } catch {
+                // Ignore file read error and fall through
+            }
+        }
+
+        throw new Error("No GitHub token found. Set GITHUB_TOKEN, run 'sat-cli init', or run 'gh auth login'.");
     }
 
     // --- GitLab Token ---

@@ -18,7 +18,7 @@
     "scripts": {
         "start": "node ./built/entrypoints/main.js",
         "start:dev": "ts-node ./src/entrypoints/main.ts",
-        "build": "tsc --outDir built",
+        "build": "tsc -p tsconfig.build.json --outDir built",
         "format": "prettier --write .",
         "check": "tsc --noEmit",
         "test": "jest --runInBand",
