@@ -48,20 +48,48 @@ describe("mentor agent prompt", () => {
         it("requires a general explanation instead of only reporting the gap", () => {
             const text = systemTextOf();
             expect(text).toContain("never a reason to withhold a general answer");
-            expect(text).toContain('Stopping at "that is not documented here" is a non-answer');
+            expect(text).toContain('Stopping at "that is not covered here" is a non-answer');
         });
 
         it("still forbids inventing a link between a general technology and our systems", () => {
             expect(systemTextOf()).toContain("invent a connection between it and our systems");
         });
 
-        it("asks for what the documentation shows about our use of it, including nothing", () => {
-            expect(systemTextOf()).toContain("including that it shows nothing");
+        it("treats the difference between general practice and ours as the useful part", () => {
+            expect(systemTextOf()).toContain("Where the two differ");
         });
 
         it("keeps the two kinds of knowledge labelled apart", () => {
             const text = systemTextOf();
             expect(text).toContain("Never present general practice as ours");
+        });
+    });
+
+    describe("voice", () => {
+        it("tells the agent to state facts rather than narrate where it looked", () => {
+            const text = systemTextOf();
+            expect(text).toContain("not as a librarian reporting on it");
+            expect(text).toContain('never "the docs say the weekly trigger runs Sunday at 01:30 UTC"');
+        });
+
+        it("names the attribution phrases to delete", () => {
+            const text = systemTextOf();
+            for (const phrase of ["the docs say", "as documented in", "the documentation shows"]) {
+                expect(text).toContain(phrase);
+            }
+        });
+
+        it("does not ask for a source on every claim, since the interface lists them", () => {
+            const text = systemTextOf();
+            expect(text).toContain("rather than attaching a citation to every claim");
+            // The rule that produced a "Source:" line under every answer must not come back.
+            expect(text).not.toMatch(/two-sentence answer names its source/);
+        });
+
+        it("keeps provenance for the two cases where it changes what the reader does", () => {
+            expect(systemTextOf()).toContain(
+                "Provenance is worth a sentence only when it changes what the reader should do",
+            );
         });
     });
 
