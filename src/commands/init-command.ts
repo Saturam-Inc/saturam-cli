@@ -13,6 +13,8 @@ import {
     PROVIDER_MODELS,
     RemoteConfig,
 } from "../services/config-service";
+import { RemoteCredentialService } from "../services/remote-credential.service";
+import { normalizeBaseUrl } from "../utils/url-utils";
 import { TypedCommand, TypedInputs } from "./base";
 
 const logger = getLogger("InitCommand");
@@ -82,11 +84,7 @@ const MODEL_DISPLAY_NAMES: Record<LLMModel, string> = {
     [LLMModel.SELF_HOSTED_CUSTOM]: "Self Hosted LLM",
 };
 
-function normalizeBaseUrl(baseUrl: string): string {
-    return baseUrl.replace(/\/+$/, "");
-}
-
-function isRemoteOllamaUrl(baseUrl: string): boolean {
+function isRemoteOllamaUrl(baseUrl: string): string | boolean {
     try {
         const hostname = new URL(baseUrl).hostname.toLowerCase();
         return !["localhost", "127.0.0.1", "::1"].includes(hostname);
@@ -132,31 +130,6 @@ function validateRemoteUrl(val: string): true | string {
     return "Remote URL must use https:// or http:// (loopback only).";
 }
 
-async function probeRemoteCredentials(url: string, token?: string): Promise<{ success: boolean; message: string }> {
-    const credUrl = `${normalizeBaseUrl(url)}/credentials`;
-    const headers: Record<string, string> = { Accept: "application/json" };
-    if (token && token.trim()) {
-        headers.Authorization = `Bearer ${token.trim()}`;
-    }
-    try {
-        const res = await fetch(credUrl, {
-            method: "GET",
-            headers,
-            redirect: "error",
-            signal: AbortSignal.timeout(SETUP_CONNECTIVITY_TIMEOUT_MS),
-        });
-        if (res.ok) {
-            return { success: true, message: `Successfully authenticated with ${credUrl}` };
-        }
-        if (res.status === 401 || res.status === 403) {
-            return { success: false, message: `Authentication failed (HTTP ${res.status}). Verify your token.` };
-        }
-        return { success: false, message: `Endpoint returned HTTP ${res.status}.` };
-    } catch (err) {
-        return { success: false, message: `Could not reach ${credUrl}: ${err instanceof Error ? err.message : String(err)}` };
-    }
-}
-
 @Service()
 export class InitCommand implements TypedCommand<typeof INPUTS> {
     readonly name = "init";
@@ -165,7 +138,10 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
     readonly aliases = ["i", "setup"];
     readonly inputs = INPUTS;
 
-    constructor(private readonly config: ConfigService) {}
+    constructor(
+        private readonly config: ConfigService,
+        private readonly remoteCredentials: RemoteCredentialService,
+    ) {}
 
     public async execute(_inputs: TypedInputs<typeof INPUTS>): Promise<void> {
         logger.info("Welcome to Saturam Engineering CLI setup!\n");
@@ -378,7 +354,7 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
 
         // Probe endpoint
         logger.info("Probing remote credential endpoint...");
-        const probeResult = await probeRemoteCredentials(url, token);
+        const probeResult = await this.remoteCredentials.probeCredentials(url, token);
         if (probeResult.success) {
             logger.info(`✓ ${probeResult.message}`);
         } else {

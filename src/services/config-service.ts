@@ -301,22 +301,43 @@ export class ConfigService {
                         logger.info("Recovered personal configuration while stripping invalid default model/provider.");
                         this.personalConfig = fallbackParsed.data;
                     } else {
-                        logger.error("Failed full schema recovery. Preserving validated providers and secret tokens as fallback.");
-                        const baseConfig: PersonalConfiguration = { providers: {} };
+                        logger.error("Failed full schema recovery. Preserving validated providers, secret tokens, and scalar fields as fallback.");
                         const rec = normalized as Record<string, unknown>;
+                        const droppedFields: string[] = [];
+                        const baseConfig: Record<string, unknown> = { providers: {} };
+
+                        // 1. Iterate over all top-level schema shape keys and safeParse each field independently
+                        const shape = PersonalConfigurationSchema.shape;
+                        for (const key of Object.keys(shape) as Array<keyof typeof shape>) {
+                            if (key === "providers" || key === "remote" || key === "defaultModel" || key === "defaultProvider") {
+                                continue;
+                            }
+                            if (rec[key] !== undefined && rec[key] !== null) {
+                                const fieldSchema = shape[key];
+                                const fieldParsed = fieldSchema.safeParse(rec[key]);
+                                if (fieldParsed.success) {
+                                    baseConfig[key] = fieldParsed.data;
+                                } else {
+                                    droppedFields.push(key);
+                                }
+                            }
+                        }
+
+                        // 2. Per-provider salvage for providers
                         if (rec.providers && typeof rec.providers === "object" && !Array.isArray(rec.providers)) {
                             const parsedProviders: Record<string, ProviderConfig> = {};
                             for (const [providerKey, providerVal] of Object.entries(rec.providers as Record<string, unknown>)) {
                                 const parsedProvider = ProviderConfigSchema.safeParse(providerVal);
                                 if (parsedProvider.success) {
                                     parsedProviders[providerKey as AIProvider] = parsedProvider.data;
+                                } else {
+                                    droppedFields.push(`providers.${providerKey}`);
                                 }
                             }
                             baseConfig.providers = parsedProviders;
                         }
-                        if (typeof rec.githubToken === "string") baseConfig.githubToken = rec.githubToken;
-                        if (typeof rec.bitbucketToken === "string") baseConfig.bitbucketToken = rec.bitbucketToken;
-                        if (typeof rec.gitlabToken === "string") baseConfig.gitlabToken = rec.gitlabToken;
+
+                        // 3. Remote credential handling (fail-closed throw on corruption)
                         if (rec.remote !== undefined && rec.remote !== null) {
                             if (typeof rec.remote === "object" && !Array.isArray(rec.remote)) {
                                 const remoteParsed = RemoteConfigSchema.safeParse(rec.remote);
@@ -336,7 +357,16 @@ export class ConfigService {
                                 );
                             }
                         }
-                        this.personalConfig = baseConfig;
+
+                        if (droppedFields.length > 0) {
+                            logger.warn(
+                                `Recovered personal configuration at ${configPath}, but dropped invalid or corrupted fields: ${droppedFields.join(", ")}`,
+                            );
+                        } else {
+                            logger.info(`Recovered valid configuration fields from ${configPath}.`);
+                        }
+
+                        this.personalConfig = baseConfig as PersonalConfiguration;
                     }
                 } else {
                     this.personalConfig = PersonalConfigurationSchema.parse({});

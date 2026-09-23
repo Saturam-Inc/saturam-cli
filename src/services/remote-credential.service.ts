@@ -1,5 +1,6 @@
 import { getLogger } from "log4js";
 import { Service } from "typedi";
+import { normalizeBaseUrl } from "../utils/url-utils";
 import { ConfigService, isLoopbackHostname } from "./config-service";
 
 const logger = getLogger("RemoteCredentialService");
@@ -13,10 +14,6 @@ export interface AwsCredentials {
     secretAccessKey: string;
     sessionToken?: string;
     expiration?: Date;
-}
-
-function normalizeBaseUrl(url: string): string {
-    return url.replace(/\/+$/, "");
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -42,12 +39,36 @@ export class RemoteCredentialService {
         if (!remote) {
             throw new Error("Remote mode is not configured. Run 'sat-cli init' to set up a remote URL.");
         }
+        return this.fetchFromEndpoint(remote.url, remote.token);
+    }
 
+    /**
+     * Probes connectivity and authentication against a candidate remote endpoint URL and token.
+     */
+    public async probeCredentials(url: string, token?: string): Promise<{ success: boolean; message: string }> {
+        try {
+            await this.fetchFromEndpoint(url, token, 10000, 0);
+            const sanitizedBase = normalizeBaseUrl(url);
+            return { success: true, message: `Successfully authenticated with ${sanitizedBase}${CREDENTIALS_PATH}` };
+        } catch (error) {
+            return { success: false, message: getErrorMessage(error) };
+        }
+    }
+
+    /**
+     * Internal implementation to fetch and parse credentials from a remote URL.
+     */
+    public async fetchFromEndpoint(
+        rawUrl: string,
+        token?: string,
+        timeoutMs: number = REQUEST_TIMEOUT_MS,
+        maxRetries: number = 2,
+    ): Promise<AwsCredentials> {
         let parsedUrl: URL;
         try {
-            parsedUrl = new URL(remote.url);
+            parsedUrl = new URL(rawUrl);
         } catch {
-            throw new Error(`Invalid remote credential URL: "${remote.url}". Must be a valid URL.`);
+            throw new Error(`Invalid remote credential URL: "${rawUrl}". Must be a valid URL.`);
         }
 
         if (parsedUrl.username || parsedUrl.password) {
@@ -70,27 +91,26 @@ export class RemoteCredentialService {
         const sanitizedBase = normalizeBaseUrl(`${parsedUrl.protocol}//${parsedUrl.host}${parsedUrl.pathname}`);
         const url = `${sanitizedBase}${CREDENTIALS_PATH}`;
 
-        if (!isLoopback && (!remote.token || !remote.token.trim())) {
+        if (!isLoopback && (!token || !token.trim())) {
             throw new Error(
                 `Remote credential endpoint "${sanitizedBase}" requires an authentication token. Set SAT_REMOTE_TOKEN or run 'sat-cli init'.`,
             );
         }
 
         const headers: Record<string, string> = { Accept: "application/json" };
-        if (remote.token && remote.token.trim()) {
-            headers.Authorization = `Bearer ${remote.token.trim()}`;
+        if (token && token.trim()) {
+            headers.Authorization = `Bearer ${token.trim()}`;
         }
 
         logger.debug(`Requesting AWS credentials from ${url}`);
 
-        const MAX_RETRIES = 2;
         let lastError: Error | null = null;
 
-        for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        for (let attempt = 0; attempt <= maxRetries; attempt++) {
             if (attempt > 0) {
                 const backoffMs = Math.min(1000, 150 * Math.pow(2, attempt) + Math.random() * 100);
                 await sleep(backoffMs);
-                logger.debug(`Retrying credential request (attempt ${attempt + 1}/${MAX_RETRIES + 1}) to ${url}`);
+                logger.debug(`Retrying credential request (attempt ${attempt + 1}/${maxRetries + 1}) to ${url}`);
             }
 
             let response: Response;
@@ -99,7 +119,7 @@ export class RemoteCredentialService {
                     method: "GET",
                     headers,
                     redirect: "error",
-                    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+                    signal: AbortSignal.timeout(timeoutMs),
                 });
             } catch (error) {
                 lastError = new Error(`Failed to reach remote credential endpoint at ${url}: ${getErrorMessage(error)}`);
@@ -134,7 +154,7 @@ export class RemoteCredentialService {
             throw new Error(`Remote credential endpoint returned HTTP ${response.status} from ${url}.`);
         }
 
-        throw lastError ?? new Error(`Failed to obtain credentials from ${url} after ${MAX_RETRIES + 1} attempts.`);
+        throw lastError ?? new Error(`Failed to obtain credentials from ${url} after ${maxRetries + 1} attempts.`);
     }
 }
 

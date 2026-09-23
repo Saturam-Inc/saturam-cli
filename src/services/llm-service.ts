@@ -17,14 +17,12 @@ import {
 import { AIProvider, ConfigService, ProviderConfig } from "./config-service";
 import { RemoteCredentialService, type AwsCredentials } from "./remote-credential.service";
 
+import { normalizeBaseUrl } from "../utils/url-utils";
+
 const logger = getLogger("LlmService");
 
 const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
 const DEFAULT_SELF_HOSTED_TIMEOUT_MS = 120000;
-
-function normalizeBaseUrl(baseUrl: string): string {
-    return baseUrl.replace(/\/+$/, "");
-}
 
 type OllamaChatMessage = {
     role: "system" | "user" | "assistant";
