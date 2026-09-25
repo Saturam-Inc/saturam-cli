@@ -28,11 +28,15 @@ export enum LLMModel {
     BEDROCK_NOVA_PRO = "amazon.nova-pro-v1:0",
     BEDROCK_CUSTOM = "bedrock-custom",
 
-    // Google Gemini
+    // Google Gemini — verified current IDs against ai.google.dev/gemini-api/docs/models
+    // (2026-09). There is no stable non-preview "Pro" tier past 2.5 yet — gemini-3.1-pro-preview
+    // is the current best "Pro" option, still in preview.
     GEMINI_2_5_PRO = "gemini-2.5-pro",
     GEMINI_2_5_FLASH = "gemini-2.5-flash",
-    GEMINI_3_PRO = "gemini-3-pro",
-    GEMINI_3_FLASH = "gemini-3-flash",
+    GEMINI_3_1_PRO_PREVIEW = "gemini-3.1-pro-preview",
+    GEMINI_3_5_FLASH = "gemini-3.5-flash",
+    GEMINI_3_6_FLASH = "gemini-3.6-flash",
+    GEMINI_3_7_FLASH = "gemini-3.7-flash",
 
     // OpenAI
     OPENAI_GPT_4O = "gpt-4o",
@@ -44,6 +48,10 @@ export enum LLMModel {
     OPENAI_GEMMA_4_26B_A4B_IT = "gemma-4-26b-a4b-it",
     OPENAI_GEMMA_4_31B_IT = "gemma-4-31b-it",
     OPENAI_LLAMA_3_3_70B_INSTRUCT = "llama-3.3-70b-instruct",
+
+    // Azure OpenAI — the real model is whichever deployment the user configured, so this is a
+    // single sentinel (like SELF_HOSTED_CUSTOM) resolved to the deployment name at call time.
+    AZURE_OPENAI_CUSTOM = "azure-openai-custom",
 
     // Grok
     GROK_2 = "grok-2-1212",
@@ -101,8 +109,10 @@ export const MODEL_CONTEXT_WINDOWS: Record<LLMModel, number> = {
     // Gemini
     [LLMModel.GEMINI_2_5_PRO]: 1000000,
     [LLMModel.GEMINI_2_5_FLASH]: 1000000,
-    [LLMModel.GEMINI_3_PRO]: 1000000,
-    [LLMModel.GEMINI_3_FLASH]: 1000000,
+    [LLMModel.GEMINI_3_1_PRO_PREVIEW]: 1000000,
+    [LLMModel.GEMINI_3_5_FLASH]: 1000000,
+    [LLMModel.GEMINI_3_6_FLASH]: 1000000,
+    [LLMModel.GEMINI_3_7_FLASH]: 1000000,
     // OpenAI
     [LLMModel.OPENAI_GPT_4O]: 128000,
     [LLMModel.OPENAI_GPT_5]: 128000,
@@ -113,6 +123,12 @@ export const MODEL_CONTEXT_WINDOWS: Record<LLMModel, number> = {
     [LLMModel.OPENAI_GEMMA_4_26B_A4B_IT]: 128000,
     [LLMModel.OPENAI_GEMMA_4_31B_IT]: 128000,
     [LLMModel.OPENAI_LLAMA_3_3_70B_INSTRUCT]: 128000,
+    // Azure OpenAI (depends on the deployed model, configurable via AZURE_OPENAI_CONTEXT_WINDOW)
+    [LLMModel.AZURE_OPENAI_CUSTOM]: (() => {
+        const val = process.env.AZURE_OPENAI_CONTEXT_WINDOW;
+        const num = val ? parseInt(val, 10) : NaN;
+        return isNaN(num) || num <= 0 ? 128000 : num;
+    })(),
     // Grok
     [LLMModel.GROK_2]: 131072,
     // DeepSeek
@@ -168,8 +184,10 @@ const BEDROCK_MODELS = new Set([
 const GEMINI_MODELS = new Set([
     LLMModel.GEMINI_2_5_PRO,
     LLMModel.GEMINI_2_5_FLASH,
-    LLMModel.GEMINI_3_PRO,
-    LLMModel.GEMINI_3_FLASH,
+    LLMModel.GEMINI_3_1_PRO_PREVIEW,
+    LLMModel.GEMINI_3_5_FLASH,
+    LLMModel.GEMINI_3_6_FLASH,
+    LLMModel.GEMINI_3_7_FLASH,
 ]);
 const OPENAI_MODELS = new Set([
     LLMModel.OPENAI_GPT_4O,
@@ -182,6 +200,7 @@ const OPENAI_MODELS = new Set([
     LLMModel.OPENAI_GEMMA_4_31B_IT,
     LLMModel.OPENAI_LLAMA_3_3_70B_INSTRUCT,
 ]);
+const AZURE_OPENAI_MODELS = new Set([LLMModel.AZURE_OPENAI_CUSTOM]);
 const GROK_MODELS = new Set([LLMModel.GROK_2]);
 const DEEPSEEK_MODELS = new Set([LLMModel.DEEPSEEK_CHAT, LLMModel.DEEPSEEK_REASONER]);
 const SELF_HOSTED_MODELS = new Set([LLMModel.SELF_HOSTED_CUSTOM]);
@@ -213,6 +232,10 @@ export function isGeminiModel(model: LLMModel): boolean {
 
 export function isOpenAIModel(model: LLMModel): boolean {
     return OPENAI_MODELS.has(model);
+}
+
+export function isAzureOpenAIModel(model: LLMModel): boolean {
+    return AZURE_OPENAI_MODELS.has(model);
 }
 
 export function isGrokModel(model: LLMModel): boolean {

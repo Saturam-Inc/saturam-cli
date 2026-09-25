@@ -4,6 +4,8 @@ import { Service } from "typedi";
 import { LLMModel } from "../constants/llm-models";
 import {
     AIProvider,
+    CloudProvider,
+    CloudProviderConfig,
     ConfigService,
     isLoopbackHostname,
     KEYLESS_PROVIDERS,
@@ -21,16 +23,24 @@ const logger = getLogger("InitCommand");
 
 const INPUTS = [] as const;
 const SETUP_CONNECTIVITY_TIMEOUT_MS = 10000;
+const DEFAULT_AZURE_OPENAI_API_VERSION = "2024-10-21";
 
 const PROVIDER_DISPLAY_NAMES: Record<AIProvider, string> = {
     [AIProvider.ANTHROPIC]: "Anthropic (Claude)",
     [AIProvider.BEDROCK]: "AWS Bedrock (Claude, Nova)",
     [AIProvider.OPENAI]: "OpenAI (GPT)",
+    [AIProvider.AZURE_OPENAI]: "Azure OpenAI (GPT)",
     [AIProvider.GOOGLE]: "Google (Gemini)",
     [AIProvider.XAI]: "xAI (Grok)",
     [AIProvider.DEEPSEEK]: "DeepSeek",
     [AIProvider.OLLAMA]: "Ollama (local models)",
     [AIProvider.SELF_HOSTED]: "Self Hosted LLM",
+};
+
+const CLOUD_PROVIDER_DISPLAY_NAMES: Record<CloudProvider, string> = {
+    [CloudProvider.AWS]: "AWS",
+    [CloudProvider.AZURE]: "Azure (coming soon)",
+    [CloudProvider.GCP]: "GCP (coming soon)",
 };
 
 const MODEL_DISPLAY_NAMES: Record<LLMModel, string> = {
@@ -52,8 +62,10 @@ const MODEL_DISPLAY_NAMES: Record<LLMModel, string> = {
     // Gemini
     [LLMModel.GEMINI_2_5_PRO]: "Gemini 2.5 Pro",
     [LLMModel.GEMINI_2_5_FLASH]: "Gemini 2.5 Flash",
-    [LLMModel.GEMINI_3_PRO]: "Gemini 3 Pro",
-    [LLMModel.GEMINI_3_FLASH]: "Gemini 3 Flash",
+    [LLMModel.GEMINI_3_1_PRO_PREVIEW]: "Gemini 3.1 Pro (preview)",
+    [LLMModel.GEMINI_3_5_FLASH]: "Gemini 3.5 Flash",
+    [LLMModel.GEMINI_3_6_FLASH]: "Gemini 3.6 Flash",
+    [LLMModel.GEMINI_3_7_FLASH]: "Gemini 3.7 Flash (latest)",
     // OpenAI
     [LLMModel.OPENAI_GPT_4O]: "GPT-4o",
     [LLMModel.OPENAI_GPT_5]: "GPT-5",
@@ -80,9 +92,18 @@ const MODEL_DISPLAY_NAMES: Record<LLMModel, string> = {
     [LLMModel.OLLAMA_QWEN2_5_CODER]: "Qwen 2.5 Coder",
     [LLMModel.OLLAMA_GEMMA2]: "Gemma 2",
     [LLMModel.OLLAMA_PHI3]: "Phi-3 (128K context)",
+    [LLMModel.AZURE_OPENAI_CUSTOM]: "Azure OpenAI deployment",
     [LLMModel.OLLAMA_CUSTOM]: "Custom model (specify name)",
     [LLMModel.SELF_HOSTED_CUSTOM]: "Self Hosted LLM",
 };
+
+/**
+ * Azure's endpoint must be the bare resource URL — getEndpoint() in @langchain/openai appends
+ * "/openai/deployments/<name>" itself, so a pasted full deployment URL would double up.
+ */
+function normalizeAzureEndpoint(endpoint: string): string {
+    return normalizeBaseUrl(normalizeBaseUrl(endpoint).replace(/\/openai(\/.*)?$/i, ""));
+}
 
 function isRemoteOllamaUrl(baseUrl: string): boolean {
     try {
@@ -146,6 +167,41 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
     public async execute(_inputs: TypedInputs<typeof INPUTS>): Promise<void> {
         logger.info("Welcome to Saturam Engineering CLI setup!\n");
 
+        const setupType = await select({
+            message: "What would you like to configure?",
+            choices: [
+                { name: "AI / LLM providers", value: "ai_providers" },
+                { name: "SCM (GitHub / GitLab / Bitbucket)", value: "scm" },
+                { name: "Atlassian (Jira & Confluence)", value: "atlassian" },
+                { name: "Google (Drive / Docs / Sheets)", value: "google" },
+                { name: "Cloud (AWS / Azure / GCP)", value: "cloud" },
+            ],
+        });
+
+        if (setupType === "cloud") {
+            await this.configureCloudCredentials();
+            return;
+        }
+
+        if (setupType === "atlassian") {
+            await this.configureAtlassianCredentials();
+            return;
+        }
+
+        if (setupType === "google") {
+            await this.configureGoogleCredentials();
+            return;
+        }
+
+        if (setupType === "scm") {
+            const existing = await this.config.loadPersonalConfig();
+            const scmConfig = await this.configureSCMPlatforms(existing);
+            await this.config.savePersonalConfig({ ...existing, ...scmConfig });
+            logger.info("\nSCM configuration saved.");
+            return;
+        }
+
+        // ai_providers — fall through to full AI setup
         let existing: PersonalConfiguration = { providers: {} };
         try {
             existing = await this.config.loadPersonalConfig();
@@ -166,12 +222,19 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
                     { name: "Add/update an AI provider", value: "add" },
                     { name: "Change default model", value: "model" },
                     { name: "Configure SCM platforms (GitHub/Bitbucket/GitLab)", value: "scm" },
+                    { name: "Configure Atlassian (Jira & Confluence)", value: "atlassian" },
+                    { name: "Configure Google (Drive / Docs / Sheets)", value: "google" },
+                    { name: "Configure Cloud (AWS / Azure / GCP)", value: "cloud" },
                     { name: "Configure remote credentials", value: "remote" },
                     { name: "Exit", value: "exit" },
                 ],
             });
 
             if (action === "exit") return;
+            if (action === "cloud") {
+                await this.configureCloudCredentials();
+                return;
+            }
             if (action === "remote") {
                 const enableRemote = await confirm({
                     message: existing.remote
@@ -217,6 +280,14 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
                 logger.info("\nSCM configuration saved.");
                 return;
             }
+            if (action === "atlassian") {
+                await this.configureAtlassianCredentials();
+                return;
+            }
+            if (action === "google") {
+                await this.configureGoogleCredentials();
+                return;
+            }
             // reconfigure falls through
         }
 
@@ -228,6 +299,293 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         logger.info(`Config file: ${this.config.getPersonalConfigPath()}`);
         this.printCurrentConfig(config);
         logger.info("\nRun 'sat-cli review' to try it out!");
+    }
+
+    private async configureAtlassianCredentials(): Promise<void> {
+        logger.info("\n--- Atlassian (Jira & Confluence) ---");
+        const existingPersonal = await this.config.loadPersonalConfig();
+
+        const email = await input({
+            message: "Atlassian account email:",
+            default: existingPersonal.atlassianEmail ?? "",
+        });
+
+        const token = await password({
+            message: "Atlassian API token:",
+            mask: "*",
+        });
+
+        await this.config.savePersonalConfig({
+            ...existingPersonal,
+            atlassianEmail: email.trim() || existingPersonal.atlassianEmail,
+            atlassianToken: token.trim() || existingPersonal.atlassianToken,
+        });
+
+        logger.info(`\nAtlassian credentials saved to: ${this.config.getPersonalConfigPath()}`);
+    }
+
+    private async configureGoogleCredentials(): Promise<void> {
+        logger.info("\n--- Google (Drive / Docs / Sheets) ---");
+        logger.info("\nTo access Google Drive files (Docs, Sheets & DOCX), you need a Google Access Token.");
+        logger.info("You can generate one using the Google OAuth 2.0 Playground:");
+        logger.info("1. Go to: https://developers.google.com/oauthplayground/");
+        logger.info("2. Select/paste scope: https://www.googleapis.com/auth/drive.readonly");
+        logger.info("3. Click 'Authorize APIs' and log in with your Google account.");
+        logger.info("4. Click 'Exchange authorization code for tokens'.");
+        logger.info("5. Copy the generated Access Token (starts with 'ya29...').\n");
+
+        const existingPersonal = await this.config.loadPersonalConfig();
+
+        const googleToken = await password({
+            message: "Google Access Token:",
+            mask: "*",
+        });
+
+        await this.config.savePersonalConfig({
+            ...existingPersonal,
+            googleAccessToken: googleToken.trim() || existingPersonal.googleAccessToken,
+        });
+
+        logger.info(`\nGoogle credentials saved to: ${this.config.getPersonalConfigPath()}`);
+    }
+
+    private async configureCloudCredentials(): Promise<void> {
+        logger.info("\n--- Cloud (Storage & Retrieval) ---");
+        const existing = await this.config.loadPersonalConfig();
+
+        const provider = await select({
+            message: "Which cloud provider do you want to configure?",
+            choices: Object.values(CloudProvider).map((p) => ({
+                name: CLOUD_PROVIDER_DISPLAY_NAMES[p],
+                value: p,
+            })),
+        });
+
+        if (provider !== CloudProvider.AWS) {
+            logger.info(`\n${CLOUD_PROVIDER_DISPLAY_NAMES[provider]} is not supported yet — coming soon.`);
+            return;
+        }
+
+        const awsConfig = await this.configureAWSCloud(existing.cloud?.[CloudProvider.AWS]);
+        await this.config.savePersonalConfig({
+            ...existing,
+            cloud: { ...existing.cloud, [CloudProvider.AWS]: awsConfig },
+            defaultCloudProvider: CloudProvider.AWS,
+        });
+
+        logger.info(`\nAWS cloud configuration saved to: ${this.config.getPersonalConfigPath()}`);
+    }
+
+    private async configureAWSCloud(existing?: CloudProviderConfig): Promise<CloudProviderConfig> {
+        logger.info("\nAWS credentials — you need an IAM identity with programmatic access.");
+        logger.info("1. Go to: https://console.aws.amazon.com/iam/home#/users");
+        logger.info("2. Create (or pick) an IAM user, e.g. 'sat-cli-service'.");
+        logger.info(
+            "3. Open it → 'Security credentials' tab → 'Create access key' → choose 'Command Line Interface (CLI)'.",
+        );
+        logger.info("4. Copy the Access Key ID and Secret Access Key (the secret is shown only once).");
+        logger.info("   Alternative: if you already run 'aws configure', just point to that profile name instead.\n");
+
+        const authMethod = await select({
+            message: "How should sat-cli authenticate with AWS?",
+            choices: [
+                { name: "AWS CLI profile", value: "profile" as const },
+                { name: "Access key / secret key", value: "keys" as const },
+            ],
+            default: existing?.awsAuthMethod ?? "profile",
+        });
+
+        let awsProfile: string | undefined;
+        let awsAccessKeyId: string | undefined;
+        let awsSecretAccessKey: string | undefined;
+        let awsSessionToken: string | undefined;
+
+        if (authMethod === "profile") {
+            awsProfile = await input({
+                message: "AWS CLI profile name (leave empty for default credential chain):",
+                default: existing?.awsProfile ?? process.env.AWS_PROFILE ?? "",
+            });
+
+            if (awsProfile) {
+                try {
+                    const { execFileSync } = require("child_process");
+                    // execFileSync (no shell) instead of building a shell command string —
+                    // awsProfile is user-typed input and must never be shell-interpolated.
+                    execFileSync("aws", ["sts", "get-caller-identity", "--profile", awsProfile], { stdio: "pipe" });
+                    logger.info(`AWS profile '${awsProfile}' verified successfully.`);
+                } catch {
+                    logger.warn(`Warning: Could not verify AWS profile '${awsProfile}'. Make sure it's configured.`);
+                }
+            }
+        } else {
+            awsAccessKeyId = await input({
+                message: "AWS Access Key ID:",
+                default: existing?.awsAccessKeyId ?? "",
+            });
+            awsSecretAccessKey = await password({
+                message: `AWS Secret Access Key${existing?.awsSecretAccessKey ? " (press enter to keep existing)" : ""}:`,
+                mask: "*",
+            });
+            awsSecretAccessKey = awsSecretAccessKey || existing?.awsSecretAccessKey;
+            const sessionToken = await password({
+                message: "AWS Session Token (optional, for temporary credentials — press enter to skip):",
+                mask: "*",
+            });
+            awsSessionToken = sessionToken || existing?.awsSessionToken;
+        }
+
+        const awsRegion = await input({
+            message: "AWS region:",
+            default: existing?.awsRegion ?? process.env.AWS_REGION ?? "us-east-1",
+            validate: (val) => (val.trim() ? true : "AWS region is required"),
+        });
+
+        let s3: CloudProviderConfig["s3"] = existing?.s3;
+        const configureS3 = await confirm({
+            message: "Configure S3 bucket access?",
+            default: !!existing?.s3,
+        });
+        if (configureS3) {
+            logger.info("\nS3 access:");
+            logger.info("1. Go to: https://console.aws.amazon.com/s3/");
+            logger.info("2. Create (or pick) a bucket, and note its name and region.");
+            logger.info("3. Attach an IAM policy to your user/role scoped to that bucket.");
+            logger.info("   Paste this whole document into the IAM console's JSON tab — a bare");
+            logger.info('   statement without the "Version"/"Statement" wrapper is a syntax error,');
+            logger.info("   and s3:ListBucket must target the bucket ARN while the object actions");
+            logger.info("   target the /* ARN:");
+            logger.info("   {");
+            logger.info('     "Version": "2012-10-17",');
+            logger.info('     "Statement": [');
+            logger.info('       { "Effect": "Allow", "Action": "s3:ListBucket",');
+            logger.info('         "Resource": "arn:aws:s3:::YOUR_BUCKET" },');
+            logger.info('       { "Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject"],');
+            logger.info('         "Resource": "arn:aws:s3:::YOUR_BUCKET/*" }');
+            logger.info("     ]");
+            logger.info("   }\n");
+
+            const bucket = await input({
+                message: "S3 bucket name:",
+                default: existing?.s3?.bucket ?? "",
+                validate: (val) => (val.trim() ? true : "Bucket name is required"),
+            });
+            const prefix = await input({
+                message: "Key prefix within the bucket (optional):",
+                default: existing?.s3?.prefix ?? "",
+            });
+            const defaultStatePrefix = ConfigService.resolveStatePrefix(prefix);
+            const statePrefix = await input({
+                message: defaultStatePrefix
+                    ? `State prefix holding registry.json and run status (leave empty for "${defaultStatePrefix}"):`
+                    : "State prefix holding registry.json and run status (leave empty for the bucket root):",
+                default: existing?.s3?.statePrefix ?? "",
+            });
+            const s3Region = await input({
+                message: "Bucket region (leave empty to use the AWS region above):",
+                default: existing?.s3?.region ?? "",
+            });
+
+            s3 = {
+                bucket,
+                prefix: prefix.trim() || undefined,
+                statePrefix: statePrefix.trim() || undefined,
+                region: s3Region.trim() || undefined,
+            };
+        }
+
+        let bedrockKnowledgeBase: CloudProviderConfig["bedrockKnowledgeBase"] = existing?.bedrockKnowledgeBase;
+        const configureKB = await confirm({
+            message: "Configure Bedrock Knowledge Base retrieval?",
+            default: !!existing?.bedrockKnowledgeBase,
+        });
+        if (configureKB) {
+            logger.info("\nBedrock Knowledge Base access (used for retrieval against your indexed documents):");
+            logger.info("1. Go to: https://console.aws.amazon.com/bedrock/home#/knowledge-bases");
+            logger.info("2. Create (or pick) a knowledge base, and copy its 'Knowledge base ID' (e.g. ABCD1234EF).");
+            logger.info("3. Note the 'Data source ID' too if you plan to trigger ingestion syncs.");
+            logger.info("4. Grant your IAM user/role 'bedrock:Retrieve' on that knowledge base's ARN.");
+            logger.info("5. Confirm the knowledge base's underlying model access is enabled in this region.\n");
+
+            const knowledgeBaseId = await input({
+                message: "Bedrock Knowledge Base ID:",
+                default: existing?.bedrockKnowledgeBase?.knowledgeBaseId ?? "",
+                validate: (val) => (val.trim() ? true : "Knowledge Base ID is required"),
+            });
+            const dataSourceId = await input({
+                message: "Data source ID (optional):",
+                default: existing?.bedrockKnowledgeBase?.dataSourceId ?? "",
+            });
+            const kbRegion = await input({
+                message: "Knowledge base region (leave empty to use the AWS region above):",
+                default: existing?.bedrockKnowledgeBase?.region ?? "",
+            });
+
+            bedrockKnowledgeBase = {
+                knowledgeBaseId,
+                dataSourceId: dataSourceId.trim() || undefined,
+                region: kbRegion.trim() || undefined,
+            };
+        }
+
+        let conversationTable: CloudProviderConfig["conversationTable"] = existing?.conversationTable;
+        const configureTable = await confirm({
+            message: "Configure DynamoDB conversation history for 'onboard --chat'?",
+            default: !!existing?.conversationTable,
+        });
+        if (configureTable) {
+            logger.info("\nDynamoDB conversation history (lets a later run continue the same conversation):");
+            logger.info("1. Go to: https://console.aws.amazon.com/dynamodbv2/home#tables");
+            logger.info("2. Create a table with partition key 'pk' (String) and sort key 'sk' (String).");
+            logger.info("3. Leave capacity on 'On-demand'.");
+            logger.info("4. After it is created, open the table and turn on Time to Live with attribute 'expiresAt'.");
+            logger.info("5. Grant your IAM user/role these actions on that table's ARN:");
+            logger.info('     "Action": ["dynamodb:Query", "dynamodb:PutItem", "dynamodb:UpdateItem"],');
+            logger.info('     "Resource": ["arn:aws:dynamodb:REGION:ACCOUNT_ID:table/YOUR_TABLE"]');
+            logger.info("Leave the table name empty to keep history in memory for the session only.\n");
+
+            const tableName = await input({
+                message: "DynamoDB table name:",
+                default: existing?.conversationTable?.tableName ?? "",
+            });
+
+            if (tableName.trim()) {
+                const tableRegion = await input({
+                    message: "Table region (leave empty to use the AWS region above):",
+                    default: existing?.conversationTable?.region ?? "",
+                });
+                const ttlDays = await input({
+                    message: "Days to keep conversation history:",
+                    default: String(existing?.conversationTable?.ttlDays ?? 90),
+                    validate: (val) => {
+                        const parsed = Number(val);
+                        return Number.isInteger(parsed) && parsed > 0 ? true : "Enter a whole number of days";
+                    },
+                });
+
+                conversationTable = {
+                    tableName: tableName.trim(),
+                    region: tableRegion.trim() || undefined,
+                    ttlDays: Number(ttlDays),
+                };
+            } else {
+                // An empty name is how the user opts out; keep it undefined so the chat flow falls
+                // back to in-memory history rather than failing on an unusable table name.
+                conversationTable = undefined;
+            }
+        }
+
+        return {
+            enabled: true,
+            awsAuthMethod: authMethod,
+            awsProfile: awsProfile || undefined,
+            awsRegion,
+            awsAccessKeyId: awsAccessKeyId || undefined,
+            awsSecretAccessKey: awsSecretAccessKey || undefined,
+            awsSessionToken: awsSessionToken || undefined,
+            s3,
+            bedrockKnowledgeBase,
+            conversationTable,
+        };
     }
 
     private async fullSetup(existing: PersonalConfiguration): Promise<PersonalConfiguration> {
@@ -386,6 +744,10 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
             return { providerConfig: await this.configureOpenAIProvider(existing) };
         }
 
+        if (provider === AIProvider.AZURE_OPENAI) {
+            return { providerConfig: await this.configureAzureOpenAIProvider(existing) };
+        }
+
         if (provider === AIProvider.OLLAMA) {
             return { providerConfig: await this.configureOllamaProvider(existing) };
         }
@@ -434,13 +796,14 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         const awsRegion = await input({
             message: "AWS region:",
             default: existing?.awsRegion ?? process.env.AWS_REGION ?? "us-east-1",
+            validate: (val) => (val.trim() ? true : "AWS region is required"),
         });
 
         // Verify AWS credentials if profile given
         if (awsProfile) {
             try {
-                const { execSync } = require("child_process");
-                execSync(`aws sts get-caller-identity --profile ${awsProfile}`, { stdio: "pipe" });
+                const { execFileSync } = require("child_process");
+                execFileSync("aws", ["sts", "get-caller-identity", "--profile", awsProfile], { stdio: "pipe" });
                 logger.info(`AWS profile '${awsProfile}' verified successfully.`);
             } catch {
                 logger.warn(`Warning: Could not verify AWS profile '${awsProfile}'. Make sure it's configured.`);
@@ -459,7 +822,7 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
 
     private async configureOpenAIProvider(existing?: ProviderConfig): Promise<ProviderConfig> {
         const apiKey = await this.promptForApiKey(AIProvider.OPENAI, existing?.apiKey);
-        
+
         // Always ask for base URL, showing current/default value
         const currentUrl = existing?.baseUrl ?? process.env.OPENAI_BASE_URL;
         const baseUrl = await input({
@@ -472,6 +835,79 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
             apiKey,
             baseUrl: baseUrl.trim() || undefined,
         };
+    }
+
+    private async configureAzureOpenAIProvider(existing?: ProviderConfig): Promise<ProviderConfig> {
+        const apiKey = await this.promptForApiKey(AIProvider.AZURE_OPENAI, existing?.apiKey);
+
+        const azureEndpoint = normalizeAzureEndpoint(
+            await input({
+                message: "Azure OpenAI endpoint (e.g. https://my-resource.openai.azure.com):",
+                default: existing?.azureEndpoint ?? process.env.AZURE_OPENAI_ENDPOINT ?? "",
+                validate: (val) =>
+                    val.startsWith("http://") || val.startsWith("https://") ? true : "Must be a valid HTTP/HTTPS URL",
+            }),
+        );
+
+        const azureDeploymentName = await input({
+            message: "Deployment name (your deployment's name in Azure, not the model name):",
+            default:
+                existing?.azureDeploymentName ??
+                process.env.AZURE_OPENAI_DEPLOYMENT_NAME ??
+                process.env.AZURE_OPENAI_API_DEPLOYMENT_NAME ??
+                "",
+            validate: (val) => (val.trim() ? true : "Deployment name is required"),
+        });
+
+        const azureApiVersion = await input({
+            message: "API version:",
+            default:
+                existing?.azureApiVersion ?? process.env.AZURE_OPENAI_API_VERSION ?? DEFAULT_AZURE_OPENAI_API_VERSION,
+            validate: (val) => (val.trim() ? true : "API version is required"),
+        });
+
+        await this.verifyAzureOpenAI(azureEndpoint, azureDeploymentName, azureApiVersion, apiKey);
+
+        return {
+            enabled: true,
+            apiKey,
+            azureEndpoint,
+            azureDeploymentName: azureDeploymentName.trim(),
+            azureApiVersion: azureApiVersion.trim(),
+        };
+    }
+
+    /** Best-effort reachability check — mirrors the Ollama/self-hosted flows: warn, never block. */
+    private async verifyAzureOpenAI(
+        endpoint: string,
+        deploymentName: string,
+        apiVersion: string,
+        apiKey: string,
+    ): Promise<void> {
+        const url = `${endpoint}/openai/deployments/${deploymentName}/chat/completions?api-version=${apiVersion}`;
+        try {
+            const response = await fetch(url, {
+                method: "POST",
+                headers: { "api-key": apiKey, "Content-Type": "application/json" },
+                body: JSON.stringify({ messages: [{ role: "user", content: "ping" }], max_tokens: 1 }),
+                signal: AbortSignal.timeout(SETUP_CONNECTIVITY_TIMEOUT_MS),
+            });
+
+            if (response.ok) {
+                logger.info(`Azure OpenAI deployment '${deploymentName}' verified successfully.`);
+            } else if (response.status === 401 || response.status === 403) {
+                logger.warn("Warning: Azure rejected the API key (HTTP 401/403). Double-check the key and endpoint.");
+            } else if (response.status === 404) {
+                logger.warn(
+                    `Warning: Azure returned 404 for deployment '${deploymentName}'. ` +
+                        "Check the deployment name and API version.",
+                );
+            } else {
+                logger.warn(`Warning: Azure OpenAI returned HTTP ${response.status}.`);
+            }
+        } catch {
+            logger.warn(`Warning: Could not reach Azure OpenAI at ${endpoint}.`);
+        }
     }
 
     private async configureOllamaProvider(existing?: ProviderConfig): Promise<ProviderConfig> {
@@ -536,8 +972,7 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
 
         const model = await input({
             message: "Model name:",
-            default:
-                existing?.model ?? process.env.SELF_HOSTED_MODEL ?? "qwen2.5-coder:latest",
+            default: existing?.model ?? process.env.SELF_HOSTED_MODEL ?? "qwen2.5-coder:latest",
             validate: (val) => (val.trim() ? true : "Model name is required"),
         });
 
@@ -668,6 +1103,10 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         if (provider === AIProvider.SELF_HOSTED) {
             return LLMModel.SELF_HOSTED_CUSTOM;
         }
+        // The Azure deployment chosen during setup *is* the model — nothing to pick.
+        if (provider === AIProvider.AZURE_OPENAI) {
+            return LLMModel.AZURE_OPENAI_CUSTOM;
+        }
         // For Ollama, build a smarter list
         if (provider === AIProvider.OLLAMA) {
             return this.promptForOllamaModel(providerConfig);
@@ -763,9 +1202,8 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
 
         // If we have an existing key, ask if user wants to keep it
         if (existingKey) {
-            const masked = existingKey.length > 16
-                ? `${existingKey.slice(0, 8)}...${existingKey.slice(-4)}`
-                : "(configured)";
+            const masked =
+                existingKey.length > 16 ? `${existingKey.slice(0, 8)}...${existingKey.slice(-4)}` : "(configured)";
             const useExisting = await confirm({
                 message: `Use existing API key ${masked}?`,
                 default: true,
@@ -788,7 +1226,12 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
     ): Promise<
         Pick<
             PersonalConfiguration,
-            "githubToken" | "bitbucketToken" | "bitbucketEmail" | "bitbucketUsername" | "gitlabToken" | "gitlabInstanceUrl"
+            | "githubToken"
+            | "bitbucketToken"
+            | "bitbucketEmail"
+            | "bitbucketUsername"
+            | "gitlabToken"
+            | "gitlabInstanceUrl"
         >
     > {
         logger.info("\n--- Source Control Platforms ---");
@@ -797,15 +1240,17 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         const platforms = await checkbox({
             message: "Which source control platforms do you use?",
             choices: [
-                { name: "GitHub", value: "github" as const, checked: isFirstRun ? this.checkGhCli() : !!existing.githubToken },
+                {
+                    name: "GitHub",
+                    value: "github" as const,
+                    checked: isFirstRun ? this.checkGhCli() : !!existing.githubToken,
+                },
                 { name: "Bitbucket", value: "bitbucket" as const, checked: !!existing.bitbucketToken },
                 { name: "GitLab", value: "gitlab" as const, checked: !!existing.gitlabToken },
             ],
         });
 
-        const githubToken = platforms.includes("github")
-            ? await this.resolveGitHubToken(existing)
-            : undefined;
+        const githubToken = platforms.includes("github") ? await this.resolveGitHubToken(existing) : undefined;
 
         const { bitbucketToken, bitbucketEmail, bitbucketUsername } = platforms.includes("bitbucket")
             ? await this.resolveBitbucketAuth(existing)
@@ -851,9 +1296,11 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         return token || existing.githubToken;
     }
 
-    private async resolveBitbucketAuth(
-        existing: PersonalConfiguration,
-    ): Promise<{ bitbucketToken: string | undefined; bitbucketEmail: string | undefined; bitbucketUsername: string | undefined }> {
+    private async resolveBitbucketAuth(existing: PersonalConfiguration): Promise<{
+        bitbucketToken: string | undefined;
+        bitbucketEmail: string | undefined;
+        bitbucketUsername: string | undefined;
+    }> {
         logger.info("\nBitbucket API tokens replaced App Passwords as of September 2025.");
         logger.info("Create one at: Atlassian account → Security → Create and manage API tokens");
         logger.info("  → Select 'Bitbucket' as the app");
@@ -940,7 +1387,7 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
 
                 if (provider === AIProvider.BEDROCK) {
                     const profile = val.awsProfile ?? "default chain";
-                    const region = val.awsRegion ?? "us-east-1";
+                    const region = val.awsRegion ?? "not set";
                     logger.info(
                         `    ${PROVIDER_DISPLAY_NAMES[provider]}: profile=${profile}, region=${region}${isDefault}`,
                     );
@@ -950,6 +1397,14 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
                     const customText = custom ? `, model=${custom}` : "";
                     const auth = val.apiToken ? ", auth=token set" : "";
                     logger.info(`    ${PROVIDER_DISPLAY_NAMES[provider]}: ${url}${customText}${auth}${isDefault}`);
+                } else if (provider === AIProvider.AZURE_OPENAI) {
+                    const endpoint = val.azureEndpoint ?? "not set";
+                    const deployment = val.azureDeploymentName ?? "not set";
+                    const version = val.azureApiVersion ?? DEFAULT_AZURE_OPENAI_API_VERSION;
+                    logger.info(
+                        `    ${PROVIDER_DISPLAY_NAMES[provider]}: endpoint=${endpoint}, ` +
+                            `deployment=${deployment}, api-version=${version}${isDefault}`,
+                    );
                 } else if (provider === AIProvider.SELF_HOSTED) {
                     const endpoint = val.endpoint ?? "not set";
                     const modelName = val.model ?? "selfhosted-custom";
@@ -973,9 +1428,7 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         // SCM platforms
         const scmPlatforms: string[] = [];
         if (config.githubToken) {
-            const masked = config.githubToken.length > 16
-                ? `${config.githubToken.slice(0, 8)}...`
-                : "(configured)";
+            const masked = config.githubToken.length > 16 ? `${config.githubToken.slice(0, 8)}...` : "(configured)";
             scmPlatforms.push(`GitHub (token: ${masked})`);
         } else if (this.checkGhCli()) {
             scmPlatforms.push("GitHub (via gh CLI)");
@@ -990,15 +1443,38 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         }
         if (config.gitlabToken) {
             const instance = config.gitlabInstanceUrl ?? "gitlab.com";
-            const masked = config.gitlabToken.length > 16
-                ? `${config.gitlabToken.slice(0, 8)}...`
-                : "(configured)";
+            const masked = config.gitlabToken.length > 16 ? `${config.gitlabToken.slice(0, 8)}...` : "(configured)";
             scmPlatforms.push(`GitLab (token: ${masked}, instance: ${instance})`);
         }
         if (scmPlatforms.length > 0) {
             logger.info("  SCM platforms:");
             for (const p of scmPlatforms) {
                 logger.info(`    ${p}`);
+            }
+        }
+        // Cloud providers
+        const awsCloud = config.cloud?.[CloudProvider.AWS];
+        if (awsCloud) {
+            logger.info("  Cloud:");
+            const authDesc =
+                awsCloud.awsAuthMethod === "keys"
+                    ? `access keys${awsCloud.awsSecretAccessKey ? " (configured)" : ""}`
+                    : `profile=${awsCloud.awsProfile ?? "default chain"}`;
+            logger.info(`    AWS: ${authDesc}, region=${awsCloud.awsRegion ?? "not set"}`);
+            if (awsCloud.s3) {
+                logger.info(
+                    `      S3 bucket: ${awsCloud.s3.bucket}${awsCloud.s3.prefix ? `/${awsCloud.s3.prefix}` : ""}`,
+                );
+            }
+            if (awsCloud.bedrockKnowledgeBase) {
+                logger.info(`      Bedrock Knowledge Base: ${awsCloud.bedrockKnowledgeBase.knowledgeBaseId}`);
+            }
+            if (awsCloud.conversationTable) {
+                logger.info(
+                    `      Conversation history: ${awsCloud.conversationTable.tableName} (${awsCloud.conversationTable.ttlDays ?? 90}d retention)`,
+                );
+            } else {
+                logger.info("      Conversation history: in-memory (session only)");
             }
         }
         if (config.remote) {

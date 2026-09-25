@@ -8,4 +8,5 @@ built/
 logs/
 *.log
 .DS_Store
-
+.claude/*
+CLAUDE.md

@@ -19,6 +19,7 @@ This will configure:
 - AI provider (Anthropic, OpenAI, Gemini, Bedrock, Grok, DeepSeek, Ollama, Self Hosted LLM, OpenRouter)
 - API keys
 - SCM provider (GitHub, Bitbucket, or GitLab)
+- Integration credentials (Atlassian Jira/Confluence, Google Drive/Docs/Sheets)
 
 ## Commands
 
@@ -79,11 +80,77 @@ sat-cli add-skill code-review --tool cursor
 
 ### `sat-cli init`
 
-Initialize configuration for a project.
+Initialize configuration for a project (AI providers, default model, SCM credentials, Atlassian integrations, and Google Drive integrations).
 
 ```bash
 sat-cli init
 ```
+
+### `sat-cli onboard`
+
+Ask questions about your projects, answered from the onboarding documentation indexed in the Bedrock Knowledge Base.
+
+```bash
+# Interactively test the configured Bedrock Knowledge Base using retrieval only
+sat-cli onboard --knowledge-base
+
+# Restrict retrieval to one project's indexed documents
+sat-cli onboard --knowledge-base --project "Saturam"
+
+# Ask questions and get a mentoring answer grounded in the Knowledge Base.
+# The project is worked out per question — no --project flag needed.
+sat-cli onboard --chat
+
+# Start over with a fresh conversation instead of continuing the last one
+sat-cli onboard --chat --new-session
+```
+
+Run it with no options to see the modes above.
+
+> **Syncing is no longer a CLI command.** Fetching Confluence pages, Jira tickets and Google
+> Drive files, and uploading them to S3 for Bedrock to ingest, now runs as a scheduled AWS Lambda
+> off a Google Sheet — see the `on-boarding` service in `sat-cli-internal-infra`. The retired
+> flags (`--format`, `--project-name`, `--list`, `--upload-to-s3`, `--forget-sheet`) and the
+> `sat-cli onboard <spreadsheet-url-or-id>` form now fail with an "unknown option" error rather
+> than silently doing nothing, so any script still calling them is told plainly.
+
+### How `--chat` answers
+
+Each question goes to a single mentor agent that searches the Knowledge Base as it needs to, rather than through a fixed retrieve-then-summarize step:
+
+1. **Search until it can answer** — the agent searches broadly or within one project, looks up which projects are indexed, and recalls earlier turns, choosing which of these a question needs and searching again with different wording when the first results miss.
+2. **Project from the evidence** — the project an answer is labelled with is read off the documents it retrieved, not decided in advance. When those documents come from more than one project, the answer is given without a project label; you are never asked to choose one.
+3. **Mentoring answer** — explains the thing the way a senior engineer would, at the length the question deserves, rather than quoting document excerpts back. Anything the answer names that the sources do not mention is revised out, and anything shaped like a credential is redacted.
+4. **Follow-up suggestions** — three or four questions you can select to keep going, each one grounded in material the Knowledge Base can actually answer.
+
+Conversation history is kept so follow-ups work: "and how does it fail?" is understood against the previous answer. History lives in memory by default, or in DynamoDB when a `conversationTable` is configured (see "Cloud" below), which is what lets a later run continue the same conversation.
+
+For more on how the corpus is built and queried, see [ONBOARDING.md](ONBOARDING.md). The sheet format that drives ingestion is documented with the Lambda that reads it, in `sat-cli-internal-infra/on-boarding` (`SHEET-COLUMNS.md`).
+
+`--knowledge-base` opens an interactive prompt in the terminal. Enter a question to display the ranked chunks, relevance scores, source locations, and metadata returned by Bedrock. This uses the Knowledge Base `Retrieve` API—the equivalent of the AWS console's **Standard retrieval only** mode—and does not generate an AI answer. Submit an empty question, type `exit`, `quit`, or `:q`, or press Ctrl+C to leave the prompt.
+
+`--chat` is the RAG version: it uses the same Knowledge Base retrieval as `--knowledge-base`, but your **configured LLM** (whichever AI/LLM provider and model are set up via `sat-cli init` → "AI / LLM providers" — Anthropic, OpenAI, Gemini, Bedrock, etc.) runs the searches and writes a synthesized answer from what they return instead of printing raw chunks. `--project` applies only to `--knowledge-base`; `--chat` ignores it and infers the project from what it retrieves. If no LLM provider is configured yet, it tells you to run `sat-cli init` first instead of failing partway through. Requires both an LLM provider and Bedrock Knowledge Base to be configured.
+
+## Cloud (AWS S3 & Bedrock Knowledge Base)
+
+`sat-cli` can connect to cloud storage and retrieval services, independent of the AWS Bedrock **AI provider** described above (that one runs chat models; this one is for object storage and RAG-style document retrieval).
+
+Configure it interactively:
+
+```bash
+sat-cli init
+# → "Cloud (AWS / Azure / GCP)" → AWS
+```
+
+The wizard walks you through, printing instructions for each step:
+
+1. **AWS credentials** — either an existing `aws configure` CLI profile, or an IAM user's Access Key ID / Secret Access Key (create one at [IAM → Users → Security credentials → Create access key](https://console.aws.amazon.com/iam/home#/users)).
+2. **S3 bucket access** (optional) — bucket name, key prefix, and region. The IAM identity needs a policy granting `s3:GetObject`, `s3:PutObject`, and `s3:ListBucket` on the bucket.
+3. **Bedrock Knowledge Base retrieval** (optional) — the Knowledge Base ID (and optionally Data Source ID) from [Bedrock → Knowledge bases](https://console.aws.amazon.com/bedrock/home#/knowledge-bases). The IAM identity needs `bedrock:Retrieve` on the knowledge base.
+
+Azure and GCP are selectable in the same menu but not yet implemented.
+
+Equivalent environment variables (used as fallbacks by the underlying AWS SDK credential chain when no profile/keys are stored in config): `AWS_PROFILE`, `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`.
 
 ## Ollama
 
@@ -265,26 +332,28 @@ Without this, the CLI defaults to `https://gitlab.com`. This is required for any
 ### Configuration Steps
 
 1. **Create an API key from OpenRouter**
-   - Visit [OpenRouter.ai](https://openrouter.ai) and sign up
-   - Generate an API key from your dashboard
+    - Visit [OpenRouter.ai](https://openrouter.ai) and sign up
+    - Generate an API key from your dashboard
 
 2. **Configure the OpenAI provider with OpenRouter settings:**
 
-   **Option A: Environment variables**
-   ```bash
-   export OPENAI_API_KEY=sk-or-v1-xxxxxxxxxxxxxxxxxxxx
-   export OPENAI_BASE_URL=https://openrouter.ai/api/v1
-   ```
+    **Option A: Environment variables**
 
-   **Option B: Interactive setup via `sat-cli init`**
-   ```
-   ? OpenAI API key: sk-or-v1-xxxxxxxxxxxxxxxxxxxx
-   ? OpenAI base URL (leave empty for default OpenAI API): https://openrouter.ai/api/v1
-   ```
+    ```bash
+    export OPENAI_API_KEY=sk-or-v1-xxxxxxxxxxxxxxxxxxxx
+    export OPENAI_BASE_URL=https://openrouter.ai/api/v1
+    ```
 
-   **Note:**
-   - If you are using the official OpenAI API, use: `https://api.openai.com/v1`
-   - If you are using OpenRouter, use: `https://openrouter.ai/api/v1`
+    **Option B: Interactive setup via `sat-cli init`**
+
+    ```
+    ? OpenAI API key: sk-or-v1-xxxxxxxxxxxxxxxxxxxx
+    ? OpenAI base URL (leave empty for default OpenAI API): https://openrouter.ai/api/v1
+    ```
+
+    **Note:**
+    - If you are using the official OpenAI API, use: `https://api.openai.com/v1`
+    - If you are using OpenRouter, use: `https://openrouter.ai/api/v1`
 
 3. **Select any of the supported free models listed below**
 
@@ -394,32 +463,44 @@ All settings can also be provided via environment variables, which take priority
 
 **AI providers**
 
-| Variable                   | Provider / setting                         |
-| -------------------------- | ------------------------------------------ |
-| `ANTHROPIC_API_KEY`        | Anthropic (Claude)                         |
-| `OPENAI_API_KEY`           | OpenAI (GPT)                               |
-| `OPENAI_BASE_URL`          | OpenAI-compatible API (e.g., OpenRouter)   |
-| `GOOGLE_API_KEY`           | Google (Gemini)                            |
-| `XAI_API_KEY`              | xAI (Grok)                                 |
-| `DEEPSEEK_API_KEY`         | DeepSeek                                   |
-| `AWS_PROFILE`              | AWS Bedrock                                |
-| `AWS_REGION`               | AWS Bedrock region (default: `us-east-1`)  |
-| `OLLAMA_BASE_URL`          | Ollama (default: `http://localhost:11434`) |
-| `OLLAMA_API_TOKEN`         | Optional bearer token for remote Ollama    |
-| `SELF_HOSTED_ENDPOINT`     | Self Hosted LLM endpoint                   |
-| `SELF_HOSTED_MODEL`        | Self Hosted LLM model name                 |
-| `SELF_HOSTED_ACCESS_TOKEN` | Optional bearer token for Self Hosted LLM  |
-| `SELF_HOSTED_TIMEOUT_MS`   | Self Hosted LLM request timeout            |
+| Variable                   | Provider / setting                                                         |
+| -------------------------- | -------------------------------------------------------------------------- |
+| `ANTHROPIC_API_KEY`        | Anthropic (Claude)                                                         |
+| `OPENAI_API_KEY`           | OpenAI (GPT)                                                               |
+| `OPENAI_BASE_URL`          | OpenAI-compatible API (e.g., OpenRouter)                                   |
+| `GOOGLE_API_KEY`           | Google (Gemini)                                                            |
+| `XAI_API_KEY`              | xAI (Grok)                                                                 |
+| `DEEPSEEK_API_KEY`         | DeepSeek                                                                   |
+| `AWS_PROFILE`              | AWS Bedrock (also used for S3/Cloud — see below)                           |
+| `AWS_REGION`               | AWS region — Bedrock, S3, and Bedrock Knowledge Base all fall back to this |
+| `OLLAMA_BASE_URL`          | Ollama (default: `http://localhost:11434`)                                 |
+| `OLLAMA_API_TOKEN`         | Optional bearer token for remote Ollama                                    |
+| `SELF_HOSTED_ENDPOINT`     | Self Hosted LLM endpoint                                                   |
+| `SELF_HOSTED_MODEL`        | Self Hosted LLM model name                                                 |
+| `SELF_HOSTED_ACCESS_TOKEN` | Optional bearer token for Self Hosted LLM                                  |
+| `SELF_HOSTED_TIMEOUT_MS`   | Self Hosted LLM request timeout                                            |
 
 **SCM platforms**
 
-| Variable              | Description                                                                     |
-| --------------------- | ------------------------------------------------------------------------------- |
-| `GITHUB_TOKEN`        | GitHub personal access token                                                    |
-| `BITBUCKET_EMAIL`     | Atlassian account email (used as username for Basic auth)                       |
-| `BITBUCKET_TOKEN`     | Bitbucket API token (create at Atlassian account → Security → API tokens)      |
-| `GITLAB_TOKEN`        | GitLab personal access token (`api` scope required)                             |
-| `GITLAB_INSTANCE_URL` | Base URL for self-hosted GitLab (e.g. `https://git.example.com`)                |
+| Variable              | Description                                                               |
+| --------------------- | ------------------------------------------------------------------------- |
+| `GITHUB_TOKEN`        | GitHub personal access token                                              |
+| `BITBUCKET_EMAIL`     | Atlassian account email (used as username for Basic auth)                 |
+| `BITBUCKET_TOKEN`     | Bitbucket API token (create at Atlassian account → Security → API tokens) |
+| `GITLAB_TOKEN`        | GitLab personal access token (`api` scope required)                       |
+| `GITLAB_INSTANCE_URL` | Base URL for self-hosted GitLab (e.g. `https://git.example.com`)          |
+
+**Integration services (Onboarding & Knowledge Retrieval)**
+
+| Variable              | Description                                                             |
+| --------------------- | ----------------------------------------------------------------------- |
+| `ATLASSIAN_EMAIL`     | Atlassian account email (username for general Jira & Confluence access) |
+| `ATLASSIAN_TOKEN`     | Atlassian API token (for general Jira & Confluence access)              |
+| `CONFLUENCE_EMAIL`    | Confluence-specific account email (overrides `ATLASSIAN_EMAIL`)         |
+| `CONFLUENCE_TOKEN`    | Confluence-specific API token (overrides `ATLASSIAN_TOKEN`)             |
+| `JIRA_EMAIL`          | Jira-specific account email (overrides `ATLASSIAN_EMAIL`)               |
+| `JIRA_TOKEN`          | Jira-specific API token (overrides `ATLASSIAN_TOKEN`)                   |
+| `GOOGLE_ACCESS_TOKEN` | Google OAuth access token (for Google Drive, Docs, and Sheets access)   |
 
 ## License
 

@@ -1,5 +1,5 @@
-import { existsSync } from "fs";
-import { mkdir, readFile, rename, writeFile } from "fs/promises";
+import { existsSync, statSync } from "fs";
+import { mkdir, readFile, rename, unlink, writeFile } from "fs/promises";
 import { homedir } from "os";
 import { dirname, join } from "path";
 import { Service } from "typedi";
@@ -16,6 +16,7 @@ export enum AIProvider {
     ANTHROPIC = "anthropic",
     BEDROCK = "bedrock",
     OPENAI = "openai",
+    AZURE_OPENAI = "azure-openai",
     GOOGLE = "google",
     XAI = "xai",
     DEEPSEEK = "deepseek",
@@ -31,6 +32,13 @@ export const ProviderConfigSchema = z.object({
     awsRegion: z.string().optional().describe("AWS region (for Bedrock)"),
     // OpenAI-specific
     baseUrl: z.string().optional().describe("Base URL for OpenAI API (for custom OpenAI-compatible endpoints)"),
+    // Azure OpenAI-specific
+    azureEndpoint: z
+        .string()
+        .optional()
+        .describe("Azure OpenAI resource endpoint, e.g. https://my-res.openai.azure.com"),
+    azureDeploymentName: z.string().optional().describe("Azure OpenAI deployment name (acts as the model ID)"),
+    azureApiVersion: z.string().optional().describe("Azure OpenAI REST API version, e.g. 2024-10-21"),
     // Ollama-specific
     ollamaBaseUrl: z.string().optional().describe("Base URL for local model server (for Ollama)"),
     apiToken: z.string().optional().describe("Bearer token for remote Ollama API gateways"),
@@ -42,6 +50,58 @@ export const ProviderConfigSchema = z.object({
 });
 
 export type ProviderConfig = z.infer<typeof ProviderConfigSchema>;
+
+// --- Cloud provider config (storage & retrieval, distinct from AI chat providers) ---
+
+export enum CloudProvider {
+    AWS = "aws",
+    AZURE = "azure",
+    GCP = "gcp",
+}
+
+export const CloudProviderConfigSchema = z.object({
+    enabled: z.boolean().default(true).describe("Whether this cloud provider is enabled"),
+    // AWS auth — field names intentionally match ProviderConfigSchema's awsProfile/awsRegion
+    awsAuthMethod: z.enum(["profile", "keys"]).optional().describe("AWS auth method: CLI profile or access keys"),
+    awsProfile: z.string().optional().describe("AWS CLI profile name"),
+    awsRegion: z.string().optional().describe("AWS region"),
+    awsAccessKeyId: z.string().optional().describe("AWS access key ID"),
+    awsSecretAccessKey: z.string().optional().describe("AWS secret access key"),
+    awsSessionToken: z.string().optional().describe("Optional AWS session token (temporary credentials)"),
+    s3: z
+        .object({
+            bucket: z.string().describe("S3 bucket name"),
+            prefix: z.string().optional().describe("Key prefix within the bucket"),
+            statePrefix: z
+                .string()
+                .optional()
+                .describe(
+                    'Key prefix holding ingestion state (registry.json, run status). Defaults to "<prefix>-state", ' +
+                        "which keeps state files out of the content prefix so Bedrock never ingests them as documents.",
+                ),
+            region: z.string().optional().describe("Bucket region (defaults to awsRegion)"),
+        })
+        .optional()
+        .describe("S3 bucket access configuration"),
+    bedrockKnowledgeBase: z
+        .object({
+            knowledgeBaseId: z.string().describe("Bedrock Knowledge Base ID"),
+            dataSourceId: z.string().optional().describe("Bedrock Knowledge Base data source ID"),
+            region: z.string().optional().describe("Knowledge base region (defaults to awsRegion)"),
+        })
+        .optional()
+        .describe("Bedrock Knowledge Base retrieval configuration"),
+    conversationTable: z
+        .object({
+            tableName: z.string().describe("DynamoDB table holding conversation history"),
+            region: z.string().optional().describe("Table region (defaults to awsRegion)"),
+            ttlDays: z.number().int().positive().optional().describe("Days before a session expires"),
+        })
+        .optional()
+        .describe("DynamoDB conversation memory configuration"),
+});
+
+export type CloudProviderConfig = z.infer<typeof CloudProviderConfigSchema>;
 
 export function isLoopbackHostname(hostname: string): boolean {
     const cleanHost = hostname.replace(/^\[|\]$/g, "").toLowerCase();
@@ -80,24 +140,33 @@ export const RemoteConfigSchema = z
 
 export type RemoteConfig = z.infer<typeof RemoteConfigSchema>;
 
+const KNOWN_MODEL_IDS = new Set<string>(Object.values(LLMModel));
+
+// A model ID saved by a previous CLI version can be retired by the provider (or renamed here)
+// after the fact. Falling back to undefined (rather than letting the enum check throw) means one
+// stale saved value degrades to "use the default model" instead of breaking config loading
+// entirely — every ConfigService method that touches personal/project/session config depends on
+// this parse succeeding.
 const migrateModelId = (val: unknown) => {
     if (typeof val !== "string") return val;
     // Strip regional routing prefixes (e.g. us.anthropic..., eu.anthropic...)
     const stripped = val.replace(/^(us|eu|ap)\./, "");
-
-    const knownModels = Object.values(LLMModel) as string[];
-    if (knownModels.includes(stripped)) {
+    if (KNOWN_MODEL_IDS.has(stripped)) {
         return stripped;
     }
 
     // Generic suffix matching: find canonical model ID if base names match
-    const matched = knownModels.find((model) => {
+    const baseInput = stripped.replace(/(-v\d+)?:\d+$/, "").replace(/-v\d+$/, "");
+    const matched = [...KNOWN_MODEL_IDS].find((model) => {
         const baseKnown = model.replace(/(-v\d+)?:\d+$/, "").replace(/-v\d+$/, "");
-        const baseInput = stripped.replace(/(-v\d+)?:\d+$/, "").replace(/-v\d+$/, "");
         return baseKnown === baseInput;
     });
+    if (matched) {
+        return matched;
+    }
 
-    return matched ?? stripped;
+    logger.warn(`Unrecognized saved model ID "${val}" — ignoring it and falling back to the default model.`);
+    return undefined;
 };
 const modelField = z.preprocess(migrateModelId, z.nativeEnum(LLMModel).optional());
 
@@ -118,6 +187,14 @@ export const PersonalConfigurationSchema = z.object({
         .string()
         .optional()
         .describe("GitLab instance base URL (for self-hosted, e.g. https://gitlab.example.com)"),
+    atlassianEmail: z.string().optional().describe("Atlassian account email (Jira & Confluence)"),
+    atlassianToken: z.string().optional().describe("Atlassian API token (Jira & Confluence)"),
+    googleAccessToken: z.string().optional().describe("Google OAuth access token (Drive / Docs / Sheets)"),
+    cloud: z
+        .record(z.nativeEnum(CloudProvider), CloudProviderConfigSchema)
+        .optional()
+        .describe("Configured cloud providers (AWS/Azure/GCP) for storage & retrieval"),
+    defaultCloudProvider: z.nativeEnum(CloudProvider).optional().describe("Default cloud provider"),
     remote: RemoteConfigSchema.optional().describe("Remote credential retrieval settings"),
 });
 
@@ -162,8 +239,10 @@ export const PROVIDER_MODELS: Record<AIProvider, LLMModel[]> = {
     [AIProvider.GOOGLE]: [
         LLMModel.GEMINI_2_5_PRO,
         LLMModel.GEMINI_2_5_FLASH,
-        LLMModel.GEMINI_3_PRO,
-        LLMModel.GEMINI_3_FLASH,
+        LLMModel.GEMINI_3_1_PRO_PREVIEW,
+        LLMModel.GEMINI_3_5_FLASH,
+        LLMModel.GEMINI_3_6_FLASH,
+        LLMModel.GEMINI_3_7_FLASH,
     ],
     [AIProvider.OPENAI]: [
         LLMModel.OPENAI_GPT_4O,
@@ -176,6 +255,7 @@ export const PROVIDER_MODELS: Record<AIProvider, LLMModel[]> = {
         LLMModel.OPENAI_GEMMA_4_31B_IT,
         LLMModel.OPENAI_LLAMA_3_3_70B_INSTRUCT,
     ],
+    [AIProvider.AZURE_OPENAI]: [LLMModel.AZURE_OPENAI_CUSTOM],
     [AIProvider.XAI]: [LLMModel.GROK_2],
     [AIProvider.DEEPSEEK]: [LLMModel.DEEPSEEK_CHAT, LLMModel.DEEPSEEK_REASONER],
     [AIProvider.OLLAMA]: [
@@ -198,6 +278,7 @@ export const PROVIDER_ENV_VARS: Record<AIProvider, string> = {
     [AIProvider.ANTHROPIC]: "ANTHROPIC_API_KEY",
     [AIProvider.BEDROCK]: "AWS_PROFILE",
     [AIProvider.OPENAI]: "OPENAI_API_KEY",
+    [AIProvider.AZURE_OPENAI]: "AZURE_OPENAI_API_KEY",
     [AIProvider.GOOGLE]: "GOOGLE_API_KEY",
     [AIProvider.XAI]: "XAI_API_KEY",
     [AIProvider.DEEPSEEK]: "DEEPSEEK_API_KEY",
@@ -209,6 +290,7 @@ export const PROVIDER_BASE_URL_ENV_VARS: Record<AIProvider, string | undefined> 
     [AIProvider.ANTHROPIC]: undefined,
     [AIProvider.BEDROCK]: undefined,
     [AIProvider.OPENAI]: "OPENAI_BASE_URL",
+    [AIProvider.AZURE_OPENAI]: "AZURE_OPENAI_ENDPOINT",
     [AIProvider.GOOGLE]: undefined,
     [AIProvider.XAI]: undefined,
     [AIProvider.DEEPSEEK]: undefined,
@@ -220,6 +302,7 @@ export const PROVIDER_DEFAULT_KEY_PATHS: Record<AIProvider, string[]> = {
     [AIProvider.ANTHROPIC]: [],
     [AIProvider.BEDROCK]: [],
     [AIProvider.OPENAI]: [],
+    [AIProvider.AZURE_OPENAI]: [],
     [AIProvider.GOOGLE]: [join(homedir(), ".config", "google", "api_key")],
     [AIProvider.XAI]: [],
     [AIProvider.DEEPSEEK]: [],
@@ -446,7 +529,7 @@ export class ConfigService {
         for (const [key, rawConfig] of Object.entries(rawProvidersObj)) {
             if (rawConfig && typeof rawConfig === "object") {
                 const config = { ...rawConfig };
-                
+
                 // Normalize selfHostedEndpoint to endpoint
                 if (config.selfHostedEndpoint) {
                     if (!config.endpoint) {
@@ -499,29 +582,58 @@ export class ConfigService {
     public async savePersonalConfig(config: PersonalConfiguration): Promise<void> {
         const configPath = this.getPersonalConfigPath();
         const dir = dirname(configPath);
-        await mkdir(dir, { recursive: true });
+        await mkdir(dir, { recursive: true, mode: 0o700 });
         const tmpPath = `${configPath}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
         await writeFile(tmpPath, JSON.stringify(config, null, 4), { encoding: "utf8", mode: 0o600 });
         await rename(tmpPath, configPath);
         this.personalConfig = config;
     }
 
-    // --- Project Config (repo-level: .sateng) ---
+    // --- Project Config (repo-level: .sateng/) ---
+
+    /** The single source of truth for the repo-level ".sateng" directory. */
+    public getProjectConfigDir(): string {
+        return join(this.dir.repoRoot, ".sateng");
+    }
 
     public getProjectConfigPath(): string {
-        return join(this.dir.repoRoot, ".sateng");
+        return join(this.getProjectConfigDir(), "config.json");
     }
 
     public async loadProjectConfig(): Promise<ProjectConfiguration | null> {
         const configPath = this.getProjectConfigPath();
-        if (!existsSync(configPath)) return null;
-        const raw = await readFile(configPath, "utf8");
-        return ProjectConfigurationSchema.parse(JSON.parse(raw));
+        if (existsSync(configPath)) {
+            try {
+                if (statSync(configPath).isDirectory()) return null;
+            } catch {
+                return null;
+            }
+            const raw = await readFile(configPath, "utf8");
+            return ProjectConfigurationSchema.parse(JSON.parse(raw));
+        }
+
+        // Legacy layout: ".sateng" used to be the config file itself, before it became a
+        // directory (see getProjectConfigDir). Keep reading it until it's migrated on next save.
+        const legacyPath = this.getProjectConfigDir();
+        if (existsSync(legacyPath) && statSync(legacyPath).isFile()) {
+            const raw = await readFile(legacyPath, "utf8");
+            return ProjectConfigurationSchema.parse(JSON.parse(raw));
+        }
+
+        return null;
     }
 
     public async saveProjectConfig(config: ProjectConfiguration): Promise<void> {
-        const configPath = this.getProjectConfigPath();
-        await writeFile(configPath, JSON.stringify(config, null, 4), "utf8");
+        const configDir = this.getProjectConfigDir();
+
+        // Migrate: an existing ".sateng" *file* (legacy layout) blocks creating ".sateng" as a
+        // directory — remove it now that its content is being folded into the new location.
+        if (existsSync(configDir) && statSync(configDir).isFile()) {
+            await unlink(configDir);
+        }
+
+        await mkdir(configDir, { recursive: true });
+        await writeFile(this.getProjectConfigPath(), JSON.stringify(config, null, 4), "utf8");
     }
 
     // --- Session ---
@@ -585,6 +697,17 @@ export class ConfigService {
     public async getProviderConfig(provider: AIProvider): Promise<ProviderConfig | undefined> {
         const config = await this.loadPersonalConfig();
         return config.providers?.[provider];
+    }
+
+    /**
+     * Whether at least one AI/LLM provider is usable — either configured via 'sat-cli init'
+     * or available purely from its environment variable (the same sources getApiKey() honours,
+     * so e.g. `sat-cli review` working with just ANTHROPIC_API_KEY set doesn't get rejected here).
+     */
+    public async hasAnyLLMProviderConfigured(): Promise<boolean> {
+        const config = await this.loadPersonalConfig();
+        if (Object.keys(config.providers ?? {}).length > 0) return true;
+        return Object.values(PROVIDER_ENV_VARS).some((envVar) => Boolean(process.env[envVar]));
     }
 
     // --- Remote credential retrieval ---
@@ -669,6 +792,169 @@ export class ConfigService {
         if (process.env.GITLAB_INSTANCE_URL) return process.env.GITLAB_INSTANCE_URL;
         const config = await this.loadPersonalConfig();
         return config.gitlabInstanceUrl;
+    }
+
+    // --- Google Token Management ---
+
+    public async getGoogleAccessToken(): Promise<string> {
+        if (process.env.GOOGLE_ACCESS_TOKEN) return process.env.GOOGLE_ACCESS_TOKEN;
+
+        const personalConfig = await this.loadPersonalConfig();
+        if (personalConfig.googleAccessToken) {
+            return personalConfig.googleAccessToken;
+        }
+
+        throw new Error(
+            "No Google Access Token found. Set GOOGLE_ACCESS_TOKEN, or run 'sat-cli init' and select 'Google (Drive / Docs / Sheets)' to configure credentials.",
+        );
+    }
+
+    // --- Cloud Provider Config (AWS/Azure/GCP: storage & retrieval) ---
+
+    public async getCloudConfig(provider: CloudProvider): Promise<CloudProviderConfig | undefined> {
+        const config = await this.loadPersonalConfig();
+        return config.cloud?.[provider];
+    }
+
+    public async getAWSCloudConfig(): Promise<CloudProviderConfig> {
+        const cloudConfig = await this.getCloudConfig(CloudProvider.AWS);
+        if (!cloudConfig) {
+            throw new Error("AWS cloud is not configured. Run 'sat-cli init' and select 'Cloud (AWS / Azure / GCP)'.");
+        }
+        return cloudConfig;
+    }
+
+    /**
+     * The bucket plus both prefixes the CLI reads and writes under.
+     *
+     * `prefix` holds the synced documents, which the Bedrock data source ingests. `statePrefix`
+     * holds what the ingestion pipeline writes about that corpus — registry.json and run status —
+     * and is deliberately a sibling of the content prefix rather than a folder inside it, so a
+     * state file is never picked up and indexed as if it were documentation.
+     */
+    public async getS3Config(): Promise<{ bucket: string; prefix?: string; statePrefix?: string; region: string }> {
+        const cloudConfig = await this.getAWSCloudConfig();
+        if (!cloudConfig.s3) {
+            throw new Error(
+                "S3 is not configured. Run 'sat-cli init' → 'Cloud (AWS / Azure / GCP)' → AWS and configure S3 bucket access.",
+            );
+        }
+        const region = cloudConfig.s3.region ?? cloudConfig.awsRegion;
+        if (!region) {
+            throw new Error(
+                "S3 region is not configured. Run 'sat-cli init' → 'Cloud (AWS / Azure / GCP)' → AWS and set an AWS region or bucket region.",
+            );
+        }
+        return {
+            bucket: cloudConfig.s3.bucket,
+            prefix: cloudConfig.s3.prefix,
+            statePrefix: ConfigService.resolveStatePrefix(cloudConfig.s3.prefix, cloudConfig.s3.statePrefix),
+            region,
+        };
+    }
+
+    /**
+     * Where ingestion state lives, given the content prefix. An explicit setting always wins.
+     * Otherwise it is the content prefix with a "-state" suffix; with no content prefix at all
+     * there is nothing to sit beside, so state stays at the bucket root — which is also what the
+     * CLI did before this setting existed, so an existing config keeps resolving the same key.
+     */
+    public static resolveStatePrefix(prefix?: string, statePrefix?: string): string | undefined {
+        if (statePrefix?.trim()) return statePrefix.trim().replace(/\/+$/, "");
+        const trimmed = prefix?.trim().replace(/\/+$/, "");
+        return trimmed ? `${trimmed}-state` : undefined;
+    }
+
+    public async getBedrockKnowledgeBaseConfig(): Promise<{
+        knowledgeBaseId: string;
+        dataSourceId?: string;
+        region: string;
+    }> {
+        const cloudConfig = await this.getAWSCloudConfig();
+        if (!cloudConfig.bedrockKnowledgeBase) {
+            throw new Error(
+                "Bedrock Knowledge Base is not configured. Run 'sat-cli init' → 'Cloud (AWS / Azure / GCP)' → AWS and configure Bedrock Knowledge Base retrieval.",
+            );
+        }
+        const region = cloudConfig.bedrockKnowledgeBase.region ?? cloudConfig.awsRegion;
+        if (!region) {
+            throw new Error(
+                "Bedrock Knowledge Base region is not configured. Run 'sat-cli init' → 'Cloud (AWS / Azure / GCP)' → AWS and set an AWS region or knowledge base region.",
+            );
+        }
+        return {
+            knowledgeBaseId: cloudConfig.bedrockKnowledgeBase.knowledgeBaseId,
+            dataSourceId: cloudConfig.bedrockKnowledgeBase.dataSourceId,
+            region,
+        };
+    }
+
+    /**
+     * Conversation memory table, or undefined when none is configured — the caller then falls
+     * back to the in-memory store rather than failing, so the chat flow works without AWS access.
+     */
+    public async getConversationTableConfig(): Promise<
+        { tableName: string; region: string; ttlDays: number } | undefined
+    > {
+        const cloudConfig = await this.getCloudConfig(CloudProvider.AWS);
+        const table = cloudConfig?.conversationTable;
+        if (!table) return undefined;
+
+        const region = table.region ?? cloudConfig?.awsRegion;
+        if (!region) {
+            logger.warn(
+                "A conversation table is configured but no region was resolved — falling back to in-memory conversation history.",
+            );
+            return undefined;
+        }
+        return { tableName: table.tableName, region, ttlDays: table.ttlDays ?? 90 };
+    }
+
+    // --- Atlassian Credentials Helper ---
+
+    public async getAtlassianCredentials(): Promise<{ email?: string; token: string }> {
+        return this.getGenericAtlassianCredentials();
+    }
+
+    public async getGenericAtlassianCredentials(): Promise<{ email?: string; token: string }> {
+        if (process.env.ATLASSIAN_TOKEN) {
+            return {
+                email: process.env.ATLASSIAN_EMAIL,
+                token: process.env.ATLASSIAN_TOKEN,
+            };
+        }
+
+        const personalConfig = await this.loadPersonalConfig();
+        if (personalConfig.atlassianToken) {
+            return {
+                email: personalConfig.atlassianEmail,
+                token: personalConfig.atlassianToken,
+            };
+        }
+
+        throw new Error(
+            "No Atlassian credentials found. Set ATLASSIAN_TOKEN (and optionally ATLASSIAN_EMAIL) env vars, or run 'sat-cli init' and select 'Atlassian (Jira & Confluence)'.",
+        );
+    }
+
+    public async getConfluenceCredentials(): Promise<{ email?: string; token: string }> {
+        if (process.env.CONFLUENCE_TOKEN) {
+            return {
+                email: process.env.CONFLUENCE_EMAIL,
+                token: process.env.CONFLUENCE_TOKEN,
+            };
+        }
+        return this.getGenericAtlassianCredentials();
+    }
+
+    public async getJiraCredentials(): Promise<{ email?: string; token: string }> {
+        if (process.env.JIRA_TOKEN) {
+            return {
+                email: process.env.JIRA_EMAIL,
+                token: process.env.JIRA_TOKEN,
+            };
+        }
+        return this.getGenericAtlassianCredentials();
     }
 
     // --- Static helpers ---

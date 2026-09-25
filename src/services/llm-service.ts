@@ -6,6 +6,7 @@ import {
     LLMModel,
     LLMOptions,
     isAnthropicModel,
+    isAzureOpenAIModel,
     isBedrockModel,
     isDeepSeekModel,
     isGeminiModel,
@@ -23,6 +24,7 @@ const logger = getLogger("LlmService");
 
 const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
 const DEFAULT_SELF_HOSTED_TIMEOUT_MS = 120000;
+const DEFAULT_AZURE_OPENAI_API_VERSION = "2024-10-21";
 
 type OllamaChatMessage = {
     role: "system" | "user" | "assistant";
@@ -131,6 +133,7 @@ export class LlmService {
         if (isBedrockModel(model)) return this.createBedrockModel(model, options);
         if (isGeminiModel(model)) return this.createGeminiModel(model, options);
         if (isOpenAIModel(model)) return this.createOpenAIModel(model, options);
+        if (isAzureOpenAIModel(model)) return this.createAzureOpenAIModel(options);
         if (isGrokModel(model)) return this.createGrokModel(model, options);
         if (isDeepSeekModel(model)) return this.createDeepSeekModel(model, options);
         if (isOllamaModel(model)) return this.createOllamaModel(model, options);
@@ -156,7 +159,13 @@ export class LlmService {
     private async createBedrockModel(model: LLMModel, options?: LLMOptions): Promise<ChatModel> {
         const { ChatBedrockConverse } = await import("@langchain/aws");
         const providerConfig = await this.config.getProviderConfig(AIProvider.BEDROCK);
-        const region = providerConfig?.awsRegion ?? process.env.AWS_REGION ?? "us-east-1";
+        let region = providerConfig?.awsRegion ?? process.env.AWS_REGION;
+        if (!region) {
+            region = "us-east-1";
+            logger.warn(
+                "AWS Bedrock region is not configured — defaulting to us-east-1. Run 'sat-cli init' to set one explicitly.",
+            );
+        }
         const profile = providerConfig?.awsProfile ?? process.env.AWS_PROFILE;
 
         // Credential resolution precedence:
@@ -245,6 +254,46 @@ export class LlmService {
         return new ChatOpenAI(openAIConfig);
     }
 
+    // --- Azure OpenAI ---
+
+    private async createAzureOpenAIModel(options?: LLMOptions): Promise<ChatModel> {
+        const apiKey = await this.config.getApiKey(AIProvider.AZURE_OPENAI);
+        const providerConfig = await this.config.getProviderConfig(AIProvider.AZURE_OPENAI);
+
+        const endpoint = providerConfig?.azureEndpoint ?? process.env.AZURE_OPENAI_ENDPOINT;
+        // AZURE_OPENAI_API_DEPLOYMENT_NAME is what @langchain/openai reads natively; accept the
+        // shorter AZURE_OPENAI_DEPLOYMENT_NAME too since that's the name Azure's own docs use.
+        const deploymentName =
+            providerConfig?.azureDeploymentName ??
+            process.env.AZURE_OPENAI_DEPLOYMENT_NAME ??
+            process.env.AZURE_OPENAI_API_DEPLOYMENT_NAME;
+        const apiVersion =
+            providerConfig?.azureApiVersion ?? process.env.AZURE_OPENAI_API_VERSION ?? DEFAULT_AZURE_OPENAI_API_VERSION;
+
+        if (!endpoint) {
+            throw new Error("Azure OpenAI endpoint is required. Set AZURE_OPENAI_ENDPOINT or run 'sat-cli init'.");
+        }
+
+        if (!deploymentName) {
+            throw new Error(
+                "Azure OpenAI deployment name is required. Set AZURE_OPENAI_DEPLOYMENT_NAME or run 'sat-cli init'.",
+            );
+        }
+
+        const { AzureChatOpenAI } = await import("@langchain/openai");
+
+        // getEndpoint() builds "<endpoint>/openai/deployments/<deployment>", so the endpoint must
+        // be the bare resource URL with no trailing slash.
+        return new AzureChatOpenAI({
+            model: deploymentName,
+            azureOpenAIApiKey: apiKey,
+            azureOpenAIEndpoint: normalizeBaseUrl(endpoint),
+            azureOpenAIApiDeploymentName: deploymentName,
+            azureOpenAIApiVersion: apiVersion,
+            temperature: options?.temperature ?? 0,
+        });
+    }
+
     // --- xAI (Grok) ---
 
     private async createGrokModel(model: LLMModel, options?: LLMOptions): Promise<ChatModel> {
@@ -286,9 +335,7 @@ export class LlmService {
         const apiToken = providerConfig?.apiToken ?? process.env.OLLAMA_API_TOKEN;
 
         // For remote/custom Ollama deployments, prefer the exact configured model name.
-        const modelName =
-            providerConfig?.model ??
-            (model === LLMModel.OLLAMA_CUSTOM ? "llama3" : (model as string));
+        const modelName = providerConfig?.model ?? (model === LLMModel.OLLAMA_CUSTOM ? "llama3" : (model as string));
         if (model === LLMModel.OLLAMA_CUSTOM) {
             logger.info(`Using custom Ollama model: ${modelName}`);
         }
@@ -305,11 +352,8 @@ export class LlmService {
 
     private async createSelfHostedModel(model: LLMModel, options?: LLMOptions): Promise<ChatModel> {
         const providerConfig = await this.config.getProviderConfig(AIProvider.SELF_HOSTED);
-        const endpoint =
-            providerConfig?.endpoint ?? process.env.SELF_HOSTED_ENDPOINT;
-        const modelName =
-            providerConfig?.model ??
-            process.env.SELF_HOSTED_MODEL;
+        const endpoint = providerConfig?.endpoint ?? process.env.SELF_HOSTED_ENDPOINT;
+        const modelName = providerConfig?.model ?? process.env.SELF_HOSTED_MODEL;
 
         if (!endpoint) {
             throw new Error(
@@ -318,9 +362,7 @@ export class LlmService {
         }
 
         if (!modelName) {
-            throw new Error(
-                "Self-hosted model name is required. Set SELF_HOSTED_MODEL or run 'sat-cli init'.",
-            );
+            throw new Error("Self-hosted model name is required. Set SELF_HOSTED_MODEL or run 'sat-cli init'.");
         }
 
         const accessToken = getSelfHostedAuthToken(providerConfig);

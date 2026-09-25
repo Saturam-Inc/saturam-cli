@@ -29,6 +29,12 @@ export type TypedCommand<T extends CommandInputs = any, R = void> = {
     readonly category: "common" | "review" | "cicd";
     readonly aliases: string[];
     readonly inputs: CommandInputs;
+    /**
+     * Print this command's help instead of running it when it is invoked with no inputs at all.
+     * For a command whose flags select between modes rather than modify one default action
+     * (see OnboardCommand), a bare invocation has nothing to do, and the options are the answer.
+     */
+    readonly helpWhenNoInputs?: boolean;
     execute: (inputs: TypedInputs<T>) => Promise<R>;
 };
 
