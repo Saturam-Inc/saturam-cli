@@ -1,18 +1,14 @@
 import { JiraService } from "../../../src/integrations/jira/services/jira.service";
-import { AdfNormalizerService } from "../../../src/services/normalizers/adf-normalizer.service";
 import { ConfigService } from "../../../src/services/config-service";
 
 describe("JiraService", () => {
     let service: JiraService;
-    let adfNormalizer: AdfNormalizerService;
     let mockConfigService: jest.Mocked<ConfigService>;
 
     beforeEach(() => {
         mockConfigService = {
             getJiraCredentials: jest.fn(),
         } as any;
-        adfNormalizer = new AdfNormalizerService();
-        // JiraService no longer depends on AdfNormalizerService
         service = new JiraService(mockConfigService);
     });
 

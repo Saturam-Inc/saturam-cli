@@ -74,18 +74,12 @@ Each integration service wraps target REST APIs and handles authorization intern
 
 ---
 
-## 2. Normalization Pipelines
+## 2. Normalization
 
-The Lambda applies the same normalization this repo does, converting raw payloads into Markdown
-before they are indexed. The normalizer services below still live here and are used by anything in
-the CLI that needs the same conversion.
-
-### Normalizer Services ([src/services/normalizers/](src/services/normalizers/))
-
-- **ADF to Markdown ([adf-normalizer.service.ts](src/services/normalizers/adf-normalizer.service.ts))**: Converts Jira JSON-based Atlassian Document Format (ADF) nodes recursively into clean Markdown text (bold, lists, blockquotes, mentions, etc.).
-- **HTML/XHTML to Markdown ([html-normalizer.service.ts](src/services/normalizers/html-normalizer.service.ts))**: Parses Confluence storage XHTML and Mammoth HTML strings into clean Markdown blocks, standardizing headers, bullet points, user references, and tables.
-- **Google Sheets to JSON**: Fetches rows and cells and saves them as a structured, queryable JSON sidecar list.
-- **Word Documents (.docx)**: Downloads raw access bytes, extracts HTML locally via `mammoth.js`, and normalizes it into Markdown via `HtmlNormalizerService`.
+Raw payloads are converted to Markdown before they are indexed, but that happens in the
+`on-boarding` Lambda (`sat-cli-internal-infra/on-boarding/src/normalize/`), not in this repo: Jira
+ADF, Confluence storage-format XHTML and Word documents (via `mammoth`) are all normalized there.
+The API clients above return raw responses and do no conversion of their own.
 
 ---
 
@@ -153,37 +147,25 @@ There is no `--project` flag here — the project is determined per question. `-
 
 ##### The answering flow
 
-Each question passes through five agents, wired by `AnswerFlowService`:
+Each question goes to one mentor agent (`MentorAgentService`), wired by `AnswerFlowService`. There is no fixed classify → route → retrieve → write pipeline: the agent is given three tools and decides which a question needs.
 
-| Agent                   | Role                                                                                                      |
-| ----------------------- | --------------------------------------------------------------------------------------------------------- |
-| Intent classifier       | General question, project question, or a question about the corpus itself                                 |
-| Project router          | Resolves which project the question is about, or decides it is ambiguous                                  |
-| General technical agent | Answers general questions with no retrieval, marking what is industry practice rather than our convention |
-| Mentor answerer         | Produces the grounded answer for project questions                                                        |
-| Follow-up generator     | Suggests three or four next questions the Knowledge Base can actually answer                              |
+| Tool                   | What the agent uses it for                                                                                    |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `search_documentation` | Retrieves passages, broadly or narrowed to one project; called again with different wording when results miss |
+| `list_projects`        | Says what is indexed, and the exact slug for a project the user named                                         |
+| `recall_conversation`  | Reaches turns older than the verbatim window, including ones from earlier sessions                            |
 
-**Intent classification.** A follow-up is deliberately _not_ its own intent. "And how does it fail?" is still a project question — what makes it a follow-up is that its subject comes from the previous turn, which the classifier resolves into a standalone question before routing.
+The agent searches until it can answer, within six tool rounds. A model without tool calling gets one search on the question and a single prompt instead.
 
-**Project routing.** Resolution is cheapest-first: a project named in the question, then the project you have been discussing, then a broad unfiltered retrieval whose results are grouped by their `project` metadata. The last step grounds routing in what is actually indexed rather than in the model guessing from a name. You are asked to choose only when no single project dominates:
+**Project attribution.** The project shown above an answer is read off the retrieved chunks' `project` metadata, not decided before searching. When the chunks come from more than one project, the answer is shown without a project label. You are never asked to choose a project.
 
-```
-? "How do refunds work?" could mean a few things — which one?
-  > SMILE · Customer-facing refunds portal (12 matches)
-    Billing Core · Payment capture and settlement (9 matches)
-    Ask across all projects
-    Let me rephrase
-```
-
-In non-interactive runs (`--ci`, or piped stdin) no picker can be shown, so the top-ranked project is used and the assumption is stated.
-
-**The answer contract.** Every project answer follows the same skeleton, dropping any part the retrieved context cannot support rather than padding it: what the answer is, why the thing exists, how it works, where it lives, and what to watch out for.
+**Checks on the answer.** Two guards run in code on whatever the model wrote. Any file, path, script or table the answer names that appears in neither the sources nor the recent conversation triggers one revision, and anything shaped like a credential is redacted.
 
 **Follow-ups.** Suggestions are constrained to material the Knowledge Base holds — a suggestion it cannot answer wastes a turn. Select one to continue, or choose "Ask my own question".
 
 ##### Conversation memory
 
-History is what makes follow-ups work. Each turn stores the question, the answer, a one-line gist, and the resolved project. Agents receive the last three turns as attributed messages plus a rolling digest of everything older, rather than the full transcript — a mentor-length answer runs 400–600 tokens, so replaying twenty of them would make classification the most expensive call in the flow.
+History is what makes follow-ups work. Each turn stores the question, the answer, a one-line gist, and the resolved project. Agents receive the last three turns as attributed messages plus a rolling digest of everything older, rather than the full transcript — a mentor-length answer runs 400–600 tokens, so replaying twenty of them would dominate every prompt.
 
 By default history lives in memory and lasts only for the session. Configure a `conversationTable` under your AWS cloud config to persist it in DynamoDB, which is what lets a later run continue the same conversation:
 

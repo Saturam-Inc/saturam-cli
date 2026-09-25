@@ -2,7 +2,13 @@ import { getLogger } from "log4js";
 import { Service } from "typedi";
 import { z } from "zod";
 import { SESSION_DIGEST_SHAPE_HINT, getSessionDigestMessages } from "../../prompts/session-digest.prompt";
-import { ChatSession, DIGEST_REFRESH_INTERVAL, SessionDigest, VERBATIM_TURN_WINDOW } from "./chat-session.model";
+import {
+    ChatSession,
+    DIGEST_REFRESH_INTERVAL,
+    SessionDigest,
+    VERBATIM_TURN_WINDOW,
+    nextTurnIndex,
+} from "./chat-session.model";
 import { StructuredOutputService } from "./structured-output";
 
 const logger = getLogger("SessionDigest");
@@ -30,14 +36,15 @@ export class SessionDigestService {
     /** Whether enough turns have accumulated beyond the verbatim window to warrant a refresh. */
     public shouldRefresh(session: ChatSession): boolean {
         const coveredUpTo = session.digest?.coversUpToIndex ?? 0;
-        const eligible = Math.max(0, session.turns.length - VERBATIM_TURN_WINDOW);
-        return eligible - coveredUpTo >= DIGEST_REFRESH_INTERVAL;
+        return this.agedOutUpTo(session) - coveredUpTo >= DIGEST_REFRESH_INTERVAL;
     }
 
     public async refresh(session: ChatSession): Promise<SessionDigest | undefined> {
         const coveredUpTo = session.digest?.coversUpToIndex ?? 0;
-        const eligible = session.turns.slice(0, Math.max(0, session.turns.length - VERBATIM_TURN_WINDOW));
-        const newTurns = eligible.slice(coveredUpTo);
+        const agedOutUpTo = this.agedOutUpTo(session);
+        // Selected by index rather than by position: once the store has trimmed the session,
+        // position i in `turns` is no longer turn i.
+        const newTurns = session.turns.filter((turn) => turn.index >= coveredUpTo && turn.index < agedOutUpTo);
         if (newTurns.length === 0) return session.digest;
 
         try {
@@ -54,11 +61,22 @@ export class SessionDigestService {
             });
             // The model rebuilds the summary; the goal was stated by the learner and is not the
             // model's to lose.
-            return { ...result, coversUpToIndex: eligible.length, learnerGoal: session.digest?.learnerGoal };
+            return { ...result, coversUpToIndex: agedOutUpTo, learnerGoal: session.digest?.learnerGoal };
         } catch (err) {
             // Keep the previous digest rather than dropping history on a transient failure.
             logger.debug(`Digest refresh failed: ${(err as Error).message}`);
             return session.digest;
         }
+    }
+
+    /**
+     * Turn index (exclusive) below which turns have aged out of the verbatim window.
+     *
+     * Counted from turn indices, not `turns.length`: stores trim `turns` to the last
+     * MAX_RETAINED_TURNS, so the length stops growing once a session passes that, and a digest
+     * measured against it would stop refreshing for the rest of the session.
+     */
+    private agedOutUpTo(session: ChatSession): number {
+        return Math.max(0, nextTurnIndex(session) - VERBATIM_TURN_WINDOW);
     }
 }

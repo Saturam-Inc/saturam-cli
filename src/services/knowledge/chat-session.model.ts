@@ -91,6 +91,15 @@ export function contextTurns(session: ChatSession): ChatTurn[] {
     return [...(session.carriedTurns ?? []), ...session.turns].slice(-VERBATIM_TURN_WINDOW);
 }
 
+/**
+ * The index the next turn in this session takes. Read off the last retained turn rather than
+ * `turns.length`: stores keep only the last MAX_RETAINED_TURNS, so past that point the array stops
+ * growing while the conversation does not, and its length is no longer a position in it.
+ */
+export function nextTurnIndex(session: ChatSession): number {
+    return (session.turns.at(-1)?.index ?? -1) + 1;
+}
+
 export function createEmptySession(sessionId: string): ChatSession {
     return { sessionId, turns: [] };
 }

@@ -1,4 +1,13 @@
+import { getLogger } from "log4js";
 import { fetchWithTimeout } from "../../src/utils/fetch-with-timeout";
+
+// Built inside the factory: the module under test calls getLogger() as it loads, which is before
+// any top-level const here would be initialised.
+jest.mock("log4js", () => {
+    const logger = { warn: jest.fn(), debug: jest.fn() };
+    return { getLogger: () => logger };
+});
+const mockLogger = getLogger("FetchWithTimeout") as unknown as { warn: jest.Mock; debug: jest.Mock };
 
 // Helper to create a mock response
 function makeMockResponse(body: string, status = 200): Response {
@@ -25,6 +34,8 @@ describe("fetchWithTimeout", () => {
 
     beforeEach(() => {
         jest.useFakeTimers();
+        mockLogger.warn.mockClear();
+        mockLogger.debug.mockClear();
     });
 
     afterEach(() => {
@@ -166,6 +177,71 @@ describe("fetchWithTimeout", () => {
 
         expect(mockFetch).toHaveBeenCalledTimes(2);
         expect(response.status).toBe(200);
+    });
+
+    it("caps a large Retry-After so a server cannot stall the CLI for as long as it likes", async () => {
+        const rateLimited = makeMockResponse("rate limited", 429);
+        (rateLimited.headers as Headers).set("retry-after", "3600");
+        const mockFetch = jest
+            .fn()
+            .mockResolvedValueOnce(rateLimited)
+            .mockResolvedValueOnce(makeMockResponse("{}", 200));
+        global.fetch = mockFetch;
+
+        const responsePromise = fetchWithTimeout("https://example.com/api", {}, 5000);
+        await jest.advanceTimersByTimeAsync(29_999);
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+
+        await jest.advanceTimersByTimeAsync(1);
+        const response = await responsePromise;
+
+        expect(mockFetch).toHaveBeenCalledTimes(2);
+        expect(response.status).toBe(200);
+    });
+
+    it("caps a Retry-After HTTP date far in the future", async () => {
+        const rateLimited = makeMockResponse("rate limited", 429);
+        (rateLimited.headers as Headers).set("retry-after", new Date(Date.now() + 3_600_000).toUTCString());
+        const mockFetch = jest
+            .fn()
+            .mockResolvedValueOnce(rateLimited)
+            .mockResolvedValueOnce(makeMockResponse("{}", 200));
+        global.fetch = mockFetch;
+
+        const responsePromise = fetchWithTimeout("https://example.com/api", {}, 5000);
+        await jest.advanceTimersByTimeAsync(30_000);
+        const response = await responsePromise;
+
+        expect(mockFetch).toHaveBeenCalledTimes(2);
+        expect(response.status).toBe(200);
+    });
+
+    it("warns when a retry waits long enough to be noticed, and says the wait was capped", async () => {
+        const rateLimited = makeMockResponse("rate limited", 429);
+        (rateLimited.headers as Headers).set("retry-after", "3600");
+        global.fetch = jest.fn().mockResolvedValueOnce(rateLimited).mockResolvedValueOnce(makeMockResponse("{}", 200));
+
+        const responsePromise = fetchWithTimeout("https://example.com/api", {}, 5000);
+        await jest.advanceTimersByTimeAsync(30_000);
+        await responsePromise;
+
+        expect(mockLogger.warn).toHaveBeenCalledTimes(1);
+        expect(mockLogger.warn.mock.calls[0][0]).toMatch(/HTTP 429 from https:\/\/example\.com\/api/);
+        expect(mockLogger.warn.mock.calls[0][0]).toMatch(/retrying in 30000ms .*server asked for 3600000ms, capped/);
+    });
+
+    it("logs a short backoff at debug only, so routine retries stay quiet", async () => {
+        global.fetch = jest
+            .fn()
+            .mockResolvedValueOnce(makeMockResponse("server error", 503))
+            .mockResolvedValueOnce(makeMockResponse("{}", 200));
+
+        const responsePromise = fetchWithTimeout("https://example.com/api", {}, 5000);
+        await jest.advanceTimersByTimeAsync(500);
+        await responsePromise;
+
+        expect(mockLogger.warn).not.toHaveBeenCalled();
+        expect(mockLogger.debug).toHaveBeenCalledWith(expect.stringContaining("retrying in 500ms (retry 1 of 3)"));
     });
 
     it("should give up and return the last response after maxRetries persistent 5xx errors", async () => {

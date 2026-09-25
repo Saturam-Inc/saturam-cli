@@ -1,8 +1,7 @@
 /**
  * Wraps the native `fetch` with an AbortController-based timeout, plus a small retry/backoff
  * layer for transient failures (429 rate limits, 5xx server errors) — without this, a single
- * 429 mid-space-sync becomes a permanent per-document failure under any real concurrency
- * (see onboard.service.ts's pLimit(5) usage against Atlassian/Google over thousands of pages).
+ * 429 from Atlassian or Google fails the caller outright instead of costing it a short wait.
  *
  * The timeout covers the *entire* request lifecycle — both header resolution
  * and body consumption (.json(), .text(), .arrayBuffer()).  The AbortController
@@ -13,8 +12,23 @@
  * without blocking the Node process indefinitely on a stalled connection.
  */
 
+import { getLogger } from "log4js";
+
+const logger = getLogger("FetchWithTimeout");
+
 const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_BASE_DELAY_MS = 500;
+
+/**
+ * Longest a single retry waits, whatever Retry-After asks for. A server may legally ask for an
+ * hour, and a CLI that sleeps that long with nothing on screen looks hung. Past this cap the retry
+ * most likely meets another 429, and once retries run out that response goes back to the caller,
+ * which reports it — a clear failure rather than an unexplained stall.
+ */
+const MAX_RETRY_DELAY_MS = 30_000;
+
+/** Waits at least this long are logged at warn rather than debug, so they show without --debug. */
+const NOTICEABLE_RETRY_DELAY_MS = 5_000;
 
 function sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -97,7 +111,15 @@ export async function fetchWithTimeout(
             return response;
         }
 
-        const delayMs = parseRetryAfterMs(response) ?? DEFAULT_BASE_DELAY_MS * 2 ** attempt;
+        const requestedMs = parseRetryAfterMs(response) ?? DEFAULT_BASE_DELAY_MS * 2 ** attempt;
+        const delayMs = Math.min(requestedMs, MAX_RETRY_DELAY_MS);
+        const capped = requestedMs > delayMs ? ` (server asked for ${requestedMs}ms, capped)` : "";
+        const message = `HTTP ${response.status} from ${url} — retrying in ${delayMs}ms (retry ${attempt + 1} of ${maxRetries})${capped}`;
+        if (delayMs >= NOTICEABLE_RETRY_DELAY_MS) {
+            logger.warn(message);
+        } else {
+            logger.debug(message);
+        }
         await sleep(delayMs);
     }
 }

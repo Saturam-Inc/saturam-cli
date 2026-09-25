@@ -1,4 +1,5 @@
 import { AnswerFlowService } from "../../../src/services/knowledge/answer-flow.service";
+import { MAX_RETAINED_TURNS } from "../../../src/services/knowledge/chat-session.model";
 import { InMemoryConversationStore } from "../../../src/services/knowledge/conversation-store";
 import { getOwnerId } from "../../../src/services/knowledge/session-identity";
 
@@ -54,6 +55,19 @@ describe("AnswerFlowService", () => {
         expect(result.chunks).toHaveLength(1);
         expect(result.followUps).toEqual([{ question: "What triggers it?", rationale: "" }]);
         expect(result.project).toEqual(project);
+    });
+
+    it("keeps turn indices unique and increasing once the store starts trimming the session", async () => {
+        const asked = MAX_RETAINED_TURNS + 2;
+        for (let i = 0; i < asked; i += 1) await flow.ask(`question ${i}`);
+
+        const [sessionId] = await store.findRecentSessionIds(getOwnerId(), 1);
+        const { turns } = await store.load(ref(sessionId));
+        // The store keeps the last 20. Indexing by `turns.length` gave every turn past that
+        // index 20, so the retained window ended ..., 19, 20, 20.
+        expect(turns.map((turn) => turn.index)).toEqual(
+            Array.from({ length: MAX_RETAINED_TURNS }, (_, i) => asked - MAX_RETAINED_TURNS + i),
+        );
     });
 
     it("hands the agent the conversation so far", async () => {

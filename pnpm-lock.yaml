@@ -67,9 +67,6 @@ importers:
             log4js:
                 specifier: ^6.9.1
                 version: 6.9.1
-            mammoth:
-                specifier: ^1.12.0
-                version: 1.12.0
             marked:
                 specifier: ^15.0.0
                 version: 15.0.12
@@ -82,12 +79,6 @@ importers:
             reflect-metadata:
                 specifier: ^0.2.2
                 version: 0.2.2
-            turndown:
-                specifier: ^7.2.4
-                version: 7.2.4
-            turndown-plugin-gfm:
-                specifier: ^1.0.2
-                version: 1.0.2
             typedi:
                 specifier: ^0.10.0
                 version: 0.10.0
@@ -110,9 +101,6 @@ importers:
             "@types/node":
                 specifier: ^22.0.0
                 version: 22.19.17
-            "@types/turndown":
-                specifier: ^5.0.6
-                version: 5.0.6
             jest:
                 specifier: ^29.7.0
                 version: 29.7.0(@types/node@22.19.17)(ts-node@10.9.2(@swc/core@1.15.26)(@types/node@22.19.17)(typescript@5.9.3))
@@ -1844,12 +1832,6 @@ packages:
         peerDependencies:
             "@langchain/core": ">=0.3.58 <0.4.0"
 
-    "@mixmark-io/domino@2.2.0":
-        resolution:
-            {
-                integrity: sha512-Y28PR25bHXUg88kCV7nivXrP2Nj2RueZ3/l/jdx6J9f8J4nsEGcgX0Qe6lt7Pa+J79+kPiJU3LguR6O/6zrLOw==,
-            }
-
     "@octokit/auth-token@5.1.2":
         resolution:
             {
@@ -2683,12 +2665,6 @@ packages:
         resolution:
             {
                 integrity: sha512-/Ad8+nIOV7Rl++6f1BdKxFSMgmoqEoYbHRpPcx3JEfv8VRsQe9Z4mCXeJBzxs7mbHY/XOZZuXlRNfhpVPbs6ZA==,
-            }
-
-    "@types/turndown@5.0.6":
-        resolution:
-            {
-                integrity: sha512-ru00MoyeeouE5BX4gRL+6m/BsDfbRayOskWqUvh7CLGW+UXxHQItqALa38kKnOiZPqJrtzJUgAC2+F0rL1S4Pg==,
             }
 
     "@types/uuid@10.0.0":
@@ -5273,19 +5249,6 @@ packages:
                 integrity: sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w==,
             }
 
-    turndown-plugin-gfm@1.0.2:
-        resolution:
-            {
-                integrity: sha512-vwz9tfvF7XN/jE0dGoBei3FXWuvll78ohzCZQuOb+ZjWrs3a0XhQVomJEb2Qh4VHTPNRO4GPZh0V7VRbiWwkRg==,
-            }
-
-    turndown@7.2.4:
-        resolution:
-            {
-                integrity: sha512-I8yFsfRzmzK0WV1pNNOA4A7y4RDfFxPRxb3t+e3ui14qSGOxGtiSP6GjeX+Y6CHb7HYaFj7ECUD7VE5kQMZWGQ==,
-            }
-        engines: { node: ">=18", npm: ">=9" }
-
     type-detect@4.0.8:
         resolution:
             {
@@ -7253,8 +7216,6 @@ snapshots:
         transitivePeerDependencies:
             - ws
 
-    "@mixmark-io/domino@2.2.0": {}
-
     "@octokit/auth-token@5.1.2": {}
 
     "@octokit/core@6.1.6":
@@ -7837,8 +7798,6 @@ snapshots:
 
     "@types/tough-cookie@4.0.5": {}
 
-    "@types/turndown@5.0.6": {}
-
     "@types/uuid@10.0.0": {}
 
     "@types/yargs-parser@21.0.3": {}
@@ -7847,7 +7806,8 @@ snapshots:
         dependencies:
             "@types/yargs-parser": 21.0.3
 
-    "@xmldom/xmldom@0.8.13": {}
+    "@xmldom/xmldom@0.8.13":
+        optional: true
 
     abort-controller-x@0.5.0: {}
 
@@ -7973,7 +7933,8 @@ snapshots:
 
     binary-extensions@2.3.0: {}
 
-    bluebird@3.4.7: {}
+    bluebird@3.4.7:
+        optional: true
 
     bowser@2.14.1: {}
 
@@ -8087,7 +8048,8 @@ snapshots:
 
     convert-source-map@2.0.0: {}
 
-    core-util-is@1.0.3: {}
+    core-util-is@1.0.3:
+        optional: true
 
     create-jest@29.7.0(@types/node@22.19.17)(ts-node@10.9.2(@swc/core@1.15.26)(@types/node@22.19.17)(typescript@5.9.3)):
         dependencies:
@@ -8138,13 +8100,15 @@ snapshots:
 
     diff@4.0.4: {}
 
-    dingbat-to-unicode@1.0.1: {}
+    dingbat-to-unicode@1.0.1:
+        optional: true
 
     dotenv@16.6.1: {}
 
     duck@0.1.12:
         dependencies:
             underscore: 1.13.8
+        optional: true
 
     dunder-proto@1.0.1:
         dependencies:
@@ -8394,7 +8358,7 @@ snapshots:
             jsonwebtoken: 9.0.3
             load-esm: 1.0.3
             mime-types: 2.1.35
-            retry-axios: 2.6.0(axios@1.15.0(debug@4.4.3))
+            retry-axios: 2.6.0(axios@1.15.0)
             tough-cookie: 4.1.4
         transitivePeerDependencies:
             - supports-color
@@ -8407,7 +8371,8 @@ snapshots:
 
     ignore@7.0.5: {}
 
-    immediate@3.0.6: {}
+    immediate@3.0.6:
+        optional: true
 
     import-local@3.2.0:
         dependencies:
@@ -8437,7 +8402,8 @@ snapshots:
 
     is-stream@2.0.1: {}
 
-    isarray@1.0.0: {}
+    isarray@1.0.0:
+        optional: true
 
     isexe@2.0.0: {}
 
@@ -8846,6 +8812,7 @@ snapshots:
             pako: 1.0.11
             readable-stream: 2.3.8
             setimmediate: 1.0.5
+        optional: true
 
     jwa@2.0.1:
         dependencies:
@@ -8905,6 +8872,7 @@ snapshots:
     lie@3.3.0:
         dependencies:
             immediate: 3.0.6
+        optional: true
 
     lines-and-columns@1.2.4: {}
 
@@ -8949,6 +8917,7 @@ snapshots:
             duck: 0.1.12
             option: 0.2.4
             underscore: 1.13.8
+        optional: true
 
     lru-cache@5.1.1:
         dependencies:
@@ -8976,6 +8945,7 @@ snapshots:
             path-is-absolute: 1.0.1
             underscore: 1.13.8
             xmlbuilder: 10.1.1
+        optional: true
 
     marked-terminal@7.3.0(marked@15.0.12):
         dependencies:
@@ -9096,7 +9066,8 @@ snapshots:
 
     openapi-types@12.1.3: {}
 
-    option@0.2.4: {}
+    option@0.2.4:
+        optional: true
 
     p-finally@1.0.0: {}
 
@@ -9128,7 +9099,8 @@ snapshots:
 
     p-try@2.2.0: {}
 
-    pako@1.0.11: {}
+    pako@1.0.11:
+        optional: true
 
     parse-json@5.2.0:
         dependencies:
@@ -9181,7 +9153,8 @@ snapshots:
             ansi-styles: 5.2.0
             react-is: 18.3.1
 
-    process-nextick-args@2.0.1: {}
+    process-nextick-args@2.0.1:
+        optional: true
 
     prompts@2.4.2:
         dependencies:
@@ -9226,6 +9199,7 @@ snapshots:
             safe-buffer: 5.1.2
             string_decoder: 1.1.1
             util-deprecate: 1.0.2
+        optional: true
 
     reflect-metadata@0.2.2: {}
 
@@ -9248,7 +9222,7 @@ snapshots:
             path-parse: 1.0.7
             supports-preserve-symlinks-flag: 1.0.0
 
-    retry-axios@2.6.0(axios@1.15.0(debug@4.4.3)):
+    retry-axios@2.6.0(axios@1.15.0):
         dependencies:
             axios: 1.15.0(debug@4.4.3)
 
@@ -9256,7 +9230,8 @@ snapshots:
 
     rfdc@1.4.1: {}
 
-    safe-buffer@5.1.2: {}
+    safe-buffer@5.1.2:
+        optional: true
 
     safe-buffer@5.2.1: {}
 
@@ -9266,7 +9241,8 @@ snapshots:
 
     semver@7.7.4: {}
 
-    setimmediate@1.0.5: {}
+    setimmediate@1.0.5:
+        optional: true
 
     shebang-command@2.0.0:
         dependencies:
@@ -9323,6 +9299,7 @@ snapshots:
     string_decoder@1.1.1:
         dependencies:
             safe-buffer: 5.1.2
+        optional: true
 
     strip-ansi@6.0.1:
         dependencies:
@@ -9458,12 +9435,6 @@ snapshots:
 
     tslib@2.8.1: {}
 
-    turndown-plugin-gfm@1.0.2: {}
-
-    turndown@7.2.4:
-        dependencies:
-            "@mixmark-io/domino": 2.2.0
-
     type-detect@4.0.8: {}
 
     type-fest@0.21.3: {}
@@ -9479,7 +9450,8 @@ snapshots:
 
     uint8array-extras@1.5.0: {}
 
-    underscore@1.13.8: {}
+    underscore@1.13.8:
+        optional: true
 
     undici-types@5.26.5: {}
 
@@ -9504,7 +9476,8 @@ snapshots:
             querystringify: 2.2.0
             requires-port: 1.0.0
 
-    util-deprecate@1.0.2: {}
+    util-deprecate@1.0.2:
+        optional: true
 
     uuid@10.0.0: {}
 
@@ -9580,7 +9553,8 @@ snapshots:
 
     ws@8.20.0: {}
 
-    xmlbuilder@10.1.1: {}
+    xmlbuilder@10.1.1:
+        optional: true
 
     y18n@5.0.8: {}
 

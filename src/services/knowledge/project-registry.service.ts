@@ -75,7 +75,7 @@ export class ProjectRegistryService {
     /**
      * Derives a registry from the locally synced onboarding directories, for a bucket no
      * ingestion pipeline has written a registry.json for yet. It has no aliases and no summaries,
-     * so disambiguation prompts are thinner, but routing still works.
+     * so the agent's project listing is thinner, but project-scoped search still works.
      */
     private async loadFromLocalSync(): Promise<ProjectRegistry | undefined> {
         const baseDir = join(dirname(this.config.getPersonalConfigPath()), "onboarding");

@@ -4,7 +4,14 @@ import { RetrievedChunk } from "../../integrations/aws/services/bedrock-knowledg
 import { AnswerWriterAgent } from "./agents/answer-writer.agent";
 import { FollowUp, FollowUpGeneratorAgent } from "./agents/follow-up-generator.agent";
 import { MentorAgentService } from "./agent/mentor-agent.service";
-import { CARRY_OVER_TURNS, ChatSession, ChatTurn, SessionDigest, contextTurns } from "./chat-session.model";
+import {
+    CARRY_OVER_TURNS,
+    ChatSession,
+    ChatTurn,
+    SessionDigest,
+    contextTurns,
+    nextTurnIndex,
+} from "./chat-session.model";
 import { redactSecrets } from "./redact-secrets";
 import { findUnsupportedIdentifiers } from "./unsupported-identifiers";
 import { SessionRef, describeOwner, getOwnerId, newSessionId } from "./session-identity";
@@ -101,7 +108,7 @@ export class AnswerFlowService {
             ref,
             session,
             turn: {
-                index: session.turns.length,
+                index: nextTurnIndex(session),
                 question,
                 answer,
                 answerGist,

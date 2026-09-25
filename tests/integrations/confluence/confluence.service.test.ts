@@ -4,7 +4,7 @@ import { ConfigService } from "../../../src/services/config-service";
 // ---------------------------------------------------------------------------
 // ConfluenceService — Unit Tests
 // The service is a pure API client. It returns raw ConfluencePageApiResponse
-// objects (Confluence Storage Format XHTML). No HtmlNormalizerService is injected.
+// objects (Confluence Storage Format XHTML), with no Markdown conversion.
 // ---------------------------------------------------------------------------
 
 describe("ConfluenceService", () => {

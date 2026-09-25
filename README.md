@@ -116,11 +116,11 @@ Run it with no options to see the modes above.
 
 ### How `--chat` answers
 
-Each question runs through a small chain of agents rather than a single retrieval-and-summarize step:
+Each question goes to a single mentor agent that searches the Knowledge Base as it needs to, rather than through a fixed retrieve-then-summarize step:
 
-1. **Intent classification** — is this a general engineering question, a question about one of our projects, or a question about what the assistant knows? General questions are answered directly, without retrieval.
-2. **Automatic project routing** — the project is resolved from the question, from the project you have been discussing, or by retrieving broadly and seeing which project the matching documents actually belong to. You are asked to choose only when two projects are genuinely plausible.
-3. **Mentoring answer** — answers the question, explains why the thing exists, how it works, where it lives, and what to watch out for, rather than quoting document excerpts back.
+1. **Search until it can answer** — the agent searches broadly or within one project, looks up which projects are indexed, and recalls earlier turns, choosing which of these a question needs and searching again with different wording when the first results miss.
+2. **Project from the evidence** — the project an answer is labelled with is read off the documents it retrieved, not decided in advance. When those documents come from more than one project, the answer is given without a project label; you are never asked to choose one.
+3. **Mentoring answer** — explains the thing the way a senior engineer would, at the length the question deserves, rather than quoting document excerpts back. Anything the answer names that the sources do not mention is revised out, and anything shaped like a credential is redacted.
 4. **Follow-up suggestions** — three or four questions you can select to keep going, each one grounded in material the Knowledge Base can actually answer.
 
 Conversation history is kept so follow-ups work: "and how does it fail?" is understood against the previous answer. History lives in memory by default, or in DynamoDB when a `conversationTable` is configured (see "Cloud" below), which is what lets a later run continue the same conversation.
@@ -129,7 +129,7 @@ For more on how the corpus is built and queried, see [ONBOARDING.md](ONBOARDING.
 
 `--knowledge-base` opens an interactive prompt in the terminal. Enter a question to display the ranked chunks, relevance scores, source locations, and metadata returned by Bedrock. This uses the Knowledge Base `Retrieve` API—the equivalent of the AWS console's **Standard retrieval only** mode—and does not generate an AI answer. Submit an empty question, type `exit`, `quit`, or `:q`, or press Ctrl+C to leave the prompt.
 
-`--chat` is the RAG version: each question is first sent through the same Knowledge Base retrieval as `--knowledge-base`, then the retrieved chunks plus your question are sent to your **configured LLM** (whichever AI/LLM provider and model are set up via `sat-cli init` → "AI / LLM providers" — Anthropic, OpenAI, Gemini, Bedrock, etc.) to produce a synthesized answer instead of raw chunks. Add `--project "Saturam"` to apply a Bedrock metadata filter (`project = saturam`) and restrict the answer to that project's indexed documents. If no LLM provider is configured yet, it tells you to run `sat-cli init` first instead of failing partway through. Requires both an LLM provider and Bedrock Knowledge Base to be configured.
+`--chat` is the RAG version: it uses the same Knowledge Base retrieval as `--knowledge-base`, but your **configured LLM** (whichever AI/LLM provider and model are set up via `sat-cli init` → "AI / LLM providers" — Anthropic, OpenAI, Gemini, Bedrock, etc.) runs the searches and writes a synthesized answer from what they return instead of printing raw chunks. `--project` applies only to `--knowledge-base`; `--chat` ignores it and infers the project from what it retrieves. If no LLM provider is configured yet, it tells you to run `sat-cli init` first instead of failing partway through. Requires both an LLM provider and Bedrock Knowledge Base to be configured.
 
 ## Cloud (AWS S3 & Bedrock Knowledge Base)
 

@@ -30,7 +30,7 @@ const INPUTS = [
     {
         name: "chat",
         description:
-            "Ask questions and get a mentoring answer grounded in the Bedrock Knowledge Base. The project is determined automatically per question (you are asked only when it is genuinely ambiguous), and each answer comes with follow-up questions you can select. Requires both an AI/LLM provider (sat-cli init → AI / LLM providers) and Bedrock Knowledge Base (sat-cli init → Cloud) to be configured",
+            "Ask questions and get a mentoring answer grounded in the Bedrock Knowledge Base. The project is inferred per question from the documents retrieved; when they span more than one project, the answer is given without a project label rather than asking you to choose. Each answer comes with follow-up questions you can select. Requires both an AI/LLM provider (sat-cli init → AI / LLM providers) and Bedrock Knowledge Base (sat-cli init → Cloud) to be configured",
         schema: z.boolean().optional(),
     },
     {
@@ -278,9 +278,9 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
     /**
      * Interactive mentoring chat.
      *
-     * Each question runs the full answering flow: intent classification, automatic project
-     * routing (asking the user only when the corpus genuinely says two projects are plausible),
-     * a mentor-style answer, and follow-up suggestions the user can select to continue.
+     * Each question goes to the mentor agent, which searches the Knowledge Base until it can
+     * answer, and comes back with follow-up suggestions the user can select to continue. The
+     * project is read off the retrieved evidence, never asked for.
      */
     private async runChatSearch(newSession?: boolean): Promise<void> {
         const hasLlm = await this.configService.hasAnyLLMProviderConfigured();
