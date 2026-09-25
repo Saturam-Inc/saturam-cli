@@ -69,7 +69,7 @@ describe("Azure OpenAI provider", () => {
     });
 
     it("targets the deployment URL with api-version and the api-key header", async () => {
-        const llm = new LlmService(mockConfig(AZURE_CONFIG));
+        const llm = new LlmService(mockConfig(AZURE_CONFIG), {} as any);
 
         const reply = await llm.prompt([new HumanMessage("ping")], LLMModel.AZURE_OPENAI_CUSTOM);
 
@@ -82,7 +82,10 @@ describe("Azure OpenAI provider", () => {
     });
 
     it("strips a trailing slash so the deployment path is not doubled", async () => {
-        const llm = new LlmService(mockConfig({ ...AZURE_CONFIG, azureEndpoint: "https://my-res.openai.azure.com/" }));
+        const llm = new LlmService(
+            mockConfig({ ...AZURE_CONFIG, azureEndpoint: "https://my-res.openai.azure.com/" }),
+            {} as any,
+        );
 
         await llm.prompt([new HumanMessage("ping")], LLMModel.AZURE_OPENAI_CUSTOM);
 
@@ -93,7 +96,7 @@ describe("Azure OpenAI provider", () => {
         process.env.AZURE_OPENAI_ENDPOINT = "https://env-res.openai.azure.com";
         process.env.AZURE_OPENAI_DEPLOYMENT_NAME = "env-deployment";
         process.env.AZURE_OPENAI_API_VERSION = "2025-01-01";
-        const llm = new LlmService(mockConfig(undefined));
+        const llm = new LlmService(mockConfig(undefined), {} as any);
 
         await llm.prompt([new HumanMessage("ping")], LLMModel.AZURE_OPENAI_CUSTOM);
 
@@ -103,7 +106,7 @@ describe("Azure OpenAI provider", () => {
     });
 
     it("defaults the API version when none is configured", async () => {
-        const llm = new LlmService(mockConfig({ ...AZURE_CONFIG, azureApiVersion: undefined }));
+        const llm = new LlmService(mockConfig({ ...AZURE_CONFIG, azureApiVersion: undefined }), {} as any);
 
         await llm.prompt([new HumanMessage("ping")], LLMModel.AZURE_OPENAI_CUSTOM);
 
@@ -111,13 +114,13 @@ describe("Azure OpenAI provider", () => {
     });
 
     it("fails with an actionable message when the endpoint is missing", async () => {
-        const llm = new LlmService(mockConfig({ ...AZURE_CONFIG, azureEndpoint: undefined }));
+        const llm = new LlmService(mockConfig({ ...AZURE_CONFIG, azureEndpoint: undefined }), {} as any);
 
         await expect(llm.getModel(LLMModel.AZURE_OPENAI_CUSTOM)).rejects.toThrow(/AZURE_OPENAI_ENDPOINT/);
     });
 
     it("fails with an actionable message when the deployment name is missing", async () => {
-        const llm = new LlmService(mockConfig({ ...AZURE_CONFIG, azureDeploymentName: undefined }));
+        const llm = new LlmService(mockConfig({ ...AZURE_CONFIG, azureDeploymentName: undefined }), {} as any);
 
         await expect(llm.getModel(LLMModel.AZURE_OPENAI_CUSTOM)).rejects.toThrow(/AZURE_OPENAI_DEPLOYMENT_NAME/);
     });

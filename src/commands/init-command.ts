@@ -7,12 +7,16 @@ import {
     CloudProvider,
     CloudProviderConfig,
     ConfigService,
+    isLoopbackHostname,
     KEYLESS_PROVIDERS,
     PersonalConfiguration,
     ProviderConfig,
     PROVIDER_ENV_VARS,
     PROVIDER_MODELS,
+    RemoteConfig,
 } from "../services/config-service";
+import { RemoteCredentialService } from "../services/remote-credential.service";
+import { normalizeBaseUrl } from "../utils/url-utils";
 import { TypedCommand, TypedInputs } from "./base";
 
 const logger = getLogger("InitCommand");
@@ -43,12 +47,18 @@ const MODEL_DISPLAY_NAMES: Record<LLMModel, string> = {
     // Anthropic
     [LLMModel.ANTHROPIC_CLAUDE_4_SONNET]: "Claude 4 Sonnet (latest)",
     [LLMModel.ANTHROPIC_CLAUDE_4_5_SONNET]: "Claude 4.5 Sonnet",
+    [LLMModel.ANTHROPIC_CLAUDE_4_6_SONNET]: "Claude 4.6 Sonnet",
     [LLMModel.ANTHROPIC_CLAUDE_4_6_OPUS]: "Claude 4.6 Opus (1M context)",
     // Bedrock
+    [LLMModel.BEDROCK_CLAUDE_3_5_SONNET]: "Claude 3.5 Sonnet v2",
+    [LLMModel.BEDROCK_CLAUDE_3_7_SONNET]: "Claude 3.7 Sonnet",
+    [LLMModel.BEDROCK_CLAUDE_3_5_HAIKU]: "Claude 3.5 Haiku",
     [LLMModel.BEDROCK_CLAUDE_4_SONNET]: "Bedrock Claude 4 Sonnet",
     [LLMModel.BEDROCK_CLAUDE_4_5_SONNET]: "Bedrock Claude 4.5 Sonnet",
+    [LLMModel.BEDROCK_CLAUDE_4_6_SONNET]: "Bedrock Claude 4.6 Sonnet",
     [LLMModel.BEDROCK_CLAUDE_4_6_OPUS]: "Bedrock Claude 4.6 Opus",
     [LLMModel.BEDROCK_NOVA_PRO]: "Amazon Nova Pro",
+    [LLMModel.BEDROCK_CUSTOM]: "Custom Bedrock model (specify model ID or ARN)",
     // Gemini
     [LLMModel.GEMINI_2_5_PRO]: "Gemini 2.5 Pro",
     [LLMModel.GEMINI_2_5_FLASH]: "Gemini 2.5 Flash",
@@ -87,10 +97,6 @@ const MODEL_DISPLAY_NAMES: Record<LLMModel, string> = {
     [LLMModel.SELF_HOSTED_CUSTOM]: "Self Hosted LLM",
 };
 
-function normalizeBaseUrl(baseUrl: string): string {
-    return baseUrl.replace(/\/+$/, "");
-}
-
 /**
  * Azure's endpoint must be the bare resource URL — getEndpoint() in @langchain/openai appends
  * "/openai/deployments/<name>" itself, so a pasted full deployment URL would double up.
@@ -116,6 +122,35 @@ function getBearerAuthHeaders(accessToken?: string): Record<string, string> | un
     return accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined;
 }
 
+function validateRemoteUrl(val: string): true | string {
+    const trimmed = val.trim();
+    if (!trimmed) {
+        return "Remote URL is required.";
+    }
+    let parsed: URL;
+    try {
+        parsed = new URL(trimmed);
+    } catch {
+        return "Invalid URL format. Please enter a valid URL (e.g. https://api.example.com).";
+    }
+    if (parsed.username || parsed.password) {
+        return "Remote URL must not contain user credentials (username/password).";
+    }
+    if (parsed.search || parsed.hash) {
+        return "Remote URL must not contain query parameters or URL fragments.";
+    }
+    if (parsed.protocol === "https:") {
+        return true;
+    }
+    if (parsed.protocol === "http:") {
+        if (isLoopbackHostname(parsed.hostname)) {
+            return true;
+        }
+        return "Plain HTTP is only allowed for loopback addresses (localhost/127.0.0.1). Use HTTPS for remote servers.";
+    }
+    return "Remote URL must use https:// or http:// (loopback only).";
+}
+
 @Service()
 export class InitCommand implements TypedCommand<typeof INPUTS> {
     readonly name = "init";
@@ -124,7 +159,10 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
     readonly aliases = ["i", "setup"];
     readonly inputs = INPUTS;
 
-    constructor(private readonly config: ConfigService) {}
+    constructor(
+        private readonly config: ConfigService,
+        private readonly remoteCredentials: RemoteCredentialService,
+    ) {}
 
     public async execute(_inputs: TypedInputs<typeof INPUTS>): Promise<void> {
         logger.info("Welcome to Saturam Engineering CLI setup!\n");
@@ -164,7 +202,12 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         }
 
         // ai_providers — fall through to full AI setup
-        const existing = await this.config.loadPersonalConfig();
+        let existing: PersonalConfiguration = { providers: {} };
+        try {
+            existing = await this.config.loadPersonalConfig();
+        } catch (err) {
+            logger.warn(`Could not load existing config (${err instanceof Error ? err.message : String(err)}). Proceeding with fresh setup.`);
+        }
         const hasExisting = Object.keys(existing.providers ?? {}).length > 0;
 
         if (hasExisting) {
@@ -182,6 +225,7 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
                     { name: "Configure Atlassian (Jira & Confluence)", value: "atlassian" },
                     { name: "Configure Google (Drive / Docs / Sheets)", value: "google" },
                     { name: "Configure Cloud (AWS / Azure / GCP)", value: "cloud" },
+                    { name: "Configure remote credentials", value: "remote" },
                     { name: "Exit", value: "exit" },
                 ],
             });
@@ -189,6 +233,37 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
             if (action === "exit") return;
             if (action === "cloud") {
                 await this.configureCloudCredentials();
+                return;
+            }
+            if (action === "remote") {
+                const enableRemote = await confirm({
+                    message: existing.remote
+                        ? "Remote credentials mode is currently ENABLED. Keep remote credentials enabled?"
+                        : "Enable remote AWS credential retrieval mode?",
+                    default: !!existing.remote,
+                });
+                if (enableRemote) {
+                    const remote = await this.configureRemote(existing.remote);
+                    const updatedConfig: PersonalConfiguration = { ...existing, remote };
+                    if (updatedConfig.providers?.bedrock?.awsProfile) {
+                        logger.info("Clearing local awsProfile from Bedrock provider configuration since remote mode is now enabled.");
+                        updatedConfig.providers.bedrock = {
+                            ...updatedConfig.providers.bedrock,
+                            awsProfile: undefined,
+                        };
+                    }
+                    await this.config.savePersonalConfig(updatedConfig);
+                    logger.info("\nRemote credential configuration saved.");
+                } else {
+                    const newConfig = { ...existing };
+                    delete newConfig.remote;
+                    if (newConfig.providers?.bedrock?.awsProfile) {
+                        logger.info(`Remote mode disabled. Bedrock will use configured AWS profile '${newConfig.providers.bedrock.awsProfile}'.`);
+                    } else {
+                        logger.info("\nRemote credential mode disabled. Bedrock will use the default AWS credential chain.");
+                    }
+                    await this.config.savePersonalConfig(newConfig);
+                }
                 return;
             }
             if (action === "model") {
@@ -527,8 +602,22 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
 
         // Step 2: Configure each provider
         const providers: PersonalConfiguration["providers"] = {};
+        let remoteConfig: RemoteConfig | undefined = existing.remote;
+        let bedrockConfiguredInWizard = false;
+
         for (const provider of selectedProviders) {
-            providers[provider] = await this.configureProvider(provider, existing.providers?.[provider]);
+            const res = await this.configureProvider(provider, existing.providers?.[provider], existing.remote);
+            providers[provider] = res.providerConfig;
+            if (provider === AIProvider.BEDROCK) {
+                bedrockConfiguredInWizard = true;
+                if (res.remoteConfig) {
+                    remoteConfig = res.remoteConfig;
+                } else if (res.remoteExplicitlyDisabled) {
+                    remoteConfig = undefined;
+                }
+            } else if (res.remoteConfig) {
+                remoteConfig = res.remoteConfig;
+            }
         }
 
         // Step 3: Select default provider and model
@@ -548,49 +637,161 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         // Step 4: SCM platforms (GitHub, Bitbucket)
         const scmConfig = await this.configureSCMPlatforms(existing);
 
-        return {
+        // Step 5: Remote credential retrieval (only ask if Bedrock was not configured in step 2)
+        const remote = bedrockConfiguredInWizard
+            ? remoteConfig
+            : (remoteConfig ?? (await this.maybeConfigureRemote(existing.remote)));
+
+        const finalConfig: PersonalConfiguration = {
             defaultProvider,
             defaultModel,
             providers,
             ...scmConfig,
         };
+        if (remote) {
+            finalConfig.remote = remote;
+        }
+
+        return finalConfig;
     }
 
-    private async configureProvider(provider: AIProvider, existing?: ProviderConfig): Promise<ProviderConfig> {
+    /**
+     * Asks whether to enable remote credential retrieval, and configures it if so.
+     * Remote mode lets SAT-CLI obtain AWS credentials from a remote URL instead of
+     * requiring local AWS credentials.
+     */
+    private async maybeConfigureRemote(existing?: RemoteConfig): Promise<RemoteConfig | undefined> {
+        logger.info("\n--- Remote Credential Retrieval ---");
+        logger.info("Remote mode fetches AWS credentials from a remote URL (no local AWS setup required).");
+
+        const enable = await confirm({
+            message: "Enable remote credential retrieval?",
+            default: !!existing,
+        });
+        if (!enable) return undefined;
+
+        return this.configureRemote(existing);
+    }
+
+    /** Prompts for the remote URL and token, with validation and connectivity probe. */
+    private async configureRemote(existing?: RemoteConfig): Promise<RemoteConfig> {
+        const url = (
+            await input({
+                message: "Remote credential API URL:",
+                default: existing?.url,
+                validate: validateRemoteUrl,
+            })
+        ).trim();
+
+        let parsed: URL;
+        try {
+            parsed = new URL(url);
+        } catch {
+            throw new Error(`Invalid URL: ${url}`);
+        }
+        const isLoopback = isLoopbackHostname(parsed.hostname);
+
+        const hint = !isLoopback
+            ? (existing?.token ? " (press enter to keep existing)" : " (required for remote endpoint)")
+            : (existing?.token ? " (press enter to keep existing)" : " (optional for loopback, leave empty to skip)");
+
+        const tokenInput = await password({
+            message: `Remote token${hint}:`,
+            mask: "*",
+            validate: (value) => {
+                if (!isLoopback && !existing?.token && (!value || !value.trim())) {
+                    return "Remote token is required for non-loopback endpoints.";
+                }
+                return true;
+            },
+        });
+        const token = (tokenInput || existing?.token)?.trim() || undefined;
+
+        logger.info(`Resolved remote URL: ${url}`);
+        logger.info(`Token configured: ${token ? "Yes" : "No"}`);
+
+        // Probe endpoint
+        logger.info("Probing remote credential endpoint...");
+        const probeResult = await this.remoteCredentials.probeCredentials(url, token);
+        if (probeResult.success) {
+            logger.info(`✓ ${probeResult.message}`);
+        } else {
+            logger.warn(`⚠ ${probeResult.message}`);
+            const proceed = await confirm({
+                message: "Endpoint verification failed. Do you want to save this configuration anyway?",
+                default: false,
+            });
+            if (!proceed) {
+                return this.configureRemote(existing);
+            }
+        }
+
+        return { url, token };
+    }
+
+    private async configureProvider(
+        provider: AIProvider,
+        existing?: ProviderConfig,
+        existingRemote?: RemoteConfig,
+    ): Promise<{ providerConfig: ProviderConfig; remoteConfig?: RemoteConfig; remoteExplicitlyDisabled?: boolean }> {
         logger.info(`\nConfiguring ${PROVIDER_DISPLAY_NAMES[provider]}...`);
 
         if (provider === AIProvider.BEDROCK) {
-            return this.configureBedrockProvider(existing);
+            return this.configureBedrockProvider(existing, existingRemote);
         }
 
         if (provider === AIProvider.OPENAI) {
-            return this.configureOpenAIProvider(existing);
+            return { providerConfig: await this.configureOpenAIProvider(existing) };
         }
 
         if (provider === AIProvider.AZURE_OPENAI) {
-            return this.configureAzureOpenAIProvider(existing);
+            return { providerConfig: await this.configureAzureOpenAIProvider(existing) };
         }
 
         if (provider === AIProvider.OLLAMA) {
-            return this.configureOllamaProvider(existing);
+            return { providerConfig: await this.configureOllamaProvider(existing) };
         }
 
         if (provider === AIProvider.SELF_HOSTED) {
-            return this.configureSelfHostedProvider(existing);
+            return { providerConfig: await this.configureSelfHostedProvider(existing) };
         }
 
         // Standard API key provider
         const apiKey = await this.promptForApiKey(provider, existing?.apiKey);
-        return { apiKey, enabled: true };
+        return { providerConfig: { apiKey, enabled: true } };
     }
 
-    private async configureBedrockProvider(existing?: ProviderConfig): Promise<ProviderConfig> {
-        logger.info("Bedrock uses your AWS credentials (no API key needed).");
+    private async configureBedrockProvider(
+        existing?: ProviderConfig,
+        existingRemote?: RemoteConfig,
+    ): Promise<{ providerConfig: ProviderConfig; remoteConfig?: RemoteConfig; remoteExplicitlyDisabled?: boolean }> {
+        logger.info("\n--- AWS Bedrock Credentials ---");
 
-        const awsProfile = await input({
-            message: "AWS CLI profile name (leave empty for default credential chain):",
-            default: existing?.awsProfile ?? process.env.AWS_PROFILE ?? "",
+        const useRemote = await confirm({
+            message: "Configure remote AWS credential API URL for Bedrock?",
+            default: existingRemote ? true : false,
         });
+
+        let remoteConfig: RemoteConfig | undefined;
+        let remoteExplicitlyDisabled = false;
+        if (useRemote) {
+            remoteConfig = await this.configureRemote(existingRemote);
+        } else if (existingRemote) {
+            const disableExistingRemote = await confirm({
+                message: "Remote credential retrieval is currently configured. Disable remote credentials?",
+                default: false,
+            });
+            if (disableExistingRemote) {
+                remoteExplicitlyDisabled = true;
+            }
+        }
+
+        const awsProfile = useRemote
+            ? undefined
+            : await input({
+                  message: "AWS CLI profile name (leave empty for default credential chain):",
+                  default: existing?.awsProfile ?? process.env.AWS_PROFILE ?? "",
+              });
 
         const awsRegion = await input({
             message: "AWS region:",
@@ -610,9 +811,12 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         }
 
         return {
-            enabled: true,
-            awsProfile: awsProfile || undefined,
-            awsRegion,
+            providerConfig: {
+                enabled: true,
+                awsProfile: awsProfile || undefined,
+                awsRegion,
+            },
+            remoteConfig,
         };
     }
 
@@ -827,9 +1031,25 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
             })),
         });
 
-        const providerConfig = await this.configureProvider(provider, existing.providers?.[provider]);
+        const { providerConfig, remoteConfig, remoteExplicitlyDisabled } = await this.configureProvider(
+            provider,
+            existing.providers?.[provider],
+            existing.remote,
+        );
         const providers = { ...existing.providers, [provider]: providerConfig };
-        const config: PersonalConfiguration = { ...existing, providers };
+        const config: PersonalConfiguration = {
+            ...existing,
+            providers,
+        };
+        if (provider === AIProvider.BEDROCK) {
+            if (remoteConfig) {
+                config.remote = remoteConfig;
+            } else if (remoteExplicitlyDisabled) {
+                delete config.remote;
+            }
+        } else if (remoteConfig) {
+            config.remote = remoteConfig;
+        }
         await this.config.savePersonalConfig(config);
 
         logger.info(`\n${PROVIDER_DISPLAY_NAMES[provider]} configured successfully.`);
@@ -898,10 +1118,23 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
             value: m,
         }));
 
-        return select({
+        const selected = await select({
             message: "Select your default model:",
             choices,
         });
+
+        if (selected === LLMModel.BEDROCK_CUSTOM) {
+            const customModel = await input({
+                message: "Enter custom Bedrock model ID or ARN:",
+                default: providerConfig?.model ?? "anthropic.claude-3-5-sonnet-20241022-v2:0",
+                validate: (val) => (val.trim() ? true : "Model ID is required"),
+            });
+            if (providerConfig) {
+                providerConfig.model = customModel.trim();
+            }
+        }
+
+        return selected;
     }
 
     private async promptForOllamaModel(providerConfig?: ProviderConfig): Promise<LLMModel> {
@@ -1243,6 +1476,11 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
             } else {
                 logger.info("      Conversation history: in-memory (session only)");
             }
+        }
+        if (config.remote) {
+            const auth = config.remote.token ? "token set" : "no token";
+            logger.info("  Remote credentials:");
+            logger.info(`    URL: ${config.remote.url} (${auth})`);
         }
     }
 }

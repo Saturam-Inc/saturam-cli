@@ -34,6 +34,8 @@ export interface ReviewContext {
 export interface ReviewResult {
     audit: AuditResult;
     artifactsDir: string;
+    durationFormatted: string;
+    durationMs: number;
 }
 
 @Service()
@@ -45,6 +47,7 @@ export class MultiAgentReviewService {
     ) {}
 
     public async run(context: ReviewContext): Promise<ReviewResult> {
+        const startTime = Date.now();
         const artifactsDir = join(this.dir.repoRoot, ".context", "reviews");
         await mkdir(artifactsDir, { recursive: true });
         const base = `pr${context.prNumber}`;
@@ -102,7 +105,12 @@ export class MultiAgentReviewService {
               })()
             : initialAudit;
 
-        return { audit, artifactsDir };
+        const durationMs = Date.now() - startTime;
+        const minutes = Math.floor(durationMs / 60000);
+        const seconds = Math.floor((durationMs % 60000) / 1000);
+        const durationFormatted = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
+
+        return { audit, artifactsDir, durationFormatted, durationMs };
     }
 
     public async cleanup(artifactsDir: string): Promise<void> {

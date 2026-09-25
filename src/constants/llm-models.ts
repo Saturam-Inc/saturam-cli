@@ -14,13 +14,19 @@ export enum LLMModel {
     // Anthropic (direct API)
     ANTHROPIC_CLAUDE_4_SONNET = "claude-4-sonnet-latest",
     ANTHROPIC_CLAUDE_4_5_SONNET = "claude-sonnet-4-5-20250929",
+    ANTHROPIC_CLAUDE_4_6_SONNET = "claude-sonnet-4-6",
     ANTHROPIC_CLAUDE_4_6_OPUS = "claude-opus-4-6",
 
     // AWS Bedrock — base IDs without region prefix; prefix is applied at runtime
+    BEDROCK_CLAUDE_3_5_SONNET = "anthropic.claude-3-5-sonnet-20241022-v2:0",
+    BEDROCK_CLAUDE_3_7_SONNET = "anthropic.claude-3-7-sonnet-20250219-v1:0",
+    BEDROCK_CLAUDE_3_5_HAIKU = "anthropic.claude-3-5-haiku-20241022-v1:0",
     BEDROCK_CLAUDE_4_SONNET = "anthropic.claude-sonnet-4-20250514-v1:0",
     BEDROCK_CLAUDE_4_5_SONNET = "anthropic.claude-sonnet-4-5-20250929-v1:0",
-    BEDROCK_CLAUDE_4_6_OPUS = "anthropic.claude-opus-4-6-v1",
+    BEDROCK_CLAUDE_4_6_SONNET = "anthropic.claude-sonnet-4-6-v1:0",
+    BEDROCK_CLAUDE_4_6_OPUS = "anthropic.claude-opus-4-6-v1:0",
     BEDROCK_NOVA_PRO = "amazon.nova-pro-v1:0",
+    BEDROCK_CUSTOM = "bedrock-custom",
 
     // Google Gemini — verified current IDs against ai.google.dev/gemini-api/docs/models
     // (2026-09). There is no stable non-preview "Pro" tier past 2.5 yet — gemini-3.1-pro-preview
@@ -88,12 +94,18 @@ export const MODEL_CONTEXT_WINDOWS: Record<LLMModel, number> = {
     // Anthropic
     [LLMModel.ANTHROPIC_CLAUDE_4_SONNET]: 200000,
     [LLMModel.ANTHROPIC_CLAUDE_4_5_SONNET]: 200000,
+    [LLMModel.ANTHROPIC_CLAUDE_4_6_SONNET]: 200000,
     [LLMModel.ANTHROPIC_CLAUDE_4_6_OPUS]: 1000000,
     // Bedrock
+    [LLMModel.BEDROCK_CLAUDE_3_5_SONNET]: 200000,
+    [LLMModel.BEDROCK_CLAUDE_3_7_SONNET]: 200000,
+    [LLMModel.BEDROCK_CLAUDE_3_5_HAIKU]: 200000,
     [LLMModel.BEDROCK_CLAUDE_4_SONNET]: 200000,
     [LLMModel.BEDROCK_CLAUDE_4_5_SONNET]: 200000,
+    [LLMModel.BEDROCK_CLAUDE_4_6_SONNET]: 200000,
     [LLMModel.BEDROCK_CLAUDE_4_6_OPUS]: 1000000,
     [LLMModel.BEDROCK_NOVA_PRO]: 300000,
+    [LLMModel.BEDROCK_CUSTOM]: 200000,
     // Gemini
     [LLMModel.GEMINI_2_5_PRO]: 1000000,
     [LLMModel.GEMINI_2_5_FLASH]: 1000000,
@@ -155,13 +167,19 @@ export function getModelContextWindow(model: LLMModel): number {
 const ANTHROPIC_MODELS = new Set([
     LLMModel.ANTHROPIC_CLAUDE_4_SONNET,
     LLMModel.ANTHROPIC_CLAUDE_4_5_SONNET,
+    LLMModel.ANTHROPIC_CLAUDE_4_6_SONNET,
     LLMModel.ANTHROPIC_CLAUDE_4_6_OPUS,
 ]);
 const BEDROCK_MODELS = new Set([
+    LLMModel.BEDROCK_CLAUDE_3_5_SONNET,
+    LLMModel.BEDROCK_CLAUDE_3_7_SONNET,
+    LLMModel.BEDROCK_CLAUDE_3_5_HAIKU,
     LLMModel.BEDROCK_CLAUDE_4_SONNET,
     LLMModel.BEDROCK_CLAUDE_4_5_SONNET,
+    LLMModel.BEDROCK_CLAUDE_4_6_SONNET,
     LLMModel.BEDROCK_CLAUDE_4_6_OPUS,
     LLMModel.BEDROCK_NOVA_PRO,
+    LLMModel.BEDROCK_CUSTOM,
 ]);
 const GEMINI_MODELS = new Set([
     LLMModel.GEMINI_2_5_PRO,

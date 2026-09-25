@@ -16,16 +16,15 @@ import {
     isSelfHostedModel,
 } from "../constants/llm-models";
 import { AIProvider, ConfigService, ProviderConfig } from "./config-service";
+import { RemoteCredentialService, type AwsCredentials } from "./remote-credential.service";
+
+import { normalizeBaseUrl } from "../utils/url-utils";
 
 const logger = getLogger("LlmService");
 
 const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
 const DEFAULT_SELF_HOSTED_TIMEOUT_MS = 120000;
 const DEFAULT_AZURE_OPENAI_API_VERSION = "2024-10-21";
-
-function normalizeBaseUrl(baseUrl: string): string {
-    return baseUrl.replace(/\/+$/, "");
-}
 
 type OllamaChatMessage = {
     role: "system" | "user" | "assistant";
@@ -101,18 +100,25 @@ export class LlmService {
     private llms: Map<string, ChatModel> = new Map();
     private selfHostedQueue = Promise.resolve();
 
-    constructor(private readonly config: ConfigService) {}
+    constructor(
+        private readonly config: ConfigService,
+        private readonly remoteCredentials: RemoteCredentialService,
+    ) {}
 
     public async getModel(model?: LLMModel, options?: LLMOptions): Promise<ChatModel> {
         const selectedModel = model ?? (await this.config.getModel());
+        const isRemoteBedrock = isBedrockModel(selectedModel) && !!(await this.config.getRemoteConfig());
+
         const key = `${selectedModel}:${JSON.stringify(options ?? {})}`;
 
-        if (this.llms.has(key)) {
+        if (!isRemoteBedrock && this.llms.has(key)) {
             return this.llms.get(key)!;
         }
 
         const llm = await this.createModel(selectedModel, options);
-        this.llms.set(key, llm);
+        if (!isRemoteBedrock) {
+            this.llms.set(key, llm);
+        }
         return llm;
     }
 
@@ -162,12 +168,44 @@ export class LlmService {
         }
         const profile = providerConfig?.awsProfile ?? process.env.AWS_PROFILE;
 
-        const credentials: any = profile
-            ? (await import("@aws-sdk/credential-providers")).fromIni({ profile })
-            : undefined;
+        // Credential resolution precedence:
+        // 1. Remote credential mode (SAT_REMOTE_URL / SATENG_REMOTE_URL or config.remote)
+        // 2. AWS Profile (providerConfig.awsProfile or AWS_PROFILE)
+        // 3. Default AWS credential chain (environment variables / IAM roles / ~/.aws/credentials)
+        //
+        // When remote mode is enabled, fresh credentials are affirmatively fetched via
+        // getCredentials() before invocation and passed as static credentials into a
+        // client used for that one invocation (bypassing this.llms client caching and
+        // AWS SDK credential memoization).
+        const remote = await this.config.getRemoteConfig();
+        let credentials: any;
+        if (remote) {
+            logger.debug("Fetching fresh remote AWS credentials for Bedrock invocation.");
+            const remoteCreds = await this.remoteCredentials.getCredentials();
+            credentials = {
+                accessKeyId: remoteCreds.accessKeyId,
+                secretAccessKey: remoteCreds.secretAccessKey,
+                ...(remoteCreds.sessionToken ? { sessionToken: remoteCreds.sessionToken } : {}),
+            };
+        } else if (profile) {
+            credentials = (await import("@aws-sdk/credential-providers")).fromIni({ profile });
+        } else {
+            credentials = undefined;
+        }
 
+        if (model === LLMModel.BEDROCK_CUSTOM && !providerConfig?.model) {
+            throw new Error("Custom Bedrock model ID or ARN is required. Run 'sat-cli init' to configure your custom Bedrock model.");
+        }
+
+        const targetModel =
+            model === LLMModel.BEDROCK_CUSTOM
+                ? providerConfig!.model!
+                : (model as string);
         const regionPrefix = region.startsWith("eu") ? "eu" : region.startsWith("ap") ? "ap" : "us";
-        const resolvedModel = model.startsWith("anthropic.") ? `${regionPrefix}.${model}` : model;
+        const resolvedModel =
+            targetModel.startsWith("anthropic.") && !targetModel.startsWith(`${regionPrefix}.`)
+                ? `${regionPrefix}.${targetModel}`
+                : targetModel;
 
         return new ChatBedrockConverse({
             model: resolvedModel,

@@ -23,7 +23,7 @@ describe("InitCommand Platform Config Flow", () => {
             getPersonalConfigPath: jest.fn().mockReturnValue("/mock/personal/config.json"),
         } as any;
 
-        command = new InitCommand(mockConfig);
+        command = new InitCommand(mockConfig, {} as any);
     });
 
     it("should configure Atlassian credentials from top-level menu", async () => {
