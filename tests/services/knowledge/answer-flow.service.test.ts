@@ -185,4 +185,59 @@ describe("AnswerFlowService", () => {
         const [sessionId] = await store.findRecentSessionIds(getOwnerId(), 1);
         expect((await store.load(ref(sessionId))).digest?.summary).toBe("covered the scheduler");
     });
+
+    describe("with an explicit conversation (the Slack bot)", () => {
+        const alice = { ownerId: "slack#T1#UALICE", sessionId: "20260923T100000Z-C1-000001" };
+        const bob = { ownerId: "slack#T1#UBOB", sessionId: "20260923T100000Z-C1-000002" };
+
+        it("records the turn under the conversation it was given, not this process's", async () => {
+            await flow.ask("how does the scheduler work?", alice);
+
+            expect((await store.load(alice)).turns).toHaveLength(1);
+            expect(await store.findRecentSessionIds(getOwnerId(), 5)).toEqual([]);
+        });
+
+        it("never lets two owners served by one instance see each other's history", async () => {
+            await flow.ask("alice's first question", alice);
+            await flow.ask("bob's first question", bob);
+            await flow.ask("alice's follow-up", alice);
+
+            const bobsCall = mentor.answer.mock.calls[1][0];
+            expect(bobsCall.history.map((turn: any) => turn.question)).toEqual([]);
+
+            const alicesFollowUp = mentor.answer.mock.calls[2][0];
+            expect(alicesFollowUp.history.map((turn: any) => turn.question)).toEqual(["alice's first question"]);
+            expect((await store.load(bob)).turns.map((turn) => turn.question)).toEqual(["bob's first question"]);
+        });
+
+        it("handles concurrent questions from different owners independently", async () => {
+            await Promise.all([flow.ask("from alice", alice), flow.ask("from bob", bob)]);
+
+            expect((await store.load(alice)).turns.map((turn) => turn.question)).toEqual(["from alice"]);
+            expect((await store.load(bob)).turns.map((turn) => turn.question)).toEqual(["from bob"]);
+        });
+
+        it("carries the same owner's earlier thread into a new one", async () => {
+            await flow.ask("how does the scheduler work?", alice);
+            const newThread = { ...alice, sessionId: "20260923T110000Z-C1-000003" };
+
+            await flow.ask("and what triggers it?", newThread);
+
+            const latest = mentor.answer.mock.calls[1][0];
+            expect(latest.history.map((turn: any) => turn.question)).toEqual(["how does the scheduler work?"]);
+            expect((await store.load(newThread)).turns).toHaveLength(1);
+        });
+
+        it("does not disturb the terminal's own session on the same instance", async () => {
+            await flow.ask("terminal question");
+            await flow.ask("slack question", alice);
+            await flow.ask("terminal follow-up");
+
+            const [terminalSession] = await store.findRecentSessionIds(getOwnerId(), 1);
+            expect((await store.load(ref(terminalSession))).turns.map((turn) => turn.question)).toEqual([
+                "terminal question",
+                "terminal follow-up",
+            ]);
+        });
+    });
 });

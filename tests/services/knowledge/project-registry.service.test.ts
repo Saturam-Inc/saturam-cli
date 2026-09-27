@@ -1,4 +1,7 @@
-import { ProjectRegistryService } from "../../../src/services/knowledge/project-registry.service";
+import {
+    ProjectRegistryService,
+    REGISTRY_CACHE_TTL_MS,
+} from "../../../src/services/knowledge/project-registry.service";
 
 describe("ProjectRegistryService", () => {
     let s3: any;
@@ -45,6 +48,16 @@ describe("ProjectRegistryService", () => {
         await service.load();
 
         expect(s3.getStateObject).toHaveBeenCalledTimes(1);
+    });
+
+    it("reloads once the cache is older than its TTL, so a long-lived process sees new projects", async () => {
+        const start = 1_000_000;
+        await service.load(start);
+        await service.load(start + REGISTRY_CACHE_TTL_MS - 1);
+        expect(s3.getStateObject).toHaveBeenCalledTimes(1);
+
+        await service.load(start + REGISTRY_CACHE_TTL_MS);
+        expect(s3.getStateObject).toHaveBeenCalledTimes(2);
     });
 
     it("returns an empty registry rather than throwing when S3 and the local sync both fail", async () => {

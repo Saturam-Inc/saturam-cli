@@ -53,6 +53,10 @@ export enum LLMModel {
     // single sentinel (like SELF_HOSTED_CUSTOM) resolved to the deployment name at call time.
     AZURE_OPENAI_CUSTOM = "azure-openai-custom",
 
+    // Claude on Azure AI Foundry — served through Anthropic's own Messages API at the Foundry
+    // resource. Like AZURE_OPENAI_CUSTOM, a sentinel resolved to the deployment name at call time.
+    AZURE_FOUNDRY_CLAUDE = "azure-foundry-claude",
+
     // Grok
     GROK_2 = "grok-2-1212",
 
@@ -129,6 +133,8 @@ export const MODEL_CONTEXT_WINDOWS: Record<LLMModel, number> = {
         const num = val ? parseInt(val, 10) : NaN;
         return isNaN(num) || num <= 0 ? 128000 : num;
     })(),
+    // Claude on Azure AI Foundry
+    [LLMModel.AZURE_FOUNDRY_CLAUDE]: 200000,
     // Grok
     [LLMModel.GROK_2]: 131072,
     // DeepSeek
@@ -201,6 +207,7 @@ const OPENAI_MODELS = new Set([
     LLMModel.OPENAI_LLAMA_3_3_70B_INSTRUCT,
 ]);
 const AZURE_OPENAI_MODELS = new Set([LLMModel.AZURE_OPENAI_CUSTOM]);
+const AZURE_FOUNDRY_MODELS = new Set([LLMModel.AZURE_FOUNDRY_CLAUDE]);
 const GROK_MODELS = new Set([LLMModel.GROK_2]);
 const DEEPSEEK_MODELS = new Set([LLMModel.DEEPSEEK_CHAT, LLMModel.DEEPSEEK_REASONER]);
 const SELF_HOSTED_MODELS = new Set([LLMModel.SELF_HOSTED_CUSTOM]);
@@ -236,6 +243,10 @@ export function isOpenAIModel(model: LLMModel): boolean {
 
 export function isAzureOpenAIModel(model: LLMModel): boolean {
     return AZURE_OPENAI_MODELS.has(model);
+}
+
+export function isAzureFoundryModel(model: LLMModel): boolean {
+    return AZURE_FOUNDRY_MODELS.has(model);
 }
 
 export function isGrokModel(model: LLMModel): boolean {

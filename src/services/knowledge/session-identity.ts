@@ -32,11 +32,18 @@ export function describeOwner(ownerId: string): string {
  * sessions started in the same second distinct.
  */
 export function newSessionId(now: Date = new Date()): string {
-    const stamp = now
+    return `${sessionTimestamp(now)}-${randomBytes(3).toString("hex")}`;
+}
+
+/**
+ * The chronologically-sortable prefix every session id starts with ("20260923T101500Z"). Exported
+ * so ids minted elsewhere — the Slack bot derives one from a thread — sort alongside these.
+ */
+export function sessionTimestamp(at: Date): string {
+    return at
         .toISOString()
         .replace(/[-:]/g, "")
         .replace(/\.\d+Z$/, "Z");
-    return `${stamp}-${randomBytes(3).toString("hex")}`;
 }
 
 /** Session ids contain no "#", so they can be embedded in a sort key and parsed back out. */

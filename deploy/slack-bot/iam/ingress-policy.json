@@ -1,0 +1,23 @@
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "ReadSlackSecret",
+            "Effect": "Allow",
+            "Action": "secretsmanager:GetSecretValue",
+            "Resource": "arn:aws:secretsmanager:ap-south-1:618647024743:secret:saturam/slack-bot-*"
+        },
+        {
+            "Sid": "EnqueueQuestions",
+            "Effect": "Allow",
+            "Action": "sqs:SendMessage",
+            "Resource": "arn:aws:sqs:ap-south-1:618647024743:saturam-slack-bot-jobs.fifo"
+        },
+        {
+            "Sid": "DeduplicateDeliveries",
+            "Effect": "Allow",
+            "Action": ["dynamodb:PutItem", "dynamodb:DeleteItem"],
+            "Resource": "arn:aws:dynamodb:ap-south-1:618647024743:table/sateng-conversations"
+        }
+    ]
+}

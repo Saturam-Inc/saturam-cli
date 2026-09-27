@@ -24,7 +24,9 @@
         "test": "jest --runInBand",
         "fix:lint": "eslint --fix .",
         "fix:format": "prettier --write .",
-        "test:eval": "jest --config jest.eval.config.ts --runInBand"
+        "test:eval": "jest --config jest.eval.config.ts --runInBand",
+        "slack:dev": "ts-node ./src/entrypoints/slack-socket-mode.ts",
+        "slack:bundle": "node deploy/slack-bot/build.mjs"
     },
     "keywords": [
         "cli"
@@ -35,6 +37,7 @@
         "@swc/core": "^1.6.5",
         "@types/jest": "^29.5.14",
         "@types/node": "^22.0.0",
+        "esbuild": "^0.25.12",
         "jest": "^29.7.0",
         "prettier": "^3.3.0",
         "ts-jest": "^29.2.5",
@@ -45,6 +48,8 @@
         "@aws-sdk/client-bedrock-agent-runtime": "^3.687.0",
         "@aws-sdk/client-dynamodb": "^3.687.0",
         "@aws-sdk/client-s3": "^3.687.0",
+        "@aws-sdk/client-secrets-manager": "^3.687.0",
+        "@aws-sdk/client-sqs": "^3.687.0",
         "@aws-sdk/credential-providers": "^3.687.0",
         "@aws-sdk/lib-dynamodb": "^3.687.0",
         "@inquirer/prompts": "^7.0.1",
@@ -57,6 +62,9 @@
         "@langchain/openai": "^0.5.13",
         "@langchain/xai": "^0.0.3",
         "@octokit/rest": "^21.1.0",
+        "@slack/socket-mode": "^2.0.7",
+        "@slack/types": "^2.22.0",
+        "@slack/web-api": "^7.19.0",
         "commander": "12.1.0",
         "cross-spawn": "^7.0.5",
         "dotenv": "^16.4.5",

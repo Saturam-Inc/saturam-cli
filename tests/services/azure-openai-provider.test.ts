@@ -1,7 +1,7 @@
 import { HumanMessage } from "@langchain/core/messages";
 import { LLMModel, isAzureOpenAIModel } from "../../src/constants/llm-models";
 import { AIProvider, ConfigService, PROVIDER_ENV_VARS } from "../../src/services/config-service";
-import { LlmService } from "../../src/services/llm-service";
+import { LlmService, azureOpenAIAcceptsTemperature, parseAzureOpenAITarget } from "../../src/services/llm-service";
 
 function mockConfig(providerConfig: Record<string, unknown> | undefined, apiKey = "test-azure-key"): ConfigService {
     return {
@@ -22,7 +22,7 @@ const AZURE_CONFIG = {
 describe("Azure OpenAI provider", () => {
     let originalEnv: NodeJS.ProcessEnv;
     let originalFetch: typeof globalThis.fetch;
-    let captured: { url: string; headers: Record<string, string> } | undefined;
+    let captured: { url: string; headers: Record<string, string>; body: any } | undefined;
 
     beforeAll(() => {
         originalEnv = { ...process.env };
@@ -44,7 +44,11 @@ describe("Azure OpenAI provider", () => {
         globalThis.fetch = jest.fn(async (input: any, init: any) => {
             const headers: Record<string, string> = {};
             new Headers(init?.headers ?? {}).forEach((v, k) => (headers[k] = v));
-            captured = { url: typeof input === "string" ? input : String(input?.url ?? input), headers };
+            captured = {
+                url: typeof input === "string" ? input : String(input?.url ?? input),
+                headers,
+                body: init?.body ? JSON.parse(String(init.body)) : undefined,
+            };
             return new Response(
                 JSON.stringify({
                     id: "1",
@@ -124,4 +128,96 @@ describe("Azure OpenAI provider", () => {
 
         await expect(llm.getModel(LLMModel.AZURE_OPENAI_CUSTOM)).rejects.toThrow(/AZURE_OPENAI_DEPLOYMENT_NAME/);
     });
+
+    describe("a Foundry GPT-5-family deployment configured from the portal's Target URI", () => {
+        const TARGET_URI =
+            "https://my-res.cognitiveservices.azure.com/openai/deployments/gpt-5.4-mini/chat/completions?api-version=2025-04-01-preview";
+
+        beforeEach(() => {
+            delete process.env.AZURE_OPENAI_SUPPORTS_TEMPERATURE;
+        });
+
+        it("takes the endpoint, deployment and API version from the Target URI", async () => {
+            process.env.AZURE_OPENAI_ENDPOINT = TARGET_URI;
+            const llm = new LlmService(mockConfig(undefined), {} as any);
+
+            await llm.prompt([new HumanMessage("ping")], LLMModel.AZURE_OPENAI_CUSTOM);
+
+            expect(captured!.url).toBe(TARGET_URI);
+        });
+
+        it("lets explicitly configured values win over what the Target URI carries", async () => {
+            process.env.AZURE_OPENAI_ENDPOINT = TARGET_URI;
+            process.env.AZURE_OPENAI_DEPLOYMENT_NAME = "other-deployment";
+            process.env.AZURE_OPENAI_API_VERSION = "2025-06-01";
+            const llm = new LlmService(mockConfig(undefined), {} as any);
+
+            await llm.prompt([new HumanMessage("ping")], LLMModel.AZURE_OPENAI_CUSTOM);
+
+            expect(captured!.url).toBe(
+                "https://my-res.cognitiveservices.azure.com/openai/deployments/other-deployment/chat/completions?api-version=2025-06-01",
+            );
+        });
+
+        it("sends no temperature, which GPT-5-family models reject", async () => {
+            process.env.AZURE_OPENAI_ENDPOINT = TARGET_URI;
+            const llm = new LlmService(mockConfig(undefined), {} as any);
+
+            await llm.prompt([new HumanMessage("ping")], LLMModel.AZURE_OPENAI_CUSTOM, { temperature: 0.3 });
+
+            expect(captured!.body).not.toHaveProperty("temperature");
+        });
+
+        it("still sends the temperature for a model that accepts one", async () => {
+            const llm = new LlmService(mockConfig(AZURE_CONFIG), {} as any);
+
+            await llm.prompt([new HumanMessage("ping")], LLMModel.AZURE_OPENAI_CUSTOM, { temperature: 0.3 });
+
+            expect(captured!.body.temperature).toBe(0.3);
+        });
+    });
+
+    describe("parseAzureOpenAITarget", () => {
+        it.each([
+            ["https://my-res.openai.azure.com", {}],
+            ["https://my-res.openai.azure.com/", {}],
+            [
+                "https://my-res.cognitiveservices.azure.com/openai/deployments/gpt-5.4-mini/chat/completions?api-version=2025-04-01-preview",
+                { deploymentName: "gpt-5.4-mini", apiVersion: "2025-04-01-preview" },
+            ],
+            ["https://my-res.services.ai.azure.com/openai/v1/", {}],
+        ])("reads %s", (uri, expected) => {
+            const parsed = parseAzureOpenAITarget(uri);
+            expect(parsed.endpoint).toBe(new URL(uri).origin);
+            expect(parsed).toMatchObject(expected);
+        });
+    });
+
+    describe("azureOpenAIAcceptsTemperature", () => {
+        it.each([
+            ["gpt-5.4-mini", false],
+            ["gpt-5", false],
+            ["o3-mini", false],
+            ["gpt-4o-prod", true],
+            ["gpt-4.1", true],
+        ])("%s → %s", (deployment, expected) => {
+            expect(azureOpenAIAcceptsTemperature(deployment, undefined)).toBe(expected);
+        });
+
+        it("defers to an explicit override for a deployment whose name hides the model", () => {
+            expect(azureOpenAIAcceptsTemperature("my-chat-bot", "false")).toBe(false);
+            expect(azureOpenAIAcceptsTemperature("gpt-5-chat", "true")).toBe(true);
+        });
+    });
+
+    it("gives up after a bounded number of retries instead of LangChain's ~90 s default", async () => {
+        (globalThis.fetch as jest.Mock).mockImplementation(async () => new Response("busy", { status: 429 }));
+        const llm = new LlmService(mockConfig(AZURE_CONFIG), {} as any);
+        const started = Date.now();
+
+        await expect(llm.prompt([new HumanMessage("ping")], LLMModel.AZURE_OPENAI_CUSTOM)).rejects.toThrow();
+
+        expect((globalThis.fetch as jest.Mock).mock.calls.length).toBeLessThanOrEqual(3);
+        expect(Date.now() - started).toBeLessThan(15_000);
+    }, 20_000);
 });

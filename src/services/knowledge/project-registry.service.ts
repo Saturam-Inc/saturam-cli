@@ -31,6 +31,13 @@ export type RegistryProject = z.infer<typeof RegistryProjectSchema>;
 export type ProjectRegistry = z.infer<typeof ProjectRegistrySchema>;
 
 /**
+ * How long a loaded registry is trusted. A terminal run never gets near it; it exists for the
+ * long-lived server process (the Slack bot's warm Lambda), which would otherwise keep answering
+ * from whatever project list it saw at cold start while ingestion adds new ones.
+ */
+export const REGISTRY_CACHE_TTL_MS = 10 * 60 * 1000;
+
+/**
  * Knows which projects exist in the knowledge base.
  *
  * Automatic routing needs this and Bedrock cannot supply it: the Retrieve API filters on a
@@ -38,22 +45,25 @@ export type ProjectRegistry = z.infer<typeof ProjectRegistrySchema>;
  * is read from S3, where the ingestion pipeline writes it under the state prefix, and falls back
  * to the locally synced onboarding folders when no pipeline has run against this bucket.
  *
- * Resolved once per process — the project list does not change mid-conversation, and every
- * question would otherwise pay an S3 round trip.
+ * Cached for REGISTRY_CACHE_TTL_MS — the project list does not change mid-conversation, and every
+ * question would otherwise pay an S3 round trip — but not forever, so a long-lived process still
+ * sees projects the ingestion pipeline adds.
  */
 @Service()
 export class ProjectRegistryService {
     private cached: ProjectRegistry | undefined;
+    private cachedAt = 0;
 
     constructor(
         private readonly s3: S3Service,
         private readonly config: ConfigService,
     ) {}
 
-    public async load(): Promise<ProjectRegistry> {
-        if (this.cached) return this.cached;
+    public async load(now: number = Date.now()): Promise<ProjectRegistry> {
+        if (this.cached && now - this.cachedAt < REGISTRY_CACHE_TTL_MS) return this.cached;
 
         this.cached = (await this.loadFromS3()) ?? (await this.loadFromLocalSync()) ?? { projects: [] };
+        this.cachedAt = now;
         if (this.cached.projects.length === 0) {
             logger.debug("Project registry is empty — routing will fall back to unfiltered retrieval.");
         }

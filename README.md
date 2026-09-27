@@ -16,7 +16,7 @@ sat-cli init
 
 This will configure:
 
-- AI provider (Anthropic, OpenAI, Gemini, Bedrock, Grok, DeepSeek, Ollama, Self Hosted LLM, OpenRouter)
+- AI provider (Anthropic, OpenAI, Azure OpenAI, Azure AI Foundry (Claude), Gemini, Bedrock, Grok, DeepSeek, Ollama, Self Hosted LLM, OpenRouter)
 - API keys
 - SCM provider (GitHub, Bitbucket, or GitLab)
 - Integration credentials (Atlassian Jira/Confluence, Google Drive/Docs/Sheets)
@@ -151,6 +151,21 @@ The wizard walks you through, printing instructions for each step:
 Azure and GCP are selectable in the same menu but not yet implemented.
 
 Equivalent environment variables (used as fallbacks by the underlying AWS SDK credential chain when no profile/keys are stored in config): `AWS_PROFILE`, `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`.
+
+The knowledge base, bucket, conversation table and model can also be set with `SATENG_*` environment variables (`SATENG_KB_ID`, `SATENG_S3_BUCKET`, `SATENG_CONVERSATION_TABLE`, `SATENG_MODEL`, …), which override the saved config field by field. That is how the Slack bot is configured on Lambda; the full list is in [src/services/config-environment.ts](src/services/config-environment.ts).
+
+## Slack bot
+
+`sat-cli onboard --chat` also runs as a Slack bot — the same answering flow, and nothing else from the CLI. Mention it in a channel or DM it; it answers in a thread with sources, follow-up buttons and 👍/👎 feedback. Each thread is its own conversation, and each person's history carries across threads.
+
+It runs on AWS as two Lambdas behind API Gateway, with an SQS FIFO queue between them because Slack needs a reply within 3 seconds and an answer takes tens of seconds. Retrieval uses the Bedrock Knowledge Base; answers are written by a GPT deployment (`gpt-5.4-mini`) on Azure AI Foundry (`SATENG_MODEL=azure-openai-custom`, credentials from the `saturam/azure-foundry` secret). Both Lambdas are deployed from one ~3 MB zip that carries only the chat path. The code is in [src/slack/](src/slack/); deployment assets, IAM policies and a sample corpus are in [deploy/slack-bot/](deploy/slack-bot/).
+
+```bash
+pnpm slack:bundle   # → dist/slack-bot/slack-bot-lambda.zip (handlers: ingress.handler, worker.handler)
+pnpm slack:dev      # the whole bot locally over Socket Mode (needs SLACK_APP_TOKEN, SLACK_BOT_TOKEN in .env)
+```
+
+Setting it up from an empty AWS account — knowledge base included — is a step-by-step console guide: [docs/SLACK-BOT-AWS-SETUP.md](docs/SLACK-BOT-AWS-SETUP.md).
 
 ## Ollama
 

@@ -33,6 +33,15 @@ export interface AnswerResult {
     project?: RegistryProject;
 }
 
+/** Context read from the owner's earlier sessions, handed to the agent alongside this one. */
+interface CarriedContext {
+    turns: ChatTurn[];
+    activeProject?: string;
+    learnerGoal?: string;
+}
+
+type Store = Awaited<ReturnType<ConversationStoreProvider["get"]>>;
+
 /** A digest with nothing summarised yet, for a goal recorded before the first refresh. */
 function emptyDigest(): SessionDigest {
     return { summary: "", projectsDiscussed: [], jargonDefined: [], questionsAsked: [], coversUpToIndex: 0 };
@@ -51,13 +60,20 @@ function emptyDigest(): SessionDigest {
  * Now there is one path: hand the question to the agent, let it search until it can answer, then
  * do the three things that genuinely belong in code — check the answer names nothing the sources
  * do not, redact anything shaped like a credential, and write the turn down.
+ *
+ * Two ways to say which conversation a question belongs to:
+ * - No `ref` (the terminal): the process *is* the conversation. The session is resolved once and
+ *   kept on this instance, and carried-over context is read once per run.
+ * - An explicit `ref` (a server — the Slack bot): one instance serves many people at once, so
+ *   nothing about a conversation may live on it. Every call resolves its own session and reads
+ *   its own carry-over, and two owners asking concurrently can never see each other's history.
  */
 @Service()
 export class AnswerFlowService {
     /** The conversation this process is in, once resolved. */
     private currentRef: SessionRef | undefined;
     /** Context read once per run from the owner's previous sessions. */
-    private carried: { turns: ChatTurn[]; activeProject?: string; learnerGoal?: string } | undefined;
+    private carried: CarriedContext | undefined;
     /** Set by startNewSession, consumed by the next resolve. */
     private forcedSession: SessionRef | undefined;
 
@@ -70,9 +86,17 @@ export class AnswerFlowService {
         private readonly stores: ConversationStoreProvider,
     ) {}
 
-    public async ask(question: string): Promise<AnswerResult> {
+    /**
+     * Answers one question.
+     *
+     * @param conversation The conversation to answer within. Omit it in the terminal; pass it from
+     *   anything that serves more than one person (see the class comment).
+     */
+    public async ask(question: string, conversation?: SessionRef): Promise<AnswerResult> {
         const store = await this.stores.get();
-        const { ref, session } = await this.resolveSession(store);
+        const { ref, session } = conversation
+            ? await this.resolveExplicitSession(store, conversation)
+            : await this.resolveSession(store);
         const recentTurns = contextTurns(session);
         const history = [...(session.carriedTurns ?? []), ...session.turns];
 
@@ -125,11 +149,13 @@ export class AnswerFlowService {
      * Records what the learner is here to do, so the agent can pitch its answers to it. Extracted
      * by the digest from what they actually said, rather than asked for up front by a fixed menu.
      */
-    public async setLearnerGoal(goal: string): Promise<void> {
+    public async setLearnerGoal(goal: string, conversation?: SessionRef): Promise<void> {
         const trimmed = goal.trim();
         if (!trimmed) return;
         const store = await this.stores.get();
-        const { ref, session } = await this.resolveSession(store);
+        const { ref, session } = conversation
+            ? await this.resolveExplicitSession(store, conversation)
+            : await this.resolveSession(store);
         await store.saveDigest(ref, { ...(session.digest ?? emptyDigest()), learnerGoal: trimmed });
         logger.debug(`Learner goal: ${trimmed}`);
     }
@@ -181,9 +207,7 @@ export class AnswerFlowService {
      * the owner's most recent turns are read back and handed to the agent, which is what lets a
      * new terminal understand "so what tech stacks are used" as a continuation.
      */
-    private async resolveSession(
-        store: Awaited<ReturnType<ConversationStoreProvider["get"]>>,
-    ): Promise<{ ref: SessionRef; session: ChatSession }> {
+    private async resolveSession(store: Store): Promise<{ ref: SessionRef; session: ChatSession }> {
         const ownerId = getOwnerId();
 
         if (!this.currentRef) {
@@ -203,30 +227,45 @@ export class AnswerFlowService {
         }
 
         const session = await store.load(this.currentRef);
+        return { ref: this.currentRef, session: this.withCarriedContext(session, this.carried) };
+    }
+
+    /**
+     * Resolves a session named by the caller, holding nothing on this instance.
+     *
+     * Carry-over is read on every call rather than once: a server process outlives any one
+     * conversation, so "once per run" would mean once per cold start, shared by everyone the
+     * process happened to serve. The cost is a handful of bounded queries per question.
+     */
+    private async resolveExplicitSession(
+        store: Store,
+        ref: SessionRef,
+    ): Promise<{ ref: SessionRef; session: ChatSession }> {
+        const [session, carried] = await Promise.all([
+            store.load(ref),
+            this.loadCarryOver(store, ref.ownerId, ref.sessionId),
+        ]);
+        return { ref, session: this.withCarriedContext(session, carried) };
+    }
+
+    /** Layers context carried from earlier sessions under what this session has said itself. */
+    private withCarriedContext(session: ChatSession, carried: CarriedContext | undefined): ChatSession {
         return {
-            ref: this.currentRef,
-            session: {
-                ...session,
-                carriedTurns: this.carried?.turns ?? [],
-                // A goal from an earlier session holds until the learner states a new one.
-                digest:
-                    session.digest?.learnerGoal || !this.carried?.learnerGoal
-                        ? session.digest
-                        : { ...(session.digest ?? emptyDigest()), learnerGoal: this.carried.learnerGoal },
-                // Only seed the project while this session has said nothing of its own; after that
-                // its own turns take over.
-                activeProject:
-                    session.activeProject ?? (session.turns.length === 0 ? this.carried?.activeProject : undefined),
-            },
+            ...session,
+            carriedTurns: carried?.turns ?? [],
+            // A goal from an earlier session holds until the learner states a new one.
+            digest:
+                session.digest?.learnerGoal || !carried?.learnerGoal
+                    ? session.digest
+                    : { ...(session.digest ?? emptyDigest()), learnerGoal: carried.learnerGoal },
+            // Only seed the project while this session has said nothing of its own; after that
+            // its own turns take over.
+            activeProject: session.activeProject ?? (session.turns.length === 0 ? carried?.activeProject : undefined),
         };
     }
 
     /** The owner's most recent turns, oldest first, drawn from their previous sessions. */
-    private async loadCarryOver(
-        store: Awaited<ReturnType<ConversationStoreProvider["get"]>>,
-        ownerId: string,
-        currentSessionId: string,
-    ): Promise<{ turns: ChatTurn[]; activeProject?: string; learnerGoal?: string }> {
+    private async loadCarryOver(store: Store, ownerId: string, currentSessionId: string): Promise<CarriedContext> {
         const recent = (await store.findRecentSessionIds(ownerId, CARRY_OVER_SESSION_LOOKBACK)).filter(
             (id) => id !== currentSessionId,
         );
@@ -247,7 +286,7 @@ export class AnswerFlowService {
     }
 
     private async recordTurn(params: {
-        store: Awaited<ReturnType<ConversationStoreProvider["get"]>>;
+        store: Store;
         ref: SessionRef;
         session: ChatSession;
         turn: ChatTurn;

@@ -7,6 +7,7 @@ import { z } from "zod";
 import { getLogger } from "log4js";
 import { LLMModel } from "../constants/llm-models";
 import { WorkingDirectory } from "../utils/working-directory";
+import { mergePersonalConfig, personalConfigFromEnvironment } from "./config-environment";
 
 const logger = getLogger("ConfigService");
 
@@ -17,6 +18,7 @@ export enum AIProvider {
     BEDROCK = "bedrock",
     OPENAI = "openai",
     AZURE_OPENAI = "azure-openai",
+    AZURE_FOUNDRY = "azure-foundry",
     GOOGLE = "google",
     XAI = "xai",
     DEEPSEEK = "deepseek",
@@ -32,12 +34,15 @@ export const ProviderConfigSchema = z.object({
     awsRegion: z.string().optional().describe("AWS region (for Bedrock)"),
     // OpenAI-specific
     baseUrl: z.string().optional().describe("Base URL for OpenAI API (for custom OpenAI-compatible endpoints)"),
-    // Azure OpenAI-specific
+    // Azure-specific (Azure OpenAI, and Claude on Azure AI Foundry)
     azureEndpoint: z
         .string()
         .optional()
-        .describe("Azure OpenAI resource endpoint, e.g. https://my-res.openai.azure.com"),
-    azureDeploymentName: z.string().optional().describe("Azure OpenAI deployment name (acts as the model ID)"),
+        .describe(
+            "Azure resource endpoint, e.g. https://my-res.openai.azure.com (Azure OpenAI) or " +
+                "https://my-res.services.ai.azure.com (Azure AI Foundry)",
+        ),
+    azureDeploymentName: z.string().optional().describe("Azure deployment name (acts as the model ID)"),
     azureApiVersion: z.string().optional().describe("Azure OpenAI REST API version, e.g. 2024-10-21"),
     // Ollama-specific
     ollamaBaseUrl: z.string().optional().describe("Base URL for local model server (for Ollama)"),
@@ -256,6 +261,7 @@ export const PROVIDER_MODELS: Record<AIProvider, LLMModel[]> = {
         LLMModel.OPENAI_LLAMA_3_3_70B_INSTRUCT,
     ],
     [AIProvider.AZURE_OPENAI]: [LLMModel.AZURE_OPENAI_CUSTOM],
+    [AIProvider.AZURE_FOUNDRY]: [LLMModel.AZURE_FOUNDRY_CLAUDE],
     [AIProvider.XAI]: [LLMModel.GROK_2],
     [AIProvider.DEEPSEEK]: [LLMModel.DEEPSEEK_CHAT, LLMModel.DEEPSEEK_REASONER],
     [AIProvider.OLLAMA]: [
@@ -279,6 +285,7 @@ export const PROVIDER_ENV_VARS: Record<AIProvider, string> = {
     [AIProvider.BEDROCK]: "AWS_PROFILE",
     [AIProvider.OPENAI]: "OPENAI_API_KEY",
     [AIProvider.AZURE_OPENAI]: "AZURE_OPENAI_API_KEY",
+    [AIProvider.AZURE_FOUNDRY]: "AZURE_FOUNDRY_API_KEY",
     [AIProvider.GOOGLE]: "GOOGLE_API_KEY",
     [AIProvider.XAI]: "XAI_API_KEY",
     [AIProvider.DEEPSEEK]: "DEEPSEEK_API_KEY",
@@ -291,6 +298,7 @@ export const PROVIDER_BASE_URL_ENV_VARS: Record<AIProvider, string | undefined> 
     [AIProvider.BEDROCK]: undefined,
     [AIProvider.OPENAI]: "OPENAI_BASE_URL",
     [AIProvider.AZURE_OPENAI]: "AZURE_OPENAI_ENDPOINT",
+    [AIProvider.AZURE_FOUNDRY]: "AZURE_FOUNDRY_ENDPOINT",
     [AIProvider.GOOGLE]: undefined,
     [AIProvider.XAI]: undefined,
     [AIProvider.DEEPSEEK]: undefined,
@@ -303,6 +311,7 @@ export const PROVIDER_DEFAULT_KEY_PATHS: Record<AIProvider, string[]> = {
     [AIProvider.BEDROCK]: [],
     [AIProvider.OPENAI]: [],
     [AIProvider.AZURE_OPENAI]: [],
+    [AIProvider.AZURE_FOUNDRY]: [],
     [AIProvider.GOOGLE]: [join(homedir(), ".config", "google", "api_key")],
     [AIProvider.XAI]: [],
     [AIProvider.DEEPSEEK]: [],
@@ -351,7 +360,9 @@ export class ConfigService {
                 raw = await readFile(configPath, "utf8");
             } catch (err) {
                 logger.error(`Failed to read personal config file at ${configPath}: ${err}`);
-                throw new Error(`Failed to read personal config file at ${configPath}: ${err instanceof Error ? err.message : String(err)}`);
+                throw new Error(
+                    `Failed to read personal config file at ${configPath}: ${err instanceof Error ? err.message : String(err)}`,
+                );
             }
 
             let json: unknown;
@@ -384,7 +395,9 @@ export class ConfigService {
                         logger.info("Recovered personal configuration while stripping invalid default model/provider.");
                         this.personalConfig = fallbackParsed.data;
                     } else {
-                        logger.error("Failed full schema recovery. Preserving validated providers, secret tokens, and scalar fields as fallback.");
+                        logger.error(
+                            "Failed full schema recovery. Preserving validated providers, secret tokens, and scalar fields as fallback.",
+                        );
                         const rec = normalized as Record<string, unknown>;
                         const droppedFields: string[] = [];
                         const baseConfig: Record<string, unknown> = { providers: {} };
@@ -392,7 +405,12 @@ export class ConfigService {
                         // 1. Iterate over all top-level schema shape keys and safeParse each field independently
                         const shape = PersonalConfigurationSchema.shape;
                         for (const key of Object.keys(shape) as Array<keyof typeof shape>) {
-                            if (key === "providers" || key === "remote" || key === "defaultModel" || key === "defaultProvider") {
+                            if (
+                                key === "providers" ||
+                                key === "remote" ||
+                                key === "defaultModel" ||
+                                key === "defaultProvider"
+                            ) {
                                 continue;
                             }
                             if (rec[key] !== undefined && rec[key] !== null) {
@@ -409,7 +427,9 @@ export class ConfigService {
                         // 2. Per-provider salvage for providers
                         if (rec.providers && typeof rec.providers === "object" && !Array.isArray(rec.providers)) {
                             const parsedProviders: Record<string, ProviderConfig> = {};
-                            for (const [providerKey, providerVal] of Object.entries(rec.providers as Record<string, unknown>)) {
+                            for (const [providerKey, providerVal] of Object.entries(
+                                rec.providers as Record<string, unknown>,
+                            )) {
                                 const parsedProvider = ProviderConfigSchema.safeParse(providerVal);
                                 if (parsedProvider.success) {
                                     parsedProviders[providerKey as AIProvider] = parsedProvider.data;
@@ -428,13 +448,17 @@ export class ConfigService {
                                     baseConfig.remote = remoteParsed.data;
                                 } else {
                                     const reasons = remoteParsed.error.issues.map((i) => i.message).join("; ");
-                                    logger.error(`Corrupted remote credential configuration in ${configPath}: ${reasons}`);
+                                    logger.error(
+                                        `Corrupted remote credential configuration in ${configPath}: ${reasons}`,
+                                    );
                                     throw new Error(
                                         `Corrupted remote credential configuration in ${configPath}: ${reasons}. Remote credential mode cannot be safely verified. Run 'sat-cli init' or fix ${configPath}.`,
                                     );
                                 }
                             } else {
-                                logger.error(`Invalid remote configuration block in ${configPath}: expected an object.`);
+                                logger.error(
+                                    `Invalid remote configuration block in ${configPath}: expected an object.`,
+                                );
                                 throw new Error(
                                     `Invalid remote configuration block in ${configPath}. Run 'sat-cli init' or fix ${configPath}.`,
                                 );
@@ -457,6 +481,15 @@ export class ConfigService {
             }
         } else {
             this.personalConfig = PersonalConfigurationSchema.parse({});
+        }
+
+        // SATENG_* variables win over the file — how a server deployment with no config file
+        // (the Slack bot on Lambda) is configured. See config-environment.ts.
+        const fromEnvironment = personalConfigFromEnvironment();
+        if (fromEnvironment) {
+            this.personalConfig = PersonalConfigurationSchema.parse(
+                mergePersonalConfig(this.personalConfig, fromEnvironment),
+            );
         }
         return this.personalConfig;
     }

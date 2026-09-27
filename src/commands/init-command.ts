@@ -30,6 +30,7 @@ const PROVIDER_DISPLAY_NAMES: Record<AIProvider, string> = {
     [AIProvider.BEDROCK]: "AWS Bedrock (Claude, Nova)",
     [AIProvider.OPENAI]: "OpenAI (GPT)",
     [AIProvider.AZURE_OPENAI]: "Azure OpenAI (GPT)",
+    [AIProvider.AZURE_FOUNDRY]: "Azure AI Foundry (Claude)",
     [AIProvider.GOOGLE]: "Google (Gemini)",
     [AIProvider.XAI]: "xAI (Grok)",
     [AIProvider.DEEPSEEK]: "DeepSeek",
@@ -93,6 +94,7 @@ const MODEL_DISPLAY_NAMES: Record<LLMModel, string> = {
     [LLMModel.OLLAMA_GEMMA2]: "Gemma 2",
     [LLMModel.OLLAMA_PHI3]: "Phi-3 (128K context)",
     [LLMModel.AZURE_OPENAI_CUSTOM]: "Azure OpenAI deployment",
+    [LLMModel.AZURE_FOUNDRY_CLAUDE]: "Claude deployment on Azure AI Foundry",
     [LLMModel.OLLAMA_CUSTOM]: "Custom model (specify name)",
     [LLMModel.SELF_HOSTED_CUSTOM]: "Self Hosted LLM",
 };
@@ -206,7 +208,9 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         try {
             existing = await this.config.loadPersonalConfig();
         } catch (err) {
-            logger.warn(`Could not load existing config (${err instanceof Error ? err.message : String(err)}). Proceeding with fresh setup.`);
+            logger.warn(
+                `Could not load existing config (${err instanceof Error ? err.message : String(err)}). Proceeding with fresh setup.`,
+            );
         }
         const hasExisting = Object.keys(existing.providers ?? {}).length > 0;
 
@@ -246,7 +250,9 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
                     const remote = await this.configureRemote(existing.remote);
                     const updatedConfig: PersonalConfiguration = { ...existing, remote };
                     if (updatedConfig.providers?.bedrock?.awsProfile) {
-                        logger.info("Clearing local awsProfile from Bedrock provider configuration since remote mode is now enabled.");
+                        logger.info(
+                            "Clearing local awsProfile from Bedrock provider configuration since remote mode is now enabled.",
+                        );
                         updatedConfig.providers.bedrock = {
                             ...updatedConfig.providers.bedrock,
                             awsProfile: undefined,
@@ -258,9 +264,13 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
                     const newConfig = { ...existing };
                     delete newConfig.remote;
                     if (newConfig.providers?.bedrock?.awsProfile) {
-                        logger.info(`Remote mode disabled. Bedrock will use configured AWS profile '${newConfig.providers.bedrock.awsProfile}'.`);
+                        logger.info(
+                            `Remote mode disabled. Bedrock will use configured AWS profile '${newConfig.providers.bedrock.awsProfile}'.`,
+                        );
                     } else {
-                        logger.info("\nRemote credential mode disabled. Bedrock will use the default AWS credential chain.");
+                        logger.info(
+                            "\nRemote credential mode disabled. Bedrock will use the default AWS credential chain.",
+                        );
                     }
                     await this.config.savePersonalConfig(newConfig);
                 }
@@ -692,8 +702,12 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         const isLoopback = isLoopbackHostname(parsed.hostname);
 
         const hint = !isLoopback
-            ? (existing?.token ? " (press enter to keep existing)" : " (required for remote endpoint)")
-            : (existing?.token ? " (press enter to keep existing)" : " (optional for loopback, leave empty to skip)");
+            ? existing?.token
+                ? " (press enter to keep existing)"
+                : " (required for remote endpoint)"
+            : existing?.token
+              ? " (press enter to keep existing)"
+              : " (optional for loopback, leave empty to skip)";
 
         const tokenInput = await password({
             message: `Remote token${hint}:`,
@@ -746,6 +760,10 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
 
         if (provider === AIProvider.AZURE_OPENAI) {
             return { providerConfig: await this.configureAzureOpenAIProvider(existing) };
+        }
+
+        if (provider === AIProvider.AZURE_FOUNDRY) {
+            return { providerConfig: await this.configureAzureFoundryProvider(existing) };
         }
 
         if (provider === AIProvider.OLLAMA) {
@@ -875,6 +893,30 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
             azureDeploymentName: azureDeploymentName.trim(),
             azureApiVersion: azureApiVersion.trim(),
         };
+    }
+
+    private async configureAzureFoundryProvider(existing?: ProviderConfig): Promise<ProviderConfig> {
+        logger.info(
+            "Use a Claude deployment from your Azure AI Foundry project (Models + endpoints → the deployment → Key and Target URI).",
+        );
+        const apiKey = await this.promptForApiKey(AIProvider.AZURE_FOUNDRY, existing?.apiKey);
+
+        const azureEndpoint = normalizeBaseUrl(
+            await input({
+                message: "Azure AI Foundry endpoint (e.g. https://my-resource.services.ai.azure.com):",
+                default: existing?.azureEndpoint ?? process.env.AZURE_FOUNDRY_ENDPOINT ?? "",
+                validate: (val) =>
+                    val.startsWith("http://") || val.startsWith("https://") ? true : "Must be a valid HTTP/HTTPS URL",
+            }),
+        );
+
+        const azureDeploymentName = await input({
+            message: "Deployment name (your deployment's name in Foundry, e.g. claude-sonnet-4-5):",
+            default: existing?.azureDeploymentName ?? process.env.AZURE_FOUNDRY_DEPLOYMENT ?? "",
+            validate: (val) => (val.trim() ? true : "Deployment name is required"),
+        });
+
+        return { enabled: true, apiKey, azureEndpoint, azureDeploymentName: azureDeploymentName.trim() };
     }
 
     /** Best-effort reachability check — mirrors the Ollama/self-hosted flows: warn, never block. */
@@ -1106,6 +1148,9 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         // The Azure deployment chosen during setup *is* the model — nothing to pick.
         if (provider === AIProvider.AZURE_OPENAI) {
             return LLMModel.AZURE_OPENAI_CUSTOM;
+        }
+        if (provider === AIProvider.AZURE_FOUNDRY) {
+            return LLMModel.AZURE_FOUNDRY_CLAUDE;
         }
         // For Ollama, build a smarter list
         if (provider === AIProvider.OLLAMA) {
@@ -1404,6 +1449,12 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
                     logger.info(
                         `    ${PROVIDER_DISPLAY_NAMES[provider]}: endpoint=${endpoint}, ` +
                             `deployment=${deployment}, api-version=${version}${isDefault}`,
+                    );
+                } else if (provider === AIProvider.AZURE_FOUNDRY) {
+                    const endpoint = val.azureEndpoint ?? "not set";
+                    const deployment = val.azureDeploymentName ?? "not set";
+                    logger.info(
+                        `    ${PROVIDER_DISPLAY_NAMES[provider]}: endpoint=${endpoint}, deployment=${deployment}${isDefault}`,
                     );
                 } else if (provider === AIProvider.SELF_HOSTED) {
                     const endpoint = val.endpoint ?? "not set";

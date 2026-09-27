@@ -1,0 +1,43 @@
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "ReadSlackAndModelSecrets",
+            "Effect": "Allow",
+            "Action": "secretsmanager:GetSecretValue",
+            "Resource": [
+                "arn:aws:secretsmanager:ap-south-1:618647024743:secret:saturam/slack-bot-*",
+                "arn:aws:secretsmanager:ap-south-1:618647024743:secret:saturam/azure-foundry-*"
+            ]
+        },
+        {
+            "Sid": "ConsumeQuestions",
+            "Effect": "Allow",
+            "Action": [
+                "sqs:ReceiveMessage",
+                "sqs:DeleteMessage",
+                "sqs:GetQueueAttributes",
+                "sqs:ChangeMessageVisibility"
+            ],
+            "Resource": "arn:aws:sqs:ap-south-1:618647024743:saturam-slack-bot-jobs.fifo"
+        },
+        {
+            "Sid": "ConversationHistoryAndFeedback",
+            "Effect": "Allow",
+            "Action": ["dynamodb:Query", "dynamodb:PutItem", "dynamodb:UpdateItem"],
+            "Resource": "arn:aws:dynamodb:ap-south-1:618647024743:table/sateng-conversations"
+        },
+        {
+            "Sid": "KnowledgeBaseRetrieval",
+            "Effect": "Allow",
+            "Action": "bedrock:Retrieve",
+            "Resource": "arn:aws:bedrock:ap-south-1:618647024743:knowledge-base/KVELCLQW21"
+        },
+        {
+            "Sid": "ReadProjectRegistry",
+            "Effect": "Allow",
+            "Action": "s3:GetObject",
+            "Resource": "arn:aws:s3:::saturam-onboard/onboarding-state/registry.json"
+        }
+    ]
+}

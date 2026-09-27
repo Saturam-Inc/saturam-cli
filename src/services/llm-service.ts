@@ -6,6 +6,7 @@ import {
     LLMModel,
     LLMOptions,
     isAnthropicModel,
+    isAzureFoundryModel,
     isAzureOpenAIModel,
     isBedrockModel,
     isDeepSeekModel,
@@ -25,6 +26,13 @@ const logger = getLogger("LlmService");
 const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
 const DEFAULT_SELF_HOSTED_TIMEOUT_MS = 120000;
 const DEFAULT_AZURE_OPENAI_API_VERSION = "2024-10-21";
+
+/**
+ * Retries LangChain makes per Azure call. Its default is 6 with exponential backoff, which for one
+ * throttled or unparseable response means about 90 seconds of waiting — longer than the Slack
+ * bot's answering budget, and the bot has its own retry above this. Two still rides out a blip.
+ */
+const AZURE_MAX_RETRIES = 2;
 
 type OllamaChatMessage = {
     role: "system" | "user" | "assistant";
@@ -95,6 +103,87 @@ function parseOllamaChatResponse(text: string): string {
     return content;
 }
 
+/**
+ * Anthropic models on Bedrock are invoked through a cross-region inference profile, whose id is
+ * the model id behind a geography prefix. Asia Pacific's is "apac", not "ap" — an "ap." id does
+ * not exist, so every ap-* region used to fail. SATENG_BEDROCK_PROFILE_PREFIX overrides the
+ * choice, for the "global" profile or a narrower one such as "jp" or "au".
+ */
+export function bedrockInferenceProfilePrefix(
+    region: string,
+    override: string | undefined = process.env.SATENG_BEDROCK_PROFILE_PREFIX,
+): string {
+    if (override?.trim()) return override.trim();
+    if (region.startsWith("eu")) return "eu";
+    if (region.startsWith("ap")) return "apac";
+    return "us";
+}
+
+/**
+ * The Anthropic API base URL for an Azure AI Foundry resource.
+ *
+ * The portal shows the endpoint in several shapes — the bare resource URL, the ".../anthropic"
+ * base, or the full ".../anthropic/v1/messages" target URI — and any of them may be pasted in.
+ * All three resolve to "https://<resource>.services.ai.azure.com/anthropic", which the Anthropic
+ * client extends with "/v1/messages" itself.
+ */
+export function azureFoundryAnthropicBaseUrl(endpoint: string): string {
+    const base = normalizeBaseUrl(endpoint.trim())
+        .replace(/\/v1\/messages$/, "")
+        .replace(/\/v1$/, "");
+    return base.endsWith("/anthropic") ? base : `${base}/anthropic`;
+}
+
+/**
+ * Splits an Azure OpenAI endpoint as pasted from the portal into its parts.
+ *
+ * The portal's "Target URI" is the full request URL —
+ * "https://<res>.cognitiveservices.azure.com/openai/deployments/<deployment>/chat/completions?api-version=<v>"
+ * — while the client wants only the resource URL and builds the rest itself. Accepting either means
+ * the value can be copied as shown, and the API version the portal chose for the model (GPT-5-family
+ * models need a recent one) comes along with it.
+ */
+export function parseAzureOpenAITarget(uri: string): {
+    endpoint: string;
+    deploymentName?: string;
+    apiVersion?: string;
+} {
+    const trimmed = uri.trim();
+    let apiVersion: string | undefined;
+    let path = trimmed;
+    try {
+        const url = new URL(trimmed);
+        apiVersion = url.searchParams.get("api-version") ?? undefined;
+        path = `${url.origin}${url.pathname}`;
+    } catch {
+        // Not a URL the parser accepts; fall through with the raw value and let the client complain.
+    }
+    const deploymentName = /\/openai\/deployments\/([^/?#]+)/i.exec(path)?.[1];
+    const endpoint = normalizeBaseUrl(normalizeBaseUrl(path).replace(/\/openai(\/.*)?$/i, ""));
+    return {
+        endpoint,
+        deploymentName: deploymentName ? decodeURIComponent(deploymentName) : undefined,
+        apiVersion: apiVersion || undefined,
+    };
+}
+
+/**
+ * Whether an Azure OpenAI deployment accepts a caller-chosen temperature.
+ *
+ * GPT-5-family and o-series models reject any temperature but their default ("Unsupported value:
+ * 'temperature'"), and LangChain only recognises the o-series. The deployment name is all there is
+ * to go on — Azure lets it be anything — so it is matched on the model-name prefix Azure proposes
+ * by default, and AZURE_OPENAI_SUPPORTS_TEMPERATURE ("true"/"false") settles it for a deployment
+ * named otherwise.
+ */
+export function azureOpenAIAcceptsTemperature(
+    deploymentName: string,
+    override: string | undefined = process.env.AZURE_OPENAI_SUPPORTS_TEMPERATURE,
+): boolean {
+    if (override?.trim()) return override.trim().toLowerCase() !== "false";
+    return !/^(gpt-5|o\d)/i.test(deploymentName.trim());
+}
+
 @Service()
 export class LlmService {
     private llms: Map<string, ChatModel> = new Map();
@@ -134,6 +223,7 @@ export class LlmService {
         if (isGeminiModel(model)) return this.createGeminiModel(model, options);
         if (isOpenAIModel(model)) return this.createOpenAIModel(model, options);
         if (isAzureOpenAIModel(model)) return this.createAzureOpenAIModel(options);
+        if (isAzureFoundryModel(model)) return this.createAzureFoundryModel(options);
         if (isGrokModel(model)) return this.createGrokModel(model, options);
         if (isDeepSeekModel(model)) return this.createDeepSeekModel(model, options);
         if (isOllamaModel(model)) return this.createOllamaModel(model, options);
@@ -194,18 +284,15 @@ export class LlmService {
         }
 
         if (model === LLMModel.BEDROCK_CUSTOM && !providerConfig?.model) {
-            throw new Error("Custom Bedrock model ID or ARN is required. Run 'sat-cli init' to configure your custom Bedrock model.");
+            throw new Error(
+                "Custom Bedrock model ID or ARN is required. Run 'sat-cli init' to configure your custom Bedrock model.",
+            );
         }
 
-        const targetModel =
-            model === LLMModel.BEDROCK_CUSTOM
-                ? providerConfig!.model!
-                : (model as string);
-        const regionPrefix = region.startsWith("eu") ? "eu" : region.startsWith("ap") ? "ap" : "us";
-        const resolvedModel =
-            targetModel.startsWith("anthropic.") && !targetModel.startsWith(`${regionPrefix}.`)
-                ? `${regionPrefix}.${targetModel}`
-                : targetModel;
+        const targetModel = model === LLMModel.BEDROCK_CUSTOM ? providerConfig!.model! : (model as string);
+        const resolvedModel = targetModel.startsWith("anthropic.")
+            ? `${bedrockInferenceProfilePrefix(region)}.${targetModel}`
+            : targetModel;
 
         return new ChatBedrockConverse({
             model: resolvedModel,
@@ -260,19 +347,26 @@ export class LlmService {
         const apiKey = await this.config.getApiKey(AIProvider.AZURE_OPENAI);
         const providerConfig = await this.config.getProviderConfig(AIProvider.AZURE_OPENAI);
 
-        const endpoint = providerConfig?.azureEndpoint ?? process.env.AZURE_OPENAI_ENDPOINT;
+        const rawEndpoint = providerConfig?.azureEndpoint ?? process.env.AZURE_OPENAI_ENDPOINT;
+        if (!rawEndpoint) {
+            throw new Error("Azure OpenAI endpoint is required. Set AZURE_OPENAI_ENDPOINT or run 'sat-cli init'.");
+        }
+        // The endpoint may be the portal's full Target URI; whatever it carries fills in the
+        // deployment and API version, and explicitly configured values win over it.
+        const target = parseAzureOpenAITarget(rawEndpoint);
+
         // AZURE_OPENAI_API_DEPLOYMENT_NAME is what @langchain/openai reads natively; accept the
         // shorter AZURE_OPENAI_DEPLOYMENT_NAME too since that's the name Azure's own docs use.
         const deploymentName =
             providerConfig?.azureDeploymentName ??
             process.env.AZURE_OPENAI_DEPLOYMENT_NAME ??
-            process.env.AZURE_OPENAI_API_DEPLOYMENT_NAME;
+            process.env.AZURE_OPENAI_API_DEPLOYMENT_NAME ??
+            target.deploymentName;
         const apiVersion =
-            providerConfig?.azureApiVersion ?? process.env.AZURE_OPENAI_API_VERSION ?? DEFAULT_AZURE_OPENAI_API_VERSION;
-
-        if (!endpoint) {
-            throw new Error("Azure OpenAI endpoint is required. Set AZURE_OPENAI_ENDPOINT or run 'sat-cli init'.");
-        }
+            providerConfig?.azureApiVersion ??
+            process.env.AZURE_OPENAI_API_VERSION ??
+            target.apiVersion ??
+            DEFAULT_AZURE_OPENAI_API_VERSION;
 
         if (!deploymentName) {
             throw new Error(
@@ -287,10 +381,44 @@ export class LlmService {
         return new AzureChatOpenAI({
             model: deploymentName,
             azureOpenAIApiKey: apiKey,
-            azureOpenAIEndpoint: normalizeBaseUrl(endpoint),
+            azureOpenAIEndpoint: target.endpoint,
             azureOpenAIApiDeploymentName: deploymentName,
             azureOpenAIApiVersion: apiVersion,
+            maxRetries: AZURE_MAX_RETRIES,
+            // Left unset for models that reject anything but their default, so the request
+            // carries no temperature at all.
+            temperature: azureOpenAIAcceptsTemperature(deploymentName) ? (options?.temperature ?? 0) : undefined,
+        });
+    }
+
+    // --- Claude on Azure AI Foundry ---
+
+    private async createAzureFoundryModel(options?: LLMOptions): Promise<ChatModel> {
+        const apiKey = await this.config.getApiKey(AIProvider.AZURE_FOUNDRY);
+        const providerConfig = await this.config.getProviderConfig(AIProvider.AZURE_FOUNDRY);
+
+        const endpoint = providerConfig?.azureEndpoint ?? process.env.AZURE_FOUNDRY_ENDPOINT;
+        const deploymentName = providerConfig?.azureDeploymentName ?? process.env.AZURE_FOUNDRY_DEPLOYMENT;
+
+        if (!endpoint) {
+            throw new Error("Azure AI Foundry endpoint is required. Set AZURE_FOUNDRY_ENDPOINT or run 'sat-cli init'.");
+        }
+        if (!deploymentName) {
+            throw new Error(
+                "Azure AI Foundry deployment name is required. Set AZURE_FOUNDRY_DEPLOYMENT or run 'sat-cli init'.",
+            );
+        }
+
+        // Foundry serves Claude through Anthropic's own Messages API, so the Anthropic client works
+        // unchanged once pointed at the resource; the deployment name is what goes in `model`.
+        const { ChatAnthropic } = await import("@langchain/anthropic");
+        return new ChatAnthropic({
+            model: deploymentName.trim(),
+            apiKey,
+            anthropicApiUrl: azureFoundryAnthropicBaseUrl(endpoint),
             temperature: options?.temperature ?? 0,
+            maxTokens: 8192,
+            maxRetries: AZURE_MAX_RETRIES,
         });
     }
 

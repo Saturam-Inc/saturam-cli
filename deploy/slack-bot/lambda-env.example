@@ -1,0 +1,35 @@
+# Environment variables for the two Lambda functions (docs/SLACK-BOT-AWS-SETUP.md, B7 and B8).
+# Both functions run the same zip: worker handler "worker.handler", ingress handler "ingress.handler".
+
+# ---------- Both functions ----------
+SLACK_SECRET_ID=saturam/slack-bot
+SLACK_JOB_QUEUE_URL=https://sqs.<REGION>.amazonaws.com/<ACCOUNT_ID>/saturam-slack-bot-jobs.fifo
+SATENG_CONVERSATION_TABLE=saturam-onboarding-conversations
+NODE_OPTIONS=--enable-source-maps
+LOG_LEVEL=info
+
+# ---------- Ingress only ----------
+# Optional allow-lists (comma-separated). Empty = no restriction.
+SLACK_ALLOWED_TEAM_IDS=
+SLACK_ALLOWED_CHANNEL_IDS=
+SLACK_ALLOW_DIRECT_MESSAGES=true
+
+# ---------- Worker only ----------
+# Must equal the queue's redrive "Maximum receives".
+SLACK_WORKER_MAX_ATTEMPTS=2
+# The gpt-5.4-mini deployment on Azure AI Foundry. Alternatives (docs Appendix):
+# azure-foundry-claude (Claude on Foundry), or a Bedrock model id.
+SATENG_MODEL=azure-openai-custom
+# Secret with AZURE_OPENAI_API_KEY, AZURE_OPENAI_ENDPOINT (the portal's full Target URI) and
+# AZURE_OPENAI_DEPLOYMENT_NAME (docs B3b). Never put the Azure key itself in an environment variable.
+SATENG_LLM_SECRET_ID=saturam/azure-foundry
+SATENG_KB_ID=<KNOWLEDGE_BASE_ID>
+SATENG_S3_BUCKET=<BUCKET_NAME>
+SATENG_S3_PREFIX=onboarding
+SATENG_CONVERSATION_TTL_DAYS=90
+# Only if registry.json is not under "<SATENG_S3_PREFIX>-state/":
+# SATENG_S3_STATE_PREFIX=
+# Only when a resource lives outside the function's region:
+# SATENG_KB_REGION=
+# SATENG_S3_REGION=
+# SATENG_CONVERSATION_TABLE_REGION=

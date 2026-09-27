@@ -1,0 +1,13 @@
+{
+    "generatedAt": "2026-09-23T00:00:00Z",
+    "projects": [
+        {
+            "slug": "saturam-cli",
+            "displayName": "sat-cli",
+            "aliases": ["saturam cli", "sat cli", "onboarding bot"],
+            "documentCount": 2,
+            "summary": "Saturam's engineering CLI: AI code review and the onboarding assistant (terminal and Slack).",
+            "sources": ["confluence"]
+        }
+    ]
+}
