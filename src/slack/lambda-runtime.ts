@@ -100,8 +100,9 @@ export function lambdaModelProblem(model: LLMModel): string | undefined {
     if (isAzureFoundryModel(model) || isAzureOpenAIModel(model) || isBedrockModel(model)) return undefined;
     return (
         `The configured model "${model}" is not supported by the Slack bot's Lambda build, which runs on ` +
-        `Azure AI Foundry or Bedrock. Set SATENG_MODEL on the worker to ${LLMModel.AZURE_OPENAI_CUSTOM} ` +
-        `(a GPT deployment), ${LLMModel.AZURE_FOUNDRY_CLAUDE} (Claude on Foundry), or a Bedrock model id.`
+        `Bedrock or Azure AI Foundry. Set SATENG_MODEL on the worker to a Bedrock model id such as ` +
+        `${LLMModel.BEDROCK_CLAUDE_4_6_SONNET}, or to ${LLMModel.AZURE_OPENAI_CUSTOM} (a GPT deployment) ` +
+        `or ${LLMModel.AZURE_FOUNDRY_CLAUDE} (Claude on Foundry).`
     );
 }
 

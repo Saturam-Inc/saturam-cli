@@ -1,9 +1,0 @@
-{
-    "Sid": "InvokeModelThroughCrossRegionProfile",
-    "Effect": "Allow",
-    "Action": ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
-    "Resource": [
-        "arn:aws:bedrock:<REGION>:<ACCOUNT_ID>:inference-profile/<PROFILE_PREFIX>.<MODEL_ID>",
-        "arn:aws:bedrock:*::foundation-model/<MODEL_ID>"
-    ]
-}

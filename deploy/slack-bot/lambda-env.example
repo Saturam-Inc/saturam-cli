@@ -1,10 +1,16 @@
 # Environment variables for the two Lambda functions (docs/SLACK-BOT-AWS-SETUP.md, B7 and B8).
 # Both functions run the same zip: worker handler "worker.handler", ingress handler "ingress.handler".
+# Placeholders (REGION, ACCOUNT_ID, …) are the guide's values-sheet names; comments give the
+# guide's own values.
 
 # ---------- Both functions ----------
-SLACK_SECRET_ID=saturam/slack-bot
-SLACK_JOB_QUEUE_URL=https://sqs.<REGION>.amazonaws.com/<ACCOUNT_ID>/saturam-slack-bot-jobs.fifo
-SATENG_CONVERSATION_TABLE=saturam-onboarding-conversations
+# <SECRET_NAME>: the Secrets Manager secret from B3 (saturam/slack-bot in the guide).
+SLACK_SECRET_ID=<SECRET_NAME>
+# The MAIN queue's URL from B4 — not the dead-letter queue, not the ARN. <QUEUE_NAME> is
+# saturam-slack-bot-jobs in the guide.
+SLACK_JOB_QUEUE_URL=https://sqs.<REGION>.amazonaws.com/<ACCOUNT_ID>/<QUEUE_NAME>.fifo
+# <TABLE_NAME>: the DynamoDB table from B1 (saturam-onboarding-conversations in the guide).
+SATENG_CONVERSATION_TABLE=<TABLE_NAME>
 NODE_OPTIONS=--enable-source-maps
 LOG_LEVEL=info
 
@@ -17,19 +23,28 @@ SLACK_ALLOW_DIRECT_MESSAGES=true
 # ---------- Worker only ----------
 # Must equal the queue's redrive "Maximum receives".
 SLACK_WORKER_MAX_ATTEMPTS=2
-# The gpt-5.4-mini deployment on Azure AI Foundry. Alternatives (docs Appendix):
-# azure-foundry-claude (Claude on Foundry), or a Bedrock model id.
-SATENG_MODEL=azure-openai-custom
-# Secret with AZURE_OPENAI_API_KEY, AZURE_OPENAI_ENDPOINT (the portal's full Target URI) and
-# AZURE_OPENAI_DEPLOYMENT_NAME (docs B3b). Never put the Azure key itself in an environment variable.
-SATENG_LLM_SECRET_ID=saturam/azure-foundry
+# Claude on Amazon Bedrock, invoked with the function's IAM role — no model secret. The bare model
+# id, not the inference profile id: the bot adds the profile prefix itself. Not a placeholder: it
+# must be an id the CLI knows. The worker policy allows both of these, so switching between them is
+# only this variable: anthropic.claude-sonnet-4-6 (no version suffix) or
+# anthropic.claude-haiku-4-5-20251001-v1:0. Alternatives (docs Appendix): another Bedrock model id,
+# or azure-openai-custom / azure-foundry-claude, which also need SATENG_LLM_SECRET_ID=saturam/azure-foundry.
+SATENG_MODEL=anthropic.claude-sonnet-4-6
+# <PROFILE_PREFIX>: the prefix of the inference profile ids A1 step 4 listed for your region
+# ("global" where these models have only global.* profiles). Without it the bot builds the region's
+# default prefix, and if that profile doesn't exist every answer fails with "The provided model
+# identifier is invalid". Must match the profile ARNs in the worker policy.
+SATENG_BEDROCK_PROFILE_PREFIX=<PROFILE_PREFIX>
+# From A3 and A2.
 SATENG_KB_ID=<KNOWLEDGE_BASE_ID>
 SATENG_S3_BUCKET=<BUCKET_NAME>
-SATENG_S3_PREFIX=onboarding
+# <CONTENT_PREFIX> is "onboarding" in the guide; registry.json is then read from <CONTENT_PREFIX>-state/.
+SATENG_S3_PREFIX=<CONTENT_PREFIX>
 SATENG_CONVERSATION_TTL_DAYS=90
-# Only if registry.json is not under "<SATENG_S3_PREFIX>-state/":
-# SATENG_S3_STATE_PREFIX=
+# Only if registry.json is not under "<CONTENT_PREFIX>-state/":
+# SATENG_S3_STATE_PREFIX=<STATE_PREFIX>
 # Only when a resource lives outside the function's region:
+# SATENG_BEDROCK_REGION=
 # SATENG_KB_REGION=
 # SATENG_S3_REGION=
 # SATENG_CONVERSATION_TABLE_REGION=

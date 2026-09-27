@@ -57,6 +57,7 @@ const MODEL_DISPLAY_NAMES: Record<LLMModel, string> = {
     [LLMModel.BEDROCK_CLAUDE_4_SONNET]: "Bedrock Claude 4 Sonnet",
     [LLMModel.BEDROCK_CLAUDE_4_5_SONNET]: "Bedrock Claude 4.5 Sonnet",
     [LLMModel.BEDROCK_CLAUDE_4_6_SONNET]: "Bedrock Claude 4.6 Sonnet",
+    [LLMModel.BEDROCK_CLAUDE_4_5_HAIKU]: "Bedrock Claude 4.5 Haiku",
     [LLMModel.BEDROCK_CLAUDE_4_6_OPUS]: "Bedrock Claude 4.6 Opus",
     [LLMModel.BEDROCK_NOVA_PRO]: "Amazon Nova Pro",
     [LLMModel.BEDROCK_CUSTOM]: "Custom Bedrock model (specify model ID or ARN)",

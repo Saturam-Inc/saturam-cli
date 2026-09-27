@@ -293,6 +293,9 @@ export class LlmService {
         const resolvedModel = targetModel.startsWith("anthropic.")
             ? `${bedrockInferenceProfilePrefix(region)}.${targetModel}`
             : targetModel;
+        // The id actually sent: a "model identifier is invalid" error from Bedrock is about this,
+        // not about the configured model, and it is otherwise invisible in the logs.
+        logger.debug(`Bedrock: invoking ${resolvedModel} in ${region}.`);
 
         return new ChatBedrockConverse({
             model: resolvedModel,

@@ -232,6 +232,7 @@ export const PROVIDER_MODELS: Record<AIProvider, LLMModel[]> = {
     ],
     [AIProvider.BEDROCK]: [
         LLMModel.BEDROCK_CLAUDE_4_6_SONNET,
+        LLMModel.BEDROCK_CLAUDE_4_5_HAIKU,
         LLMModel.BEDROCK_CLAUDE_4_5_SONNET,
         LLMModel.BEDROCK_CLAUDE_4_6_OPUS,
         LLMModel.BEDROCK_CLAUDE_3_7_SONNET,

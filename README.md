@@ -158,7 +158,7 @@ The knowledge base, bucket, conversation table and model can also be set with `S
 
 `sat-cli onboard --chat` also runs as a Slack bot — the same answering flow, and nothing else from the CLI. Mention it in a channel or DM it; it answers in a thread with sources, follow-up buttons and 👍/👎 feedback. Each thread is its own conversation, and each person's history carries across threads.
 
-It runs on AWS as two Lambdas behind API Gateway, with an SQS FIFO queue between them because Slack needs a reply within 3 seconds and an answer takes tens of seconds. Retrieval uses the Bedrock Knowledge Base; answers are written by a GPT deployment (`gpt-5.4-mini`) on Azure AI Foundry (`SATENG_MODEL=azure-openai-custom`, credentials from the `saturam/azure-foundry` secret). Both Lambdas are deployed from one ~3 MB zip that carries only the chat path. The code is in [src/slack/](src/slack/); deployment assets, IAM policies and a sample corpus are in [deploy/slack-bot/](deploy/slack-bot/).
+It runs on AWS as two Lambdas behind API Gateway, with an SQS FIFO queue between them because Slack needs a reply within 3 seconds and an answer takes tens of seconds. Retrieval uses the Bedrock Knowledge Base, and answers are written by Claude Sonnet 4.6 on Bedrock (`SATENG_MODEL=anthropic.claude-sonnet-4-6`, through the `global.` cross-region inference profile), invoked with the worker's IAM role, so no model credentials are stored anywhere. Both Lambdas are deployed from one ~3 MB zip that carries only the chat path. The code is in [src/slack/](src/slack/); deployment assets, IAM policies and a sample corpus are in [deploy/slack-bot/](deploy/slack-bot/).
 
 ```bash
 pnpm slack:bundle   # → dist/slack-bot/slack-bot-lambda.zip (handlers: ingress.handler, worker.handler)

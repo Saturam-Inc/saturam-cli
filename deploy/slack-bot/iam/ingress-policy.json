@@ -5,19 +5,19 @@
             "Sid": "ReadSlackSecret",
             "Effect": "Allow",
             "Action": "secretsmanager:GetSecretValue",
-            "Resource": "arn:aws:secretsmanager:ap-south-1:618647024743:secret:saturam/slack-bot-*"
+            "Resource": "arn:aws:secretsmanager:<REGION>:<ACCOUNT_ID>:secret:<SECRET_NAME>-*"
         },
         {
             "Sid": "EnqueueQuestions",
             "Effect": "Allow",
             "Action": "sqs:SendMessage",
-            "Resource": "arn:aws:sqs:ap-south-1:618647024743:saturam-slack-bot-jobs.fifo"
+            "Resource": "arn:aws:sqs:<REGION>:<ACCOUNT_ID>:<QUEUE_NAME>.fifo"
         },
         {
             "Sid": "DeduplicateDeliveries",
             "Effect": "Allow",
             "Action": ["dynamodb:PutItem", "dynamodb:DeleteItem"],
-            "Resource": "arn:aws:dynamodb:ap-south-1:618647024743:table/sateng-conversations"
+            "Resource": "arn:aws:dynamodb:<REGION>:<ACCOUNT_ID>:table/<TABLE_NAME>"
         }
     ]
 }

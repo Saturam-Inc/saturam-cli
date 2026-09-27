@@ -23,8 +23,12 @@ export enum LLMModel {
     BEDROCK_CLAUDE_3_5_HAIKU = "anthropic.claude-3-5-haiku-20241022-v1:0",
     BEDROCK_CLAUDE_4_SONNET = "anthropic.claude-sonnet-4-20250514-v1:0",
     BEDROCK_CLAUDE_4_5_SONNET = "anthropic.claude-sonnet-4-5-20250929-v1:0",
-    BEDROCK_CLAUDE_4_6_SONNET = "anthropic.claude-sonnet-4-6-v1:0",
+    // No version suffix: Bedrock's id for this one is "anthropic.claude-sonnet-4-6" (its
+    // cross-region profile is "global.anthropic.claude-sonnet-4-6"). A saved "-v1:0" form still
+    // resolves to it through migrateModelId's suffix matching.
+    BEDROCK_CLAUDE_4_6_SONNET = "anthropic.claude-sonnet-4-6",
     BEDROCK_CLAUDE_4_6_OPUS = "anthropic.claude-opus-4-6-v1:0",
+    BEDROCK_CLAUDE_4_5_HAIKU = "anthropic.claude-haiku-4-5-20251001-v1:0",
     BEDROCK_NOVA_PRO = "amazon.nova-pro-v1:0",
     BEDROCK_CUSTOM = "bedrock-custom",
 
@@ -108,6 +112,7 @@ export const MODEL_CONTEXT_WINDOWS: Record<LLMModel, number> = {
     [LLMModel.BEDROCK_CLAUDE_4_5_SONNET]: 200000,
     [LLMModel.BEDROCK_CLAUDE_4_6_SONNET]: 200000,
     [LLMModel.BEDROCK_CLAUDE_4_6_OPUS]: 1000000,
+    [LLMModel.BEDROCK_CLAUDE_4_5_HAIKU]: 200000,
     [LLMModel.BEDROCK_NOVA_PRO]: 300000,
     [LLMModel.BEDROCK_CUSTOM]: 200000,
     // Gemini
@@ -184,6 +189,7 @@ const BEDROCK_MODELS = new Set([
     LLMModel.BEDROCK_CLAUDE_4_5_SONNET,
     LLMModel.BEDROCK_CLAUDE_4_6_SONNET,
     LLMModel.BEDROCK_CLAUDE_4_6_OPUS,
+    LLMModel.BEDROCK_CLAUDE_4_5_HAIKU,
     LLMModel.BEDROCK_NOVA_PRO,
     LLMModel.BEDROCK_CUSTOM,
 ]);

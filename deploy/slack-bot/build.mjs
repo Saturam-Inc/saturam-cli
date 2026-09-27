@@ -9,10 +9,10 @@
  *
  * Only the `sat-cli onboard --chat` answering path goes in. The CLI's commands, code review, SCM
  * and ingestion integrations are unreachable from the two handlers, and the build fails if any of
- * them slips in. Of the model providers, only those the bot is deployed with are included: Claude
- * on Azure AI Foundry (@langchain/anthropic), a GPT deployment on Azure (@langchain/openai), and
- * Bedrock (@langchain/aws). The rest stay external, and the worker names the misconfiguration at
- * cold start if SATENG_MODEL points at one of them.
+ * them slips in. Of the model providers, only those the bot can be deployed with are included:
+ * Bedrock (@langchain/aws), and for the Appendix alternatives Claude on Azure AI Foundry
+ * (@langchain/anthropic) and a GPT deployment on Azure (@langchain/openai). The rest stay external,
+ * and the worker names the misconfiguration at cold start if SATENG_MODEL points at one of them.
  *
  * Two stages, because typedi wires services from the constructor metadata TypeScript emits, and
  * esbuild cannot emit it:

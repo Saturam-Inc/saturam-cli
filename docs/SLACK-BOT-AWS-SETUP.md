@@ -1,15 +1,15 @@
 # Slack bot on AWS — setup from an empty account
 
 This guide builds everything the onboarding Slack bot needs from nothing, almost entirely in the AWS
-console. Answers are written by a **GPT deployment (`gpt-5.4-mini`) on Azure AI Foundry**; everything
-else runs on AWS.
+console. Answers are written by **Claude Sonnet 4.6 on Amazon Bedrock**, so everything runs in one
+AWS account and no data leaves it.
 
 - **Part A — the knowledge base.** An S3 bucket of documentation, and a Bedrock Knowledge Base that
   indexes it. A sample corpus is included, so you can test end to end before real ingestion runs.
-- **Part B — the Slack bot.** Two Lambda functions, a queue, a table, two secrets and an API, plus
-  the Slack app.
+- **Part B — the Slack bot.** Two Lambda functions, a queue, a table, a secret and an API, plus the
+  Slack app.
 - **Part C — operating it.** Updates, local development, reference, and troubleshooting.
-- **Appendix.** Using Claude on Azure AI Foundry, or Claude on Bedrock, instead.
+- **Appendix.** Using another Bedrock model, or a deployment on Azure AI Foundry, instead.
 
 Do the steps in order: most of them use a value an earlier step produced. Collect those values in
 the **values sheet** as you go.
@@ -23,32 +23,32 @@ the **values sheet** as you go.
 
 ### Services used
 
-| #   | Service                                       | Used for                                                                                      | Created in             | Who accesses it at runtime, and with which actions                                                                                   |
-| --- | --------------------------------------------- | --------------------------------------------------------------------------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| 1   | **Azure AI Foundry** (outside AWS)            | The `gpt-5.4-mini` deployment writes every answer                                             | already exists (yours) | **Worker Lambda** over HTTPS, with the API key from secret `saturam/azure-foundry`                                                   |
-| 2   | **Amazon Bedrock — Titan Text Embeddings V2** | Turns documents and questions into vectors for search                                         | A1 (access only)       | **KB service role** only                                                                                                             |
-| 3   | **Amazon Bedrock — Knowledge Bases**          | Indexes the documents and answers searches                                                    | A3                     | **Worker role:** `bedrock:Retrieve`                                                                                                  |
-| 4   | **Amazon S3** (general purpose bucket)        | Documents under `onboarding/`, project list at `onboarding-state/registry.json`               | A2                     | **KB service role:** reads `onboarding/`. **Worker role:** `s3:GetObject` on `registry.json` only. The ingestion Lambda writes both  |
-| 5   | **Amazon S3 Vectors**                         | Vector store behind the knowledge base                                                        | A3 (quick create)      | **KB service role** only; the bot never touches it directly                                                                          |
-| 6   | **Amazon DynamoDB**                           | Conversation history, record of Slack deliveries already handled, 👍/👎 feedback              | B1                     | **Worker role:** `Query`, `PutItem`, `UpdateItem`. **Ingress role:** `PutItem`, `DeleteItem`                                         |
-| 7   | **AWS Secrets Manager**                       | `saturam/slack-bot` (Slack tokens), `saturam/azure-foundry` (Azure key, endpoint, deployment) | B3                     | **Both roles:** `GetSecretValue` on `saturam/slack-bot`. **Worker role** also on `saturam/azure-foundry`                             |
-| 8   | **Amazon SQS** (FIFO + dead-letter queue)     | Passes questions from ingress to worker; keeps failures                                       | B4                     | **Ingress role:** `SendMessage`. **Worker role:** `ReceiveMessage`, `DeleteMessage`, `GetQueueAttributes`, `ChangeMessageVisibility` |
-| 9   | **AWS Lambda**                                | The two functions: ingress and worker                                                         | B7, B8                 | Invoked by API Gateway (permission added automatically) and by the SQS trigger                                                       |
-| 10  | **Amazon API Gateway** (HTTP API)             | The public HTTPS URL Slack calls                                                              | B9                     | Invokes the ingress Lambda                                                                                                           |
-| 11  | **AWS IAM**                                   | Three roles: worker, ingress, and the KB service role                                         | B6, A3                 | —                                                                                                                                    |
-| 12  | **Amazon CloudWatch** (Logs, Alarms)          | Function logs, alarms on failures and slowness                                                | automatic, B12         | **Both roles:** write logs (`AWSLambdaBasicExecutionRole`)                                                                           |
-| 13  | **Amazon SNS**                                | Emails when an alarm fires (to any address, e.g. your Gmail)                                  | B12                    | CloudWatch Alarms publishes to it                                                                                                    |
+| #   | Service                                       | Used for                                                                         | Created in        | Who accesses it at runtime, and with which actions                                                                                   |
+| --- | --------------------------------------------- | -------------------------------------------------------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| 1   | **Amazon Bedrock — Claude Sonnet 4.6**        | Writes every answer, through a cross-region inference profile                    | A1 (access only)  | **Worker role:** `bedrock:InvokeModel` on the inference profile and the model                                                        |
+| 2   | **Amazon Bedrock — Titan Text Embeddings V2** | Turns documents and questions into vectors for search                            | A1 (access only)  | **KB service role** only                                                                                                             |
+| 3   | **Amazon Bedrock — Knowledge Bases**          | Indexes the documents and answers searches                                       | A3                | **Worker role:** `bedrock:Retrieve`                                                                                                  |
+| 4   | **Amazon S3** (general purpose bucket)        | Documents under `onboarding/`, project list at `onboarding-state/registry.json`  | A2                | **KB service role:** reads `onboarding/`. **Worker role:** `s3:GetObject` on `registry.json` only. The ingestion Lambda writes both  |
+| 5   | **Amazon S3 Vectors**                         | Vector store behind the knowledge base                                           | A3 (quick create) | **KB service role** only; the bot never touches it directly                                                                          |
+| 6   | **Amazon DynamoDB**                           | Conversation history, record of Slack deliveries already handled, 👍/👎 feedback | B1                | **Worker role:** `Query`, `PutItem`, `UpdateItem`. **Ingress role:** `PutItem`, `DeleteItem`                                         |
+| 7   | **AWS Secrets Manager**                       | `saturam/slack-bot` (Slack tokens)                                               | B3                | **Both roles:** `GetSecretValue` on `saturam/slack-bot`                                                                              |
+| 8   | **Amazon SQS** (FIFO + dead-letter queue)     | Passes questions from ingress to worker; keeps failures                          | B4                | **Ingress role:** `SendMessage`. **Worker role:** `ReceiveMessage`, `DeleteMessage`, `GetQueueAttributes`, `ChangeMessageVisibility` |
+| 9   | **AWS Lambda**                                | The two functions: ingress and worker                                            | B7, B8            | Invoked by API Gateway (permission added automatically) and by the SQS trigger                                                       |
+| 10  | **Amazon API Gateway** (HTTP API)             | The public HTTPS URL Slack calls                                                 | B9                | Invokes the ingress Lambda                                                                                                           |
+| 11  | **AWS IAM**                                   | Three roles: worker, ingress, and the KB service role                            | B6, A3            | —                                                                                                                                    |
+| 12  | **Amazon CloudWatch** (Logs, Alarms)          | Function logs, alarms on failures and slowness                                   | automatic, B12    | **Both roles:** write logs (`AWSLambdaBasicExecutionRole`)                                                                           |
+| 13  | **Amazon SNS**                                | Emails when an alarm fires (to any address, e.g. your Gmail)                     | B12               | CloudWatch Alarms publishes to it                                                                                                    |
 
 **Encryption.** Everything uses AWS-managed keys: SSE-S3, SSE-SQS, the DynamoDB default and
 `aws/secretsmanager`. No customer-managed KMS keys are created, so no KMS permissions are needed.
 
 **Not used:** EC2, ECR/Docker, VPCs or NAT gateways, and OpenSearch (unless you choose it as the
-fallback vector store in A3). Bedrock is **not** used to write answers; only its knowledge base and
-Titan embeddings are.
+fallback vector store in A3). Nothing outside AWS is involved: the model, the knowledge base and
+the embeddings all run on Bedrock.
 
-- **Keep both Lambdas outside a VPC.** They must reach `slack.com` and your
-  `*.azure.com` endpoint over the internet, which a Lambda outside a VPC does by default.
-  Attaching them to a VPC would need a NAT gateway.
+- **Keep both Lambdas outside a VPC.** They must reach `slack.com` and the AWS service endpoints
+  over the internet, which a Lambda outside a VPC does by default. Attaching them to a VPC would
+  need a NAT gateway or VPC endpoints.
 
 ### Who talks to what at runtime
 
@@ -60,12 +60,12 @@ Slack ──HTTPS──▶ API Gateway ──invoke──▶ ingress Lambda  (sa
                                             └─▶ slack.com         post "Searching…" placeholder
 
 SQS ──trigger──▶ worker Lambda  (saturam-slack-bot-worker-role)
-                    ├─▶ Secrets Manager   saturam/slack-bot, saturam/azure-foundry
+                    ├─▶ Secrets Manager   saturam/slack-bot
                     ├─▶ Bedrock KB        Retrieve
                     ├─▶ S3                read registry.json
                     ├─▶ DynamoDB          read/write conversation, feedback
                     ├─▶ SQS               delete / re-time its own message
-                    ├─▶ Azure AI Foundry  chat completions, gpt-5.4-mini (HTTPS, API key)
+                    ├─▶ Bedrock           InvokeModel, Claude Sonnet 4.6 (cross-region profile)
                     └─▶ slack.com         replace placeholder with the answer
 
 Bedrock KB  (AmazonBedrockExecutionRoleForKnowledgeBase_…, created by the console)
@@ -75,8 +75,8 @@ Bedrock KB  (AmazonBedrockExecutionRoleForKnowledgeBase_…, created by the cons
 ```
 
 All three AWS roles are least-privilege and scoped to the specific resources above. Neither
-Lambda role holds AWS keys. The ingress can't read the knowledge base, conversations or the Azure
-secret, and the worker can't send new jobs.
+Lambda role holds AWS keys. The ingress can't read the knowledge base or conversations, or invoke
+the model, and the worker can't send new jobs.
 
 ### Access the person doing the setup needs
 
@@ -99,18 +99,18 @@ these AWS managed policies to your user or role for the duration of the setup:
 knowledge base's _Quick create_ of S3 Vectors fails with _AccessDenied_, your user also needs
 `s3vectors:*` (add it as a small inline policy).
 
-**Azure.** Access to the Azure AI Foundry project that has the `gpt-5.4-mini` deployment, enough to read
-its **endpoint**, **deployment name** and **key** (Step B3b). Or have someone who does paste them
-into the secret for you. The deployment needs enough tokens-per-minute quota for concurrent answers
-(see B7, _Maximum concurrency_).
+**Bedrock model access.** Claude Sonnet 4.6 must be enabled for the account in your region (A1).
+On some accounts Anthropic models need a one-time use-case form before access is granted; the
+console asks for it on the model access page. The model's tokens-per-minute quota must cover
+concurrent answers (see B7, _Maximum concurrency_).
 
 **Slack.** Permission to create and install apps in the workspace: a workspace admin, or a
 workspace that allows members to install apps. The app requests three bot scopes
 (`app_mentions:read`, `chat:write`, `im:history`) and subscribes to two events (`app_mention`,
 `message.im`).
 
-**Your machine.** Node.js 22.2+ and pnpm 9, only to build the Lambda zip (B5). No AWS CLI, Azure
-CLI or Docker is needed.
+**Your machine.** Node.js 22.2+ and pnpm 9, only to build the Lambda zip (B5). No Docker is
+needed, and the AWS CLI only if you want to upload the zip from the terminal (Part C).
 
 **Not needed for the bot:** Atlassian (Jira, Confluence) and Google credentials. Only the ingestion
 pipeline (A5) uses those, and they're configured in that pipeline's own repository.
@@ -124,12 +124,12 @@ agent, retrieval, guards and conversation memory as in the terminal. Nothing els
 (code review, `init`, SCM or ingestion integrations) is deployed. The build fails if any of it gets
 into the Lambda package.
 
-| Entry point              | Runs where                         | Source                                    | Purpose                                                                        |
-| ------------------------ | ---------------------------------- | ----------------------------------------- | ------------------------------------------------------------------------------ |
-| `ingress.handler`        | Lambda `saturam-slack-bot-ingress` | `src/entrypoints/slack-ingress.lambda.ts` | Receives Slack events, replies within 3 s, queues questions                    |
-| `worker.handler`         | Lambda `saturam-slack-bot-worker`  | `src/entrypoints/slack-worker.lambda.ts`  | Answers queued questions with the `onboard --chat` flow                        |
-| `pnpm slack:dev`         | your machine                       | `src/entrypoints/slack-socket-mode.ts`    | The whole bot locally over Socket Mode (Part C)                                |
-| `sat-cli onboard --chat` | a terminal                         | `src/entrypoints/main.ts`                 | Unchanged; can use the same deployment (`sat-cli init` → _Azure OpenAI (GPT)_) |
+| Entry point              | Runs where                         | Source                                    | Purpose                                                                           |
+| ------------------------ | ---------------------------------- | ----------------------------------------- | --------------------------------------------------------------------------------- |
+| `ingress.handler`        | Lambda `saturam-slack-bot-ingress` | `src/entrypoints/slack-ingress.lambda.ts` | Receives Slack events, replies within 3 s, queues questions                       |
+| `worker.handler`         | Lambda `saturam-slack-bot-worker`  | `src/entrypoints/slack-worker.lambda.ts`  | Answers queued questions with the `onboard --chat` flow                           |
+| `pnpm slack:dev`         | your machine                       | `src/entrypoints/slack-socket-mode.ts`    | The whole bot locally over Socket Mode (Part C)                                   |
+| `sat-cli onboard --chat` | a terminal                         | `src/entrypoints/main.ts`                 | Unchanged; can use the same model (`sat-cli init` → _AWS Bedrock (Claude, Nova)_) |
 
 Both handlers ship in **one zip** (`pnpm slack:bundle` → `dist/slack-bot/slack-bot-lambda.zip`,
 about 3 MB). You upload it to both functions and set a different handler on each.
@@ -147,10 +147,10 @@ about 3 MB). You upload it to both functions and set a different handler on each
  ┌──────────────────────── Part B ───┼──────────────────────────────────┐
  │ Slack ─▶ API Gateway ─▶ ingress Lambda ─▶ SQS FIFO ─▶ worker Lambda   │
  │           POST /slack/events   │                 │   (onboard --chat) │
- │                                │                 ├─▶ Azure AI Foundry │
- │               placeholder ◀────┘                 │   (gpt-5.4-mini)   │
+ │                                │                 ├─▶ Bedrock          │
+ │               placeholder ◀────┘                 │   Claude Sonnet 4.6│
  │               answer      ◀──────────────────────┘                    │
- │ Secrets Manager: Slack + Azure · DynamoDB history · DLQ · alarms      │
+ │ Secrets Manager: Slack · DynamoDB history · DLQ · alarms              │
  └───────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -184,13 +184,11 @@ them that appears tells you which stage to look at
    │
    ▼
  worker Lambda   saturam-slack-bot-worker                      10–40 s (timeout 3 min)
-   │  1  load model credentials    ◀──  Secrets Manager   saturam/azure-foundry
-   │     log: Loaded model credentials from saturam/azure-foundry: AZURE_OPENAI_…
-   │  2  load the project list     ◀──  S3                onboarding-state/registry.json
-   │  3  read and save history     ◀─▶  DynamoDB          slack#<team>#<user>
-   │  4  search the docs (repeats) ◀──  Bedrock KB        Retrieve
-   │  5  write the answer          ◀─▶  Azure AI Foundry  gpt-5.4-mini, up to 6 calls
-   │  6  replace the placeholder   ──▶  Slack             bot token from saturam/slack-bot
+   │  1  load the project list     ◀──  S3                onboarding-state/registry.json
+   │  2  read and save history     ◀─▶  DynamoDB          slack#<team>#<user>
+   │  3  search the docs (repeats) ◀──  Bedrock KB        Retrieve
+   │  4  write the answer          ◀─▶  Bedrock           Claude Sonnet 4.6, up to 6 calls
+   │  5  replace the placeholder   ──▶  Slack             bot token from saturam/slack-bot
    │     log: Answered event:Ev… in …ms (attempt 1/2, … chunk(s), project …)
    ▼
  Slack   answer · sources · follow-up buttons · 👍/👎
@@ -219,25 +217,27 @@ the person who clicked.
 
 ### Everything you will create
 
-| Step | Resource                                               | Name used in this guide                                           |
-| ---- | ------------------------------------------------------ | ----------------------------------------------------------------- |
-| A1   | Bedrock model access: Titan Text Embeddings V2         | —                                                                 |
-| A2   | S3 bucket (documents)                                  | `saturam-onboarding-docs-<ACCOUNT_ID>`                            |
-| A3   | Bedrock Knowledge Base + S3 data source + vector store | `saturam-onboarding-kb`, `onboarding-docs`                        |
-| B1   | DynamoDB table                                         | `saturam-onboarding-conversations`                                |
-| B2   | Slack app                                              | `Saturam Onboarding`                                              |
-| B3   | Secrets Manager secrets                                | `saturam/slack-bot`, `saturam/azure-foundry`                      |
-| B4   | SQS FIFO queue + dead-letter queue                     | `saturam-slack-bot-jobs.fifo`, `saturam-slack-bot-jobs-dlq.fifo`  |
-| B6   | IAM roles                                              | `saturam-slack-bot-worker-role`, `saturam-slack-bot-ingress-role` |
-| B7   | Lambda (worker)                                        | `saturam-slack-bot-worker`                                        |
-| B8   | Lambda (ingress)                                       | `saturam-slack-bot-ingress`                                       |
-| B9   | API Gateway HTTP API                                   | `saturam-slack-bot-api`                                           |
-| B12  | SNS topic + CloudWatch alarms                          | `saturam-slack-bot-alarms`                                        |
+| Step | Resource                                                          | Name used in this guide                                           |
+| ---- | ----------------------------------------------------------------- | ----------------------------------------------------------------- |
+| A1   | Bedrock model access: Titan Text Embeddings V2, Claude Sonnet 4.6 | —                                                                 |
+| A2   | S3 bucket (documents)                                             | `saturam-onboarding-docs-<ACCOUNT_ID>`                            |
+| A3   | Bedrock Knowledge Base + S3 data source + vector store            | `saturam-onboarding-kb`, `onboarding-docs`                        |
+| B1   | DynamoDB table                                                    | `saturam-onboarding-conversations`                                |
+| B2   | Slack app                                                         | `Saturam Onboarding`                                              |
+| B3   | Secrets Manager secret                                            | `saturam/slack-bot`                                               |
+| B4   | SQS FIFO queue + dead-letter queue                                | `saturam-slack-bot-jobs.fifo`, `saturam-slack-bot-jobs-dlq.fifo`  |
+| B6   | IAM roles                                                         | `saturam-slack-bot-worker-role`, `saturam-slack-bot-ingress-role` |
+| B7   | Lambda (worker)                                                   | `saturam-slack-bot-worker`                                        |
+| B8   | Lambda (ingress)                                                  | `saturam-slack-bot-ingress`                                       |
+| B9   | API Gateway HTTP API                                              | `saturam-slack-bot-api`                                           |
+| B12  | SNS topic + CloudWatch alarms                                     | `saturam-slack-bot-alarms`                                        |
 
 **Use one AWS region for everything.** Pick one that offers Titan Text Embeddings V2 and Amazon S3
 Vectors; `us-east-1`, `us-west-2` and `ap-south-1` are common choices. The console remembers a
 separate region per service, so check the region picker (top right) at the start of every step.
-The Azure region of your Foundry resource is independent of this.
+Claude is invoked through a cross-region inference profile, which may route a request to another
+region — for these two models in `ap-south-1` that is the `global` profile, so any region Bedrock
+serves them from; the knowledge base, table and queues stay where you created them.
 
 ---
 
@@ -259,9 +259,9 @@ Copy this table somewhere and fill it in as you go. The `<PLACEHOLDER>` names ma
 | Data source ID                           | A3 (only the ingestion pipeline needs it)               | `GHIJKL5678`                                                                                              |
 | `<TABLE_NAME>`                           | B1                                                      | `saturam-onboarding-conversations`                                                                        |
 | Slack signing secret, bot token, team ID | B2                                                      | `8f74…`, `xoxb-…`, `T01ABCDEF`                                                                            |
-| `<SECRET_NAME>`                          | B3a                                                     | `saturam/slack-bot`                                                                                       |
-| Azure Target URI, deployment name, key   | B3b (from the Azure portal)                             | `https://my-res.cognitiveservices.azure.com/openai/deployments/gpt-5.4-mini/…`, `gpt-5.4-mini`, `…`       |
-| `<LLM_SECRET_NAME>`                      | B3b                                                     | `saturam/azure-foundry`                                                                                   |
+| `<SECRET_NAME>`                          | B3                                                      | `saturam/slack-bot`                                                                                       |
+| `<MODEL_ID>`                             | A1: the bare model ID (Sonnet 4.6 or Haiku 4.5)         | `anthropic.claude-sonnet-4-6`, `anthropic.claude-haiku-4-5-20251001-v1:0`                                 |
+| `<PROFILE_PREFIX>`                       | A1: the inference profile's prefix in your region       | `global`                                                                                                  |
 | `<QUEUE_NAME>`, queue URL                | B4: the **main** queue, not the dead-letter queue       | `saturam-slack-bot-jobs`, `https://sqs.ap-south-1.amazonaws.com/123456789012/saturam-slack-bot-jobs.fifo` |
 | Invoke URL                               | B9                                                      | `https://abc123.execute-api.ap-south-1.amazonaws.com`                                                     |
 
@@ -272,16 +272,36 @@ values.
 
 # Part A — Knowledge base
 
-## A1. Embeddings model access
+## A1. Model access
 
-The knowledge base needs **Titan Text Embeddings V2** to turn documents and questions into vectors.
-(Answers are written by your Azure deployment, so no chat-model access on Bedrock is needed.)
+Two models are needed: **Titan Text Embeddings V2**, which turns documents and questions into
+vectors for the knowledge base, and **Claude Sonnet 4.6**, which writes the answers.
 
 1. Open **Amazon Bedrock**. If the left menu has **Model access**, open it. (Newer consoles grant
-   serverless model access automatically; if the page isn't there, skip this step.)
+   serverless model access automatically; if the page isn't there, go to step 4.)
 2. **Modify model access** (or **Enable specific models**) → tick **Amazon → Titan Text Embeddings
-   V2** → **Next** → **Submit**.
-3. Wait until it shows **Access granted**.
+   V2**, **Anthropic → Claude Sonnet 4.6** and **Anthropic → Claude Haiku 4.5** → **Next**. Both
+   Claude models are allowed by the worker policy, so you can switch between them later with one
+   variable (B7). Anthropic models may ask for a one-time use-case form the first time; fill it in
+   → **Submit**. Nothing is "created" or deployed here: Bedrock models are serverless, and access
+   is the only setup they need.
+3. Wait until all three show **Access granted**.
+4. **Find the inference profiles.** Claude is invoked through a cross-region inference profile, not
+   the bare model ID. In `ap-south-1` both models are offered only through the **global** profile:
+   `global.anthropic.claude-sonnet-4-6` and `global.anthropic.claude-haiku-4-5-20251001-v1:0`. The
+   part before the first dot is `<PROFILE_PREFIX>` (`global` here); the rest is `<MODEL_ID>`:
+   `anthropic.claude-sonnet-4-6` (no version suffix) and `anthropic.claude-haiku-4-5-20251001-v1:0`.
+   Confirm from a terminal, since the list changes as models are added:
+
+    ```bash
+    aws bedrock list-inference-profiles --region ap-south-1 \
+        --query "inferenceProfileSummaries[?contains(inferenceProfileId,'sonnet-4-6') || contains(inferenceProfileId,'haiku-4-5')].inferenceProfileId"
+    ```
+
+    The bot builds the profile ID itself from the function's region (`ap-*` → `apac`, `eu-*` →
+    `eu`, otherwise `us`), which is why B7 sets `SATENG_BEDROCK_PROFILE_PREFIX` = `global` and
+    takes the bare `<MODEL_ID>`. If your region lists a model under `apac.` instead, leave the
+    prefix unset for it.
 
 ## A2. S3 bucket and documents
 
@@ -452,12 +472,10 @@ picker only offers scopes the app doesn't already have. Subscribing to the `app_
 has to approve the app (Slack sends them the request). That is a workspace setting, not a scope
 problem.
 
-## B3. Secrets Manager secrets
+## B3. Secrets Manager secret
 
-Two secrets, kept separate so the Slack and Azure credentials can be rotated, and granted,
-independently. The ingress only ever reads the first.
-
-### B3a. `saturam/slack-bot` — Slack credentials
+One secret, holding the Slack credentials. The model needs none: the worker's IAM role is what lets
+it invoke Claude on Bedrock (B6), so there is no model key to store, rotate or leak.
 
 1. **Secrets Manager → Store a new secret → Other type of secret.**
 2. **Key/value pairs**, with the key names exactly as shown:
@@ -470,80 +488,8 @@ independently. The ingress only ever reads the first.
 3. **Encryption key:** `aws/secretsmanager` → **Next**.
 4. **Secret name:** `saturam/slack-bot` → **Next** → rotation off → **Next** → **Store**.
 
-### B3b. `saturam/azure-foundry` — Azure AI Foundry credentials
-
-**Collect the values from Azure.** In the [Azure AI Foundry portal](https://ai.azure.com), open
-your project → **Models + endpoints** (on some portals, **Deployments**) → select the
-`gpt-5.4-mini` deployment. On its details page, note:
-
-- **Deployment name.** The name you gave the deployment, e.g. `gpt-5.4-mini`. This is what the API
-  calls the model; it is not necessarily the model's own name.
-- **Target URI.** For example
-  `https://my-res.cognitiveservices.azure.com/openai/deployments/gpt-5.4-mini/chat/completions?api-version=2025-04-01-preview`.
-  Paste it **as is**. The bot takes the resource URL, the deployment name and the `api-version`
-  from it. The API version matters: GPT-5-family models need a recent one, and the Target URI
-  carries the one the portal chose for the model.
-- **Key.** Either of the two keys.
-
-**Store the secret:**
-
-1. **Secrets Manager → Store a new secret → Other type of secret.**
-2. **Key/value pairs**, with the key names exactly as shown:
-
-    | Key                            | Value                                          | Required                                                 |
-    | ------------------------------ | ---------------------------------------------- | -------------------------------------------------------- |
-    | `AZURE_OPENAI_API_KEY`         | the key                                        | yes                                                      |
-    | `AZURE_OPENAI_ENDPOINT`        | the full Target URI (or just the resource URL) | yes                                                      |
-    | `AZURE_OPENAI_DEPLOYMENT_NAME` | `gpt-5.4-mini` (your deployment name)          | yes                                                      |
-    | `AZURE_OPENAI_API_VERSION`     | the `api-version` from the Target URI          | only if `AZURE_OPENAI_ENDPOINT` is just the resource URL |
-
-    **If Azure gave you these four values as `.env`-style lines** (the portal's sample code often
-    does), they are already in this format:
-
-    ```bash
-    AZURE_OPENAI_API_KEY='…'
-    AZURE_OPENAI_ENDPOINT='https://my-res.openai.azure.com/'
-    AZURE_OPENAI_DEPLOYMENT_NAME=gpt-5.4-mini
-    AZURE_OPENAI_API_VERSION=2024-12-01-preview
-    ```
-
-    Copy each one into a row, name to **Key** and value to **Value**, **without the quotes**. The
-    endpoint here is the bare resource URL, so keep `AZURE_OPENAI_API_VERSION`. A trailing `/` on
-    the endpoint is fine.
-
-    Or switch the Secrets Manager editor to **Plaintext** and paste the same values as JSON:
-
-    ```json
-    {
-        "AZURE_OPENAI_API_KEY": "…",
-        "AZURE_OPENAI_ENDPOINT": "https://my-res.openai.azure.com/",
-        "AZURE_OPENAI_DEPLOYMENT_NAME": "gpt-5.4-mini",
-        "AZURE_OPENAI_API_VERSION": "2024-12-01-preview"
-    }
-    ```
-
-3. **Encryption key:** `aws/secretsmanager` → **Next**.
-4. **Secret name:** `saturam/azure-foundry` → **Next** → rotation off → **Next** → **Store**.
-
-The worker copies exactly these keys into memory at cold start. Any other keys in the secret are
-ignored, so the secret can't change unrelated settings. Values are never logged; the log names only
-which keys were loaded.
-
-- **Use the `AZURE_OPENAI_*` names, not `AZURE_FOUNDRY_*`.** `AZURE_FOUNDRY_API_KEY` and
-  `AZURE_FOUNDRY_ENDPOINT` are for Claude on Foundry (Appendix). With `SATENG_MODEL` =
-  `azure-openai-custom` the worker loads them but never uses them, and every answer fails with _No
-  API key found for azure-openai_. The worker log names the keys it loaded, which shows the mismatch.
-- **The endpoint** is either the resource URL (`https://<resource>.openai.azure.com/` or
-  `https://<resource>.cognitiveservices.azure.com/`) or the Target URI containing
-  `/openai/deployments/…`. A URL containing `/models`, `/anthropic` or `/api/projects/` belongs to
-  a different API; use the deployment's Target URI instead.
-- **Editing the secret later.** A running worker keeps the values it read at its cold start, so
-  force a cold start after any change ([Rotating credentials](#rotating-credentials)).
-
-**About temperature.** GPT-5-family models accept only their default temperature, so the bot
-leaves it out of every request for any deployment whose name starts with `gpt-5` (or an o-series
-name such as `o3`). If your deployment name doesn't begin with the model name, e.g. `onboarding-bot`
-for a `gpt-5.4-mini` model, also add `AZURE_OPENAI_SUPPORTS_TEMPERATURE` = `false` to the secret.
+Both functions read the secret once per cold start and hold the values in memory. They are never
+logged.
 
 ## B4. SQS queues
 
@@ -598,7 +544,7 @@ What the build does:
 
 1. Compiles with `tsc`, which keeps the metadata typedi needs to wire services.
 2. Bundles only the two handlers and what they reach, which is the `onboard --chat` flow and the
-   model clients for Azure AI Foundry, Azure OpenAI and Bedrock.
+   model clients for Bedrock and, for the Appendix alternatives, Azure AI Foundry and Azure OpenAI.
 3. Fails if code review, CLI commands, SCM or ingestion code, or another provider's SDK has crept
    in.
 4. Writes one zip.
@@ -609,32 +555,43 @@ Each function gets its own role with only the permissions it uses.
 
 ### Prepare the policies
 
-Open [`deploy/slack-bot/iam/worker-policy.json`](../deploy/slack-bot/iam/worker-policy.json) and
-[`deploy/slack-bot/iam/ingress-policy.json`](../deploy/slack-bot/iam/ingress-policy.json). Replace
-every `<PLACEHOLDER>` with the value from your sheet, then search for `<` to make sure none are
-left.
+[`deploy/slack-bot/iam/worker-policy.json`](../deploy/slack-bot/iam/worker-policy.json) and
+[`deploy/slack-bot/iam/ingress-policy.json`](../deploy/slack-bot/iam/ingress-policy.json) are
+templates. Copy them to `worker-policy.local.json` and `ingress-policy.local.json` in the same
+folder — git ignores `*.local.json` there, so your account values never end up in the repository —
+and in the copies replace every `<PLACEHOLDER>` with the value from your sheet:
 
-- **Secrets.** In the worker policy, `<SECRET_NAME>` is `saturam/slack-bot` and `<LLM_SECRET_NAME>`
-  is `saturam/azure-foundry`. The ingress policy has only the first.
-- **S3.** With this guide's layout, the S3 resource is
-  `arn:aws:s3:::<BUCKET_NAME>/onboarding-state/registry.json`.
-- **SQS.** Both policies name the **main** queue, `saturam-slack-bot-jobs.fifo`: the ingress sends
-  to it and the worker consumes from it. Neither names the dead-letter queue. Queue names are
-  case-sensitive.
-- **Names you changed.** If you gave the table, bucket or queues names other than this guide's, use
-  your names here, and the same names in the Lambda environment variables (B7, B8). A mismatch
-  shows up in the logs as _… is not authorized to perform: …_, not when you save the policy.
-- **No Bedrock model permission.** The worker has no `bedrock:InvokeModel`, because answers come
-  from Azure. Only if you switch to Bedrock (Appendix) do you add
-  [`worker-bedrock-model-statement.json`](../deploy/slack-bot/iam/worker-bedrock-model-statement.json).
+- **`<REGION>`, `<ACCOUNT_ID>`.** In every ARN. The account ID is 12 digits, no dashes.
+- **`<SECRET_NAME>`.** Both policies name one secret, `saturam/slack-bot` in this guide. Keep the
+  `-*` after it: Secrets Manager appends a random suffix to a secret's ARN.
+- **`<QUEUE_NAME>`.** Both policies name the **main** queue, `saturam-slack-bot-jobs` in this
+  guide; `.fifo` is already in the template. The ingress sends to it and the worker consumes from
+  it. Neither names the dead-letter queue. Queue names are case-sensitive.
+- **`<TABLE_NAME>`.** The DynamoDB table from B1, `saturam-onboarding-conversations` in this guide.
+- **`<KNOWLEDGE_BASE_ID>`, `<BUCKET_NAME>`, `<STATE_PREFIX>`.** From A3 and A2; the state prefix is
+  `onboarding-state` with this guide's layout.
+- **`<PROFILE_PREFIX>`.** The inference profile prefix from A1 step 4, `global` in `ap-south-1`.
+  The worker policy names, for each of the two Claude models, its profile
+  `<PROFILE_PREFIX>.<model id>` in your region and account, and the model itself both in every
+  region (`arn:aws:bedrock:*::foundation-model/…`) and in the regionless form a global profile
+  resolves to (`arn:aws:bedrock:::foundation-model/…`), because the profile may route the call
+  anywhere. The model IDs themselves are not placeholders: they must match what the CLI knows
+  (`LLMModel`), and listing both is what makes switching a variable-only change (B7).
+- **Names you changed.** Whatever you put here must also be what the Lambda environment variables
+  name (B7, B8). A mismatch shows up in the logs as _… is not authorized to perform: …_, not when
+  you save the policy.
+
+**Check:** `grep -n '<' deploy/slack-bot/iam/*.local.json` prints nothing once every placeholder
+is filled in. The templates themselves are covered by a test (`tests/deploy/`) that fails if a
+real account ID or region is ever written into them.
 
 ### Worker role
 
 1. **IAM → Roles → Create role** → _AWS service_ → _Lambda_ → **Next**.
 2. Tick **AWSLambdaBasicExecutionRole** (CloudWatch Logs) → **Next**.
 3. **Role name:** `saturam-slack-bot-worker-role` → **Create role**.
-4. Open the role → **Add permissions → Create inline policy → JSON**. Paste your edited
-   `worker-policy.json` → **Next** → name `saturam-slack-bot-worker` → **Create policy**.
+4. Open the role → **Add permissions → Create inline policy → JSON**. Paste your filled-in
+   `worker-policy.local.json` → **Next** → name `saturam-slack-bot-worker` → **Create policy**.
 
 ### Ingress role
 
@@ -645,11 +602,11 @@ that the ingress has fewer permissions.
 2. Tick **AWSLambdaBasicExecutionRole** → **Next**.
 3. **Role name:** `saturam-slack-bot-ingress-role` → **Create role**.
 4. Open the role → **Add permissions → Create inline policy → JSON**. Replace the editor's contents
-   with your edited `ingress-policy.json` → **Next** → name `saturam-slack-bot-ingress` → **Create
-   policy**.
+   with your filled-in `ingress-policy.local.json` → **Next** → name `saturam-slack-bot-ingress` →
+   **Create policy**.
 
-The ingress deliberately can't read the knowledge base, S3, conversations or the Azure secret. It
-reads the Slack secret, records deliveries it has handled, and sends jobs.
+The ingress deliberately can't read the knowledge base, S3 or conversations, or invoke the model.
+It reads the Slack secret, records deliveries it has handled, and sends jobs.
 
 ### Result
 
@@ -686,20 +643,20 @@ policy → **Edit** → replace the JSON → **Save changes**.
    **Save**.
 5. **Configuration → Environment variables → Edit**, and add:
 
-    | Key                            | Value                                                                |
-    | ------------------------------ | -------------------------------------------------------------------- |
-    | `SLACK_SECRET_ID`              | `saturam/slack-bot`                                                  |
-    | `SLACK_JOB_QUEUE_URL`          | the main queue URL (B4)                                              |
-    | `SLACK_WORKER_MAX_ATTEMPTS`    | `2`                                                                  |
-    | `SATENG_MODEL`                 | `azure-openai-custom`                                                |
-    | `SATENG_LLM_SECRET_ID`         | `saturam/azure-foundry`                                              |
-    | `SATENG_KB_ID`                 | `<KNOWLEDGE_BASE_ID>`                                                |
-    | `SATENG_S3_BUCKET`             | `<BUCKET_NAME>`                                                      |
-    | `SATENG_S3_PREFIX`             | `onboarding`                                                         |
-    | `SATENG_CONVERSATION_TABLE`    | `saturam-onboarding-conversations`                                   |
-    | `SATENG_CONVERSATION_TTL_DAYS` | `90`                                                                 |
-    | `NODE_OPTIONS`                 | `--enable-source-maps` (stack traces point at the TypeScript source) |
-    | `LOG_LEVEL`                    | `info`                                                               |
+    | Key                             | Value                                                                                                        |
+    | ------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+    | `SLACK_SECRET_ID`               | `saturam/slack-bot`                                                                                          |
+    | `SLACK_JOB_QUEUE_URL`           | the main queue URL (B4)                                                                                      |
+    | `SLACK_WORKER_MAX_ATTEMPTS`     | `2`                                                                                                          |
+    | `SATENG_MODEL`                  | `anthropic.claude-sonnet-4-6`, or `anthropic.claude-haiku-4-5-20251001-v1:0` — the bare `<MODEL_ID>` from A1 |
+    | `SATENG_BEDROCK_PROFILE_PREFIX` | `global` — required in `ap-south-1`, see below                                                               |
+    | `SATENG_KB_ID`                  | `<KNOWLEDGE_BASE_ID>`                                                                                        |
+    | `SATENG_S3_BUCKET`              | `<BUCKET_NAME>`                                                                                              |
+    | `SATENG_S3_PREFIX`              | `onboarding`                                                                                                 |
+    | `SATENG_CONVERSATION_TABLE`     | `saturam-onboarding-conversations`                                                                           |
+    | `SATENG_CONVERSATION_TTL_DAYS`  | `90`                                                                                                         |
+    | `NODE_OPTIONS`                  | `--enable-source-maps` (stack traces point at the TypeScript source)                                         |
+    | `LOG_LEVEL`                     | `info`                                                                                                       |
     - **`SLACK_JOB_QUEUE_URL`** is the **main** queue's URL: **SQS → Queues →
       `saturam-slack-bot-jobs.fifo` → Details → URL**. Not the dead-letter queue, and not the ARN.
       The ingress gets the same value (B8).
@@ -707,12 +664,28 @@ policy → **Edit** → replace the JSON → **Save changes**.
       **DynamoDB → Tables**. It must also be the table named in both IAM policies (B6), and the
       ingress gets the same value.
 
-    Don't add `AWS_REGION` (Lambda sets it), any AWS keys (the role provides them), or the Azure key
-    (it comes from the secret).
+    Don't add `AWS_REGION` (Lambda sets it, and Bedrock is called in that region) or any AWS keys
+    (the role provides them). There is no model key: the role invokes the model.
 
     `SATENG_MODEL` is required. Without it the worker falls back to the CLI's default model, which
     the Lambda build doesn't support. The worker logs an error saying so at cold start, and every
     answer fails.
+
+    `SATENG_BEDROCK_PROFILE_PREFIX` = `global` is required in `ap-south-1`. Without it the bot
+    builds the region's default profile (`ap-*` → `apac`, `eu-*` → `eu`, otherwise `us`), and
+    `apac.anthropic.claude-sonnet-4-6` does not exist, so every answer fails with _The provided
+    model identifier is invalid_. It must match the profiles named in the worker policy (B6). Leave
+    it unset only in a region whose profile list (A1 step 4) shows the models under `apac.`.
+
+    **Switching between Sonnet 4.6 and Haiku 4.5 later** is a change to `SATENG_MODEL` on the
+    worker and nothing else: **Configuration → Environment variables → Edit** → the other ID →
+    **Save**. Saving starts fresh instances, so the next question already uses the new model; no
+    zip upload, and nothing on the ingress, which has no model settings at all. Both IDs are
+    allowed by the worker policy (B6), and both use the `global` profile, so
+    `SATENG_BEDROCK_PROFILE_PREFIX` stays as it is. One rule: use the **bare model ID**
+    (`anthropic.…`), never the profile ID (`global.anthropic.…` is not recognised, and the worker
+    falls back to a model the build doesn't support). Any other model must first be added to the
+    policy, and be one the CLI knows (`LLMModel` in `src/constants/llm-models.ts`).
 
     **Save.**
 
@@ -727,14 +700,14 @@ policy → **Edit** → replace the JSON → **Save changes**.
     2. **Select a source:** type `SQS` → choose **SQS**. The form fills in with the SQS settings.
     3. Fill in the form:
 
-        | Field                          | Value                                                                         | Why                                                                                                                                                  |
-        | ------------------------------ | ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-        | **SQS queue**                  | `saturam-slack-bot-jobs.fifo` from the dropdown (shown as an ARN). Not `-dlq` | The queue the ingress sends questions to                                                                                                             |
-        | **Activate trigger**           | ticked                                                                        | Otherwise the trigger is created switched off, and questions wait in the queue                                                                       |
-        | **Batch size**                 | `1` (the default is 10)                                                       | One question per run, so a slow answer never holds up others                                                                                         |
-        | **Batch window** (if shown)    | empty                                                                         | FIFO queues don't use it                                                                                                                             |
-        | **Maximum concurrency**        | `5`                                                                           | Caps simultaneous answers, and so the load on your Foundry deployment's tokens-per-minute quota and your cost. Each answer makes up to 6 model calls |
-        | **Filter criteria** (if shown) | empty                                                                         | A filter would silently drop questions                                                                                                               |
+        | Field                          | Value                                                                         | Why                                                                                                                                               |
+        | ------------------------------ | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+        | **SQS queue**                  | `saturam-slack-bot-jobs.fifo` from the dropdown (shown as an ARN). Not `-dlq` | The queue the ingress sends questions to                                                                                                          |
+        | **Activate trigger**           | ticked                                                                        | Otherwise the trigger is created switched off, and questions wait in the queue                                                                    |
+        | **Batch size**                 | `1` (the default is 10)                                                       | One question per run, so a slow answer never holds up others                                                                                      |
+        | **Batch window** (if shown)    | empty                                                                         | FIFO queues don't use it                                                                                                                          |
+        | **Maximum concurrency**        | `5`                                                                           | Caps simultaneous answers, and so the load on the model's tokens-per-minute quota in Bedrock and your cost. Each answer makes up to 6 model calls |
+        | **Filter criteria** (if shown) | empty                                                                         | A filter would silently drop questions                                                                                                            |
 
     4. Expand **Additional settings** → tick **Report batch item failures**. This is required. The
        worker reports each failed question itself; without this setting Lambda ignores that, deletes
@@ -872,9 +845,7 @@ These questions are answerable from the sample corpus:
 4. DM the bot: `how do I install sat-cli?`
 5. Check the logs in **CloudWatch → Log groups**:
     - the ingress group shows `Queued event:Ev… (mention)`;
-    - the worker group shows, once per cold start,
-      `Loaded model credentials from saturam/azure-foundry: AZURE_OPENAI_API_KEY, AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_DEPLOYMENT_NAME`
-      (plus `AZURE_OPENAI_API_VERSION` if you set it), then
+    - the worker group shows
       `Answered event:Ev… in …ms (attempt 1/2, … chunk(s), project saturam-cli)`.
 6. **DynamoDB → Explore items** shows `slack#T…#U…` (history), `slack-event#…` (deliveries) and
    `slack-feedback#T…` items.
@@ -913,9 +884,24 @@ For the two SQS alarms, set **Missing data treatment → Treat missing data as g
 
 ## Deploying a code change
 
-1. `pnpm slack:bundle`
-2. **Lambda → saturam-slack-bot-worker → Code → Upload from → .zip file** → the new zip → **Save.**
-3. Do the same for **saturam-slack-bot-ingress**. The handler setting is kept.
+Build the zip on your machine, from the repository root:
+
+```bash
+pnpm install
+pnpm slack:bundle          # → dist/slack-bot/slack-bot-lambda.zip
+```
+
+Then upload it to **both** functions. In the console: **Lambda → the function → Code → Upload from
+→ .zip file** → the zip → **Save**, for `saturam-slack-bot-worker` and then
+`saturam-slack-bot-ingress`; the handler setting is kept. Or from the terminal, with the AWS CLI
+signed in to the account:
+
+```bash
+aws lambda update-function-code --function-name saturam-slack-bot-worker \
+    --zip-file fileb://dist/slack-bot/slack-bot-lambda.zip --region <REGION>
+aws lambda update-function-code --function-name saturam-slack-bot-ingress \
+    --zip-file fileb://dist/slack-bot/slack-bot-lambda.zip --region <REGION>
+```
 
 Always deploy the same zip to both functions. They share the job format on the queue, and a
 mismatch sends jobs to the dead-letter queue. To roll back, keep the previous zip and upload it to
@@ -926,11 +912,11 @@ project appears in the bot within 10 minutes of `registry.json` changing.
 
 ## Rotating credentials
 
-| What                         | How                                                                                                                                                                                                                                                                                |
-| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Azure key                    | Regenerate it in Foundry → update `AZURE_OPENAI_API_KEY` in `saturam/azure-foundry` → force a worker cold start: edit any environment variable (e.g. `LOG_LEVEL`) and **Save**. Azure keeps two keys, so switch to the second key first and regenerate the first, with no downtime |
-| Azure deployment or endpoint | Update `AZURE_OPENAI_DEPLOYMENT_NAME` / `AZURE_OPENAI_ENDPOINT` in the secret → force a worker cold start                                                                                                                                                                          |
-| Slack tokens                 | Update `saturam/slack-bot` → force a cold start of **both** functions                                                                                                                                                                                                              |
+| What         | How                                                                   |
+| ------------ | --------------------------------------------------------------------- |
+| Slack tokens | Update `saturam/slack-bot` → force a cold start of **both** functions |
+
+The model has no credentials to rotate: the worker calls Bedrock with its IAM role.
 
 Each function reads its secrets once per cold start, so a changed value, or a renamed or added
 key, takes effect only after one.
@@ -960,53 +946,52 @@ down a WebSocket.
     ```bash
     SLACK_APP_TOKEN=xapp-...
     SLACK_BOT_TOKEN=xoxb-...
-    SATENG_MODEL=azure-openai-custom
-    # Either the deployed secret (needs AWS credentials that can read it)…
-    SATENG_LLM_SECRET_ID=saturam/azure-foundry
-    # …or the values directly:
-    # AZURE_OPENAI_API_KEY=...
-    # AZURE_OPENAI_ENDPOINT=https://my-res.cognitiveservices.azure.com/openai/deployments/gpt-5.4-mini/chat/completions?api-version=2025-04-01-preview
-    # AZURE_OPENAI_DEPLOYMENT_NAME=gpt-5.4-mini
+    SATENG_MODEL=anthropic.claude-sonnet-4-6
+    SATENG_BEDROCK_PROFILE_PREFIX=global     # ap-south-1 offers these models only as global.*
     SATENG_KB_ID=<KNOWLEDGE_BASE_ID>
     SATENG_S3_BUCKET=<BUCKET_NAME>
     SATENG_S3_PREFIX=onboarding
     # SATENG_CONVERSATION_TABLE=saturam-onboarding-conversations   # optional; otherwise in-memory
+    # A profile allowed to call bedrock:InvokeModel and bedrock:Retrieve, and to read the bucket
     AWS_PROFILE=<your profile>
     AWS_REGION=<REGION>
     ```
 
 3. `pnpm slack:dev`, then mention or DM the development bot.
 
-The terminal CLI can use the same deployment: `sat-cli init` → **AI / LLM providers** → **Azure
-OpenAI (GPT)**, then enter the endpoint, deployment name, API version and key.
+The terminal CLI can use the same model: `sat-cli init` → **AI / LLM providers** → **AWS Bedrock
+(Claude, Nova)** → **Bedrock Claude 4.6 Sonnet**, with your profile and region, and
+`SATENG_BEDROCK_PROFILE_PREFIX=global` exported in that shell for the same reason as B7.
 
 ## Configuration reference
 
 **Lambda environment variables**
 
-| Variable                                                                             | Function   | Required    | Meaning                                                         |
-| ------------------------------------------------------------------------------------ | ---------- | ----------- | --------------------------------------------------------------- |
-| `SLACK_SECRET_ID`                                                                    | both       | yes         | Secret holding `SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET`     |
-| `SLACK_JOB_QUEUE_URL`                                                                | both       | yes         | FIFO queue URL                                                  |
-| `SATENG_CONVERSATION_TABLE`                                                          | both       | yes         | History, delivery de-duplication, feedback                      |
-| `SLACK_WORKER_MAX_ATTEMPTS`                                                          | worker     | yes         | Must equal the queue's _Maximum receives_ (default `2`)         |
-| `SATENG_MODEL`                                                                       | worker     | yes         | `azure-openai-custom`; alternatives in the Appendix             |
-| `SATENG_LLM_SECRET_ID`                                                               | worker     | yes (Azure) | Secret holding the model provider's credentials                 |
-| `SATENG_KB_ID`                                                                       | worker     | yes         | Knowledge Base ID                                               |
-| `SATENG_S3_BUCKET`, `SATENG_S3_PREFIX`                                               | worker     | yes         | Where `registry.json` is found (`<prefix>-state/registry.json`) |
-| `SATENG_S3_STATE_PREFIX`                                                             | worker     | no          | Overrides `<prefix>-state`                                      |
-| `SATENG_CONVERSATION_TTL_DAYS`                                                       | worker     | no          | Default 90                                                      |
-| `SATENG_KB_REGION`, `SATENG_S3_REGION`, `SATENG_CONVERSATION_TABLE_REGION`           | as used    | no          | Only when a resource is outside the function's region           |
-| `SLACK_ALLOWED_TEAM_IDS`, `SLACK_ALLOWED_CHANNEL_IDS`, `SLACK_ALLOW_DIRECT_MESSAGES` | ingress    | no          | Access control                                                  |
-| `NODE_OPTIONS`, `LOG_LEVEL`                                                          | both       | no          | `--enable-source-maps`; `info` or `debug`                       |
-| `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `SLACK_APP_TOKEN`                         | local only | —           | Never set these on Lambda                                       |
+| Variable                                                                             | Function   | Required            | Meaning                                                                                                            |
+| ------------------------------------------------------------------------------------ | ---------- | ------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `SLACK_SECRET_ID`                                                                    | both       | yes                 | Secret holding `SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET`                                                        |
+| `SLACK_JOB_QUEUE_URL`                                                                | both       | yes                 | FIFO queue URL                                                                                                     |
+| `SATENG_CONVERSATION_TABLE`                                                          | both       | yes                 | History, delivery de-duplication, feedback                                                                         |
+| `SLACK_WORKER_MAX_ATTEMPTS`                                                          | worker     | yes                 | Must equal the queue's _Maximum receives_ (default `2`)                                                            |
+| `SATENG_MODEL`                                                                       | worker     | yes                 | Bare model ID: `anthropic.claude-sonnet-4-6` or `anthropic.claude-haiku-4-5-20251001-v1:0`; others in the Appendix |
+| `SATENG_BEDROCK_PROFILE_PREFIX`                                                      | worker     | yes in `ap-south-1` | `global`: the only profile these models have there (A1). Unset elsewhere means the region's default prefix         |
+| `SATENG_BEDROCK_REGION`                                                              | worker     | no                  | Only when the model is invoked outside the function's region                                                       |
+| `SATENG_LLM_SECRET_ID`                                                               | worker     | no                  | Azure only (Appendix): secret holding the provider's credentials                                                   |
+| `SATENG_KB_ID`                                                                       | worker     | yes                 | Knowledge Base ID                                                                                                  |
+| `SATENG_S3_BUCKET`, `SATENG_S3_PREFIX`                                               | worker     | yes                 | Where `registry.json` is found (`<prefix>-state/registry.json`)                                                    |
+| `SATENG_S3_STATE_PREFIX`                                                             | worker     | no                  | Overrides `<prefix>-state`                                                                                         |
+| `SATENG_CONVERSATION_TTL_DAYS`                                                       | worker     | no                  | Default 90                                                                                                         |
+| `SATENG_KB_REGION`, `SATENG_S3_REGION`, `SATENG_CONVERSATION_TABLE_REGION`           | as used    | no                  | Only when a resource is outside the function's region                                                              |
+| `SLACK_ALLOWED_TEAM_IDS`, `SLACK_ALLOWED_CHANNEL_IDS`, `SLACK_ALLOW_DIRECT_MESSAGES` | ingress    | no                  | Access control                                                                                                     |
+| `NODE_OPTIONS`, `LOG_LEVEL`                                                          | both       | no                  | `--enable-source-maps`; `info` or `debug`                                                                          |
+| `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `SLACK_APP_TOKEN`                         | local only | —                   | Never set these on Lambda                                                                                          |
 
 **Secrets**
 
-| Secret                  | Keys                                                                                                                                                         | Read by         |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------- |
-| `saturam/slack-bot`     | `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`                                                                                                                    | ingress, worker |
-| `saturam/azure-foundry` | `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT_NAME` (+ optional `AZURE_OPENAI_API_VERSION`, `AZURE_OPENAI_SUPPORTS_TEMPERATURE`) | worker          |
+| Secret                  | Keys                                                              | Read by         |
+| ----------------------- | ----------------------------------------------------------------- | --------------- |
+| `saturam/slack-bot`     | `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`                         | ingress, worker |
+| `saturam/azure-foundry` | Azure only (Appendix): `AZURE_OPENAI_*` or `AZURE_FOUNDRY_*` keys | worker          |
 
 ## How conversations behave
 
@@ -1027,14 +1012,14 @@ OpenAI (GPT)**, then enter the endpoint, deployment name, API version and key.
 - **Authentication.** Every request is authenticated by Slack's HMAC signature over the raw body,
   and anything older than 5 minutes is rejected. The ingress refuses to run without a signing
   secret rather than skip the check.
-- **Least privilege.** The ingress can't read the knowledge base, conversations or the Azure
-  secret, and neither role has AWS keys.
-- **Secrets.** Slack tokens and the Azure key live only in Secrets Manager. They are held in memory
-  and never logged.
-- **Data leaves AWS.** To write an answer, the worker sends the user's question, recent
-  conversation turns and the retrieved document excerpts to your Azure AI Foundry deployment over
-  HTTPS. Make sure that is acceptable for the documentation you index, under your Azure
-  data-processing terms.
+- **Least privilege.** The ingress can't read the knowledge base or conversations, or invoke the
+  model, and neither role has AWS keys.
+- **Secrets.** The Slack tokens live only in Secrets Manager. They are held in memory and never
+  logged. The model needs no key: the worker's role invokes it.
+- **Data stays in AWS.** To write an answer, the worker sends the user's question, recent
+  conversation turns and the retrieved document excerpts to Bedrock. The cross-region inference
+  profile may process the request in another region of the same geography, but the data never
+  leaves AWS.
 - **Who sees what.** Anyone who can DM the bot, or mention it in an allowed channel, can ask about
   **every** indexed project. If that's too broad, restrict channels, turn DMs off, or split the
   knowledge base.
@@ -1046,33 +1031,29 @@ OpenAI (GPT)**, then enter the endpoint, deployment name, API version and key.
 
 ## Troubleshooting
 
-| Symptom                                                                                                                                       | Likely cause                                                                                              | Fix                                                                                                                                                                                                         |
-| --------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Slack: _URL didn't respond with the value of the challenge parameter_                                                                         | Wrong URL, the ingress can't read the secret, or the signing secret doesn't match                         | B8 smoke test. The URL must end in `/slack/events`. Compare Slack's Signing Secret with the secret                                                                                                          |
-| Lambda test: _Cannot find module 'index'_                                                                                                     | Handler not set                                                                                           | Runtime settings → `worker.handler` / `ingress.handler`                                                                                                                                                     |
-| Mentions get no reply                                                                                                                         | Events not subscribed, bot not in the channel, or channel not allow-listed                                | B10.1, `/invite @onboarding`, `SLACK_ALLOWED_CHANNEL_IDS`                                                                                                                                                   |
-| DMs: _Sending messages to this app has been turned off_                                                                                       | Messages tab off                                                                                          | B10.3                                                                                                                                                                                                       |
-| Placeholder never changes                                                                                                                     | The worker never ran, was killed, or can't read the Slack secret to post                                  | [Finding where a question got stuck](#finding-where-a-question-got-stuck)                                                                                                                                   |
-| Ingress log: _Could not queue event:Ev…: … not authorized to perform: sqs:SendMessage_                                                        | The ingress policy names another queue (e.g. the dead-letter queue, or wrong case)                        | B6: the main queue, `saturam-slack-bot-jobs.fifo`, lowercase                                                                                                                                                |
-| _Sorry — I couldn't answer that just now_ + a reference                                                                                       | Every attempt failed                                                                                      | Search the worker logs for the reference                                                                                                                                                                    |
-| Worker log: _not supported by the Slack bot's Lambda build_                                                                                   | `SATENG_MODEL` missing or wrong                                                                           | B7.5: `azure-openai-custom`                                                                                                                                                                                 |
-| Worker log: _Could not load model credentials: … not authorized to perform: secretsmanager:GetSecretValue on resource: saturam/azure-foundry_ | The worker role's policy **as saved in AWS** doesn't allow the secret, or no secret has exactly that name | IAM → worker role → inline policy → **Edit** → replace it with `worker-policy.json` (B6). Check the secret's name in Secrets Manager: a missing secret also shows as _not authorized_. No cold start needed |
-| Worker log: _Could not replace the placeholder_ / _Could not show the retry notice_ … _not authorized … on resource: saturam/slack-bot_       | The worker can't read the Slack secret, so it can't post anything                                         | Same fix: the worker policy needs both secret ARNs (B6)                                                                                                                                                     |
-| Worker log: _No API key found for azure-openai_, while _Loaded model credentials_ lists `AZURE_FOUNDRY_API_KEY`, `AZURE_FOUNDRY_ENDPOINT`     | The secret uses the Claude-on-Foundry key names                                                           | Rename them to `AZURE_OPENAI_API_KEY` and `AZURE_OPENAI_ENDPOINT` (B3b), then [force a worker cold start](#rotating-credentials)                                                                            |
-| Worker log: _Loaded model credentials … no recognised keys_                                                                                   | Key names in the secret are misspelled                                                                    | B3b: exactly `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT_NAME`                                                                                                                |
-| Worker log: _Azure OpenAI endpoint is required_ / _deployment name is required_                                                               | `SATENG_LLM_SECRET_ID` unset, or that key missing from the secret                                         | B7.5, B3b                                                                                                                                                                                                   |
-| Worker log: `401` / _Access denied due to invalid subscription key_                                                                           | Wrong key, or the key belongs to a different resource than the endpoint                                   | Copy key and Target URI from the same deployment page                                                                                                                                                       |
-| Worker log: `404` / _DeploymentNotFound_                                                                                                      | Deployment name wrong, or the endpoint belongs to another resource                                        | `AZURE_OPENAI_DEPLOYMENT_NAME` must be the **deployment** name; paste the Target URI unedited                                                                                                               |
-| Worker log: `429` / _rate limit_                                                                                                              | The deployment's tokens-per-minute quota is exceeded                                                      | Lower the trigger's _Maximum concurrency_, or raise the deployment's quota in Foundry                                                                                                                       |
-| Worker log: _Unsupported value: 'temperature'_                                                                                                | The deployment is a GPT-5-family or o-series model whose name doesn't show it                             | Add `AZURE_OPENAI_SUPPORTS_TEMPERATURE` = `false` to the secret (B3b)                                                                                                                                       |
-| Worker log: _… is enabled only for api versions … and later_ / _unsupported api-version_                                                      | API version too old for the model                                                                         | Paste the full Target URI as `AZURE_OPENAI_ENDPOINT`, or set `AZURE_OPENAI_API_VERSION` to the version it shows                                                                                             |
-| Worker log: `ENOTFOUND` / timeout to `*.azure.com`                                                                                            | Lambda has no internet route                                                                              | Remove the function from any VPC (or add a NAT gateway)                                                                                                                                                     |
-| Worker log: _not authorized to perform: bedrock:Retrieve_                                                                                     | Wrong KB ID or region in the policy                                                                       | B6                                                                                                                                                                                                          |
-| Answers say nothing is documented                                                                                                             | Knowledge base empty or not synced                                                                        | A3.6, A4                                                                                                                                                                                                    |
-| Answers never name a project; `project none` in the logs                                                                                      | `registry.json` not read                                                                                  | `SATENG_S3_BUCKET`/`SATENG_S3_PREFIX`, the file at `onboarding-state/registry.json`, and the S3 ARN in the worker policy                                                                                    |
-| Project-scoped searches return nothing                                                                                                        | Metadata `project` ≠ registry `slug`, or metadata files misnamed                                          | A2 layout rules, re-sync                                                                                                                                                                                    |
-| Occasional duplicate answer                                                                                                                   | De-duplication table unreachable (the bot errs towards answering)                                         | Ingress `SATENG_CONVERSATION_TABLE` and its `dynamodb:PutItem` permission                                                                                                                                   |
-| Slow first reply after a quiet period                                                                                                         | Cold start                                                                                                | Harmless (Slack's retry is de-duplicated). To remove it, publish an ingress version, add an alias with provisioned concurrency 1, and point the API integration at the alias                                |
+| Symptom                                                                                                                                 | Likely cause                                                                                                                                                                                                   | Fix                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| --------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Slack: _URL didn't respond with the value of the challenge parameter_                                                                   | Wrong URL, the ingress can't read the secret, or the signing secret doesn't match                                                                                                                              | B8 smoke test. The URL must end in `/slack/events`. Compare Slack's Signing Secret with the secret                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| Lambda test: _Cannot find module 'index'_                                                                                               | Handler not set                                                                                                                                                                                                | Runtime settings → `worker.handler` / `ingress.handler`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| Mentions get no reply                                                                                                                   | Events not subscribed, bot not in the channel, or channel not allow-listed                                                                                                                                     | B10.1, `/invite @onboarding`, `SLACK_ALLOWED_CHANNEL_IDS`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| DMs: _Sending messages to this app has been turned off_                                                                                 | Messages tab off                                                                                                                                                                                               | B10.3                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| Placeholder never changes                                                                                                               | The worker never ran, was killed, or can't read the Slack secret to post                                                                                                                                       | [Finding where a question got stuck](#finding-where-a-question-got-stuck)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Ingress log: _Could not queue event:Ev…: … not authorized to perform: sqs:SendMessage_                                                  | The ingress policy names another queue (e.g. the dead-letter queue, or wrong case)                                                                                                                             | B6: the main queue, `saturam-slack-bot-jobs.fifo`, lowercase                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| _Sorry — I couldn't answer that just now_ + a reference                                                                                 | Every attempt failed                                                                                                                                                                                           | Search the worker logs for the reference                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| Worker log: _not supported by the Slack bot's Lambda build_                                                                             | `SATENG_MODEL` missing or wrong                                                                                                                                                                                | B7.5: `anthropic.claude-sonnet-4-6` or `anthropic.claude-haiku-4-5-20251001-v1:0`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| Worker log: _Unrecognized saved model ID "global.anthropic…"_, then _not supported by the Slack bot's Lambda build_                     | `SATENG_MODEL` holds the inference profile ID instead of the model ID                                                                                                                                          | B7: the bare ID, `anthropic.…`; the profile prefix goes in `SATENG_BEDROCK_PROFILE_PREFIX`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| Worker log: _Could not replace the placeholder_ / _Could not show the retry notice_ … _not authorized … on resource: saturam/slack-bot_ | The worker role's policy **as saved in AWS** doesn't allow the secret, or no secret has exactly that name, so the worker can't post anything                                                                   | IAM → worker role → inline policy → **Edit** → replace it with your filled-in `worker-policy.local.json` (B6). Check the secret's name in Secrets Manager: a missing secret also shows as _not authorized_. No cold start needed                                                                                                                                                                                                                                                                                                                                                                              |
+| Worker log: _AccessDeniedException_ … _not authorized to perform: bedrock:InvokeModel on resource: … inference-profile/…_               | The worker policy's model statement names a different profile or model than the one being called                                                                                                               | B6: the profile ARN must be `<PROFILE_PREFIX>.<MODEL_ID>` exactly as A1 shows it, in your region and account, plus the `foundation-model` ARN. `SATENG_BEDROCK_PROFILE_PREFIX` (B7), if set, must match                                                                                                                                                                                                                                                                                                                                                                                                       |
+| Worker log: _AccessDeniedException: You don't have access to the model with the specified model ID_                                     | Model access not granted in this region                                                                                                                                                                        | A1: enable Claude Sonnet 4.6 and wait for _Access granted_                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| Worker log: _ValidationException_ … _The provided model identifier is invalid_ / _inference profile … not found_                        | The profile ID the bot built (`<prefix>.<SATENG_MODEL>`, shown by the _Bedrock: invoking …_ debug line) doesn't exist in the region it called. Not a permission problem: that would be _AccessDeniedException_ | `aws bedrock list-inference-profiles --region <REGION>` shows the real IDs. If the model is there under another prefix (e.g. `global`), set `SATENG_BEDROCK_PROFILE_PREFIX` to it (B7) and fix the profile ARN in the policy (B6). If it exists only in another geography (only `us.`/`eu.` profiles), set `SATENG_BEDROCK_REGION` to a region there, e.g. `us-east-1` (the prefix follows it), and use that region and prefix in the policy's profile ARN; the data then leaves your geography. If the model ID itself isn't listed by `list-foundation-models`, it's wrong or not offered: see the Appendix |
+| Worker log: _ThrottlingException_ / _Too many requests_                                                                                 | The model's tokens- or requests-per-minute quota is exceeded                                                                                                                                                   | Lower the trigger's _Maximum concurrency_, or request a quota increase (**Service Quotas → Amazon Bedrock**)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| Worker log: `ENOTFOUND` / timeout to `bedrock-runtime.<region>.amazonaws.com` or `slack.com`                                            | Lambda has no internet route                                                                                                                                                                                   | Remove the function from any VPC (or add a NAT gateway / VPC endpoints)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| Worker log: _not authorized to perform: bedrock:Retrieve_                                                                               | Wrong KB ID or region in the policy                                                                                                                                                                            | B6                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| Answers say nothing is documented                                                                                                       | Knowledge base empty or not synced                                                                                                                                                                             | A3.6, A4                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| Answers never name a project; `project none` in the logs                                                                                | `registry.json` not read                                                                                                                                                                                       | `SATENG_S3_BUCKET`/`SATENG_S3_PREFIX`, the file at `onboarding-state/registry.json`, and the S3 ARN in the worker policy                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| Project-scoped searches return nothing                                                                                                  | Metadata `project` ≠ registry `slug`, or metadata files misnamed                                                                                                                                               | A2 layout rules, re-sync                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| Occasional duplicate answer                                                                                                             | De-duplication table unreachable (the bot errs towards answering)                                                                                                                                              | Ingress `SATENG_CONVERSATION_TABLE` and its `dynamodb:PutItem` permission                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Slow first reply after a quiet period                                                                                                   | Cold start                                                                                                                                                                                                     | Harmless (Slack's retry is de-duplicated). To remove it, publish an ingress version, add an alias with provisioned concurrency 1, and point the API integration at the alias                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 
 ### Finding where a question got stuck
 
@@ -1114,7 +1095,6 @@ Then check each stage in order, in the bot's region. Stop at the first one that'
     | _Task timed out after 3.00 seconds_                        | Timeout left at the default: B7 step 4, **3 min 0 sec**                        |
     | _Task timed out after 180.00 seconds_                      | Something hangs, usually no internet: **Configuration → VPC** must show no VPC |
     | _Runtime.ImportModuleError_ / _Cannot find module 'index'_ | Handler: B7 step 3, `worker.handler`                                           |
-    | _Could not load model credentials: … not authorized …_     | Worker policy (table above)                                                    |
     | _Answering event:Ev… failed on attempt n/2_ + an error     | The error names the cause; find it in the table above                          |
     | _Could not replace the placeholder …_                      | The worker can't post to Slack: its Slack secret access or `SLACK_SECRET_ID`   |
 
@@ -1129,7 +1109,7 @@ Delete in this order, so nothing is left calling something already gone:
 2. The API Gateway API.
 3. Both Lambdas.
 4. Both queues.
-5. Both secrets.
+5. The secret.
 6. The DynamoDB table.
 7. Both IAM roles.
 8. The CloudWatch alarms, SNS topic and log groups.
@@ -1138,21 +1118,63 @@ Delete in this order, so nothing is left calling something already gone:
 10. The documents bucket (empty it first).
 11. The knowledge base's service role (IAM, `AmazonBedrockExecutionRoleForKnowledgeBase_…`).
 
-The Azure deployment is yours and is not touched by any of this.
-
 ---
 
 # Appendix — other model providers
 
-The Lambda build also carries clients for these two alternatives. Switching is configuration only;
-no code or rebuild is needed.
+The Lambda build also carries clients for Azure AI Foundry, for Claude or for a GPT deployment.
+Switching is configuration only; no code change or rebuild is needed.
+
+### Another Claude model on Bedrock
+
+Sonnet 4.6 and Haiku 4.5 are already set up, and switching between them is B7's variable change.
+For any other model:
+
+1. It must be one the CLI knows: the `LLMModel` enum in `src/constants/llm-models.ts`, with an
+   entry in `MODEL_CONTEXT_WINDOWS`, the `BEDROCK_MODELS` set, `PROVIDER_MODELS` in
+   `config-service.ts` and `MODEL_DISPLAY_NAMES` in `init-command.ts`. An unknown ID in
+   `SATENG_MODEL` is ignored with a warning, and the worker falls back to an unsupported default.
+   After adding one, rebuild and upload the zip (Part C).
+2. Enable it in A1 and note its inference profile ID.
+3. Add its two ARNs to the worker policy's `InvokeModelThroughCrossRegionProfile` statement (B6),
+   then save the policy in IAM.
+4. On the worker, set `SATENG_MODEL` to its `<MODEL_ID>` (the part after the profile prefix), and
+   `SATENG_BEDROCK_PROFILE_PREFIX` if the prefix differs from the region's default.
+
+### Azure AI Foundry — common steps
+
+Both Azure options keep their credentials in a second secret, which only the worker reads.
+
+1. **Secrets Manager → Store a new secret → Other type of secret**, name `saturam/azure-foundry`,
+   with the keys listed under the option you choose below. Values are never logged; the worker log
+   names only the keys it loaded.
+2. Add the secret to the worker policy's `ReadSlackSecret` statement (B6), so its `Resource` becomes
+   a list, and save the policy in IAM:
+
+    ```json
+    "Resource": [
+        "arn:aws:secretsmanager:<REGION>:<ACCOUNT_ID>:secret:saturam/slack-bot-*",
+        "arn:aws:secretsmanager:<REGION>:<ACCOUNT_ID>:secret:saturam/azure-foundry-*"
+    ]
+    ```
+
+3. On the worker, add `SATENG_LLM_SECRET_ID` = `saturam/azure-foundry`, set `SATENG_MODEL` as below,
+   and force a cold start ([Rotating credentials](#rotating-credentials)). The worker log then shows
+   `Loaded model credentials from saturam/azure-foundry: …` once per cold start.
+4. The worker must reach `*.azure.com` over the internet, so it stays outside any VPC. Data now
+   leaves AWS: the question, recent turns and retrieved excerpts go to your Azure deployment.
+
+The `InvokeModelThroughCrossRegionProfile` statement can stay in the policy; it is simply unused.
+
+To rotate an Azure key: regenerate it in Foundry, update it in the secret, and force a worker cold
+start. Azure keeps two keys, so switch to the second before regenerating the first.
 
 ### Claude on Azure AI Foundry
 
 1. In Foundry, open the Claude deployment. Note its **deployment name** (e.g. `claude-sonnet-4-5`),
    its **Target URI** (e.g. `https://my-res.services.ai.azure.com/anthropic/v1/messages`; paste it as
    is) and a **key**.
-2. Put these keys in `saturam/azure-foundry`, replacing the `AZURE_OPENAI_*` ones:
+2. Secret keys:
 
     | Key                        | Value                                |
     | -------------------------- | ------------------------------------ |
@@ -1160,16 +1182,33 @@ no code or rebuild is needed.
     | `AZURE_FOUNDRY_ENDPOINT`   | the Target URI (or the resource URL) |
     | `AZURE_FOUNDRY_DEPLOYMENT` | the deployment name                  |
 
-3. On the worker, set `SATENG_MODEL` = `azure-foundry-claude`, and force a cold start.
+3. `SATENG_MODEL` = `azure-foundry-claude`.
 
-### Claude on Amazon Bedrock
+### A GPT deployment on Azure AI Foundry / Azure OpenAI
 
-1. In A1, also enable **Anthropic → Claude Sonnet 4.5**, then open **Cross-region inference** and
-   note its profile ID, e.g. `apac.anthropic.claude-sonnet-4-5-20250929-v1:0`. The part before the
-   first dot is `<PROFILE_PREFIX>`; the rest is `<MODEL_ID>`.
-2. Add [`worker-bedrock-model-statement.json`](../deploy/slack-bot/iam/worker-bedrock-model-statement.json)
-   to the worker policy's `Statement` list, with its placeholders filled in. If the prefix is
-   `global`, also add `"arn:aws:bedrock:::foundation-model/<MODEL_ID>"` to its `Resource` list.
-3. On the worker, set `SATENG_MODEL` = `<MODEL_ID>` and remove `SATENG_LLM_SECRET_ID`. If the
-   profile prefix isn't the region's default (`us-*` → `us`, `eu-*` → `eu`, `ap-*` → `apac`), set
-   `SATENG_BEDROCK_PROFILE_PREFIX` to it.
+1. In Foundry, open the deployment (e.g. `gpt-5.4-mini`). Note its **deployment name**, its
+   **Target URI** (e.g.
+   `https://my-res.cognitiveservices.azure.com/openai/deployments/gpt-5.4-mini/chat/completions?api-version=2025-04-01-preview`;
+   paste it as is — the bot takes the resource URL, deployment name and `api-version` from it) and a
+   **key**.
+2. Secret keys:
+
+    | Key                            | Value                                          | Required                                                 |
+    | ------------------------------ | ---------------------------------------------- | -------------------------------------------------------- |
+    | `AZURE_OPENAI_API_KEY`         | the key                                        | yes                                                      |
+    | `AZURE_OPENAI_ENDPOINT`        | the full Target URI (or just the resource URL) | yes                                                      |
+    | `AZURE_OPENAI_DEPLOYMENT_NAME` | the deployment name                            | yes                                                      |
+    | `AZURE_OPENAI_API_VERSION`     | the `api-version` from the Target URI          | only if `AZURE_OPENAI_ENDPOINT` is just the resource URL |
+
+3. `SATENG_MODEL` = `azure-openai-custom`.
+
+GPT-5-family and o-series models accept only their default temperature, so the bot leaves it out
+for any deployment whose name starts with `gpt-5` or `o<digit>`. If your deployment name hides the
+model (e.g. `onboarding-bot`), also add `AZURE_OPENAI_SUPPORTS_TEMPERATURE` = `false` to the secret.
+
+Use the `AZURE_OPENAI_*` key names for a GPT deployment and `AZURE_FOUNDRY_*` for Claude: with the
+wrong set the worker loads them but never uses them, and every answer fails with _No API key found_.
+Other Azure errors in the worker log: `401` _invalid subscription key_ (key and endpoint from
+different resources), `404` _DeploymentNotFound_ (wrong deployment name, or the endpoint of another
+resource), `429` (the deployment's quota; lower _Maximum concurrency_ or raise it in Foundry), and
+_unsupported api-version_ (paste the full Target URI as `AZURE_OPENAI_ENDPOINT`).

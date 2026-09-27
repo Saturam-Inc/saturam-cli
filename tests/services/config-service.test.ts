@@ -155,6 +155,14 @@ describe("ConfigService Onboarding Credentials", () => {
             expect(parsed.defaultModel).toBe(LLMModel.BEDROCK_CLAUDE_4_6_OPUS);
         });
 
+        it("resolves the versioned Sonnet 4.6 ID an earlier CLI saved to Bedrock's unversioned one", () => {
+            // The id was "anthropic.claude-sonnet-4-6-v1:0" until Bedrock turned out to name the
+            // model without a suffix; configs written by that version must keep working.
+            const parsed = PersonalConfigurationSchema.parse({ defaultModel: "anthropic.claude-sonnet-4-6-v1:0" });
+            expect(parsed.defaultModel).toBe(LLMModel.BEDROCK_CLAUDE_4_6_SONNET);
+            expect(LLMModel.BEDROCK_CLAUDE_4_6_SONNET).toBe("anthropic.claude-sonnet-4-6");
+        });
+
         it("falls back to undefined instead of throwing when a saved model ID is no longer recognized", () => {
             // A retired/renamed model ID must not break the entire config parse — every
             // ConfigService method that reads personal/project/session config depends on it.

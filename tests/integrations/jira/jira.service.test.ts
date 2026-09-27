@@ -68,7 +68,7 @@ describe("JiraService", () => {
             });
             global.fetch = mockFetch as any;
 
-            const result = await service.getIssue("https://saturam.atlassian.net", "ENG-101");
+            const result = await service.getIssue("https://my-company.atlassian.net", "ENG-101");
 
             // Raw response returned — no ADF conversion, no string-formatted dates
             expect(result.key).toBe("ENG-101");
@@ -87,7 +87,7 @@ describe("JiraService", () => {
             );
 
             expect(mockFetch).toHaveBeenCalledWith(
-                expect.stringMatching(/^https:\/\/saturam\.atlassian\.net\/rest\/api\/3\/issue\/ENG-101\?fields=/),
+                expect.stringMatching(/^https:\/\/my-company\.atlassian\.net\/rest\/api\/3\/issue\/ENG-101\?fields=/),
                 expect.objectContaining({
                     headers: {
                         Accept: "application/json",
@@ -107,7 +107,7 @@ describe("JiraService", () => {
                 text: jest.fn().mockResolvedValue("Issue not found"),
             }) as any;
 
-            await expect(service.getIssue("https://saturam.atlassian.net", "ENG-999")).rejects.toThrow(
+            await expect(service.getIssue("https://my-company.atlassian.net", "ENG-999")).rejects.toThrow(
                 "Failed to fetch Jira issue ENG-999: 404 Not Found",
             );
         });
@@ -144,14 +144,14 @@ describe("JiraService", () => {
             });
             global.fetch = mockFetch as any;
 
-            const result = await service.getIssueMetadata("https://saturam.atlassian.net", "ENG-101");
+            const result = await service.getIssueMetadata("https://my-company.atlassian.net", "ENG-101");
 
             expect(result.key).toBe("ENG-101");
             expect(result.fields?.summary).toBe("Write unit tests");
             expect(result.fields?.status?.name).toBe("In Progress");
 
             expect(mockFetch).toHaveBeenCalledWith(
-                "https://saturam.atlassian.net/rest/api/3/issue/ENG-101?fields=summary%2Cstatus%2Cassignee%2Creporter%2Cpriority%2Cissuetype%2Ccreated%2Cupdated%2Clabels%2Cproject",
+                "https://my-company.atlassian.net/rest/api/3/issue/ENG-101?fields=summary%2Cstatus%2Cassignee%2Creporter%2Cpriority%2Cissuetype%2Ccreated%2Cupdated%2Clabels%2Cproject",
                 expect.objectContaining({
                     headers: {
                         Accept: "application/json",
@@ -171,7 +171,7 @@ describe("JiraService", () => {
                 text: jest.fn().mockResolvedValue("Access denied"),
             }) as any;
 
-            await expect(service.getIssueMetadata("https://saturam.atlassian.net", "ENG-999")).rejects.toThrow(
+            await expect(service.getIssueMetadata("https://my-company.atlassian.net", "ENG-999")).rejects.toThrow(
                 "Failed to fetch Jira issue metadata ENG-999: 403 Forbidden",
             );
         });
@@ -201,11 +201,11 @@ describe("JiraService", () => {
             });
             global.fetch = mockFetch as any;
 
-            const result = await service.searchIssueKeys("https://saturam.atlassian.net", "project = ENG");
+            const result = await service.searchIssueKeys("https://my-company.atlassian.net", "project = ENG");
 
             expect(result).toEqual(["ENG-201", "ENG-202"]);
             expect(mockFetch).toHaveBeenCalledWith(
-                "https://saturam.atlassian.net/rest/api/3/search/jql?jql=project%20%3D%20ENG&maxResults=100&fields=summary%2Cstatus%2Cassignee%2Cpriority%2Cissuetype%2Clabels",
+                "https://my-company.atlassian.net/rest/api/3/search/jql?jql=project%20%3D%20ENG&maxResults=100&fields=summary%2Cstatus%2Cassignee%2Cpriority%2Cissuetype%2Clabels",
                 expect.objectContaining({
                     headers: {
                         Accept: "application/json",
@@ -239,18 +239,18 @@ describe("JiraService", () => {
                 });
             global.fetch = mockFetch as any;
 
-            const result = await service.listAllIssuesByJql("https://saturam.atlassian.net", "project = ENG");
+            const result = await service.listAllIssuesByJql("https://my-company.atlassian.net", "project = ENG");
 
             expect(result).toEqual(["ENG-201", "ENG-202", "ENG-203"]);
             expect(mockFetch).toHaveBeenCalledTimes(2);
             expect(mockFetch).toHaveBeenNthCalledWith(
                 1,
-                "https://saturam.atlassian.net/rest/api/3/search/jql?jql=project%20%3D%20ENG&maxResults=100&fields=summary%2Cstatus%2Cassignee%2Cpriority%2Cissuetype%2Clabels",
+                "https://my-company.atlassian.net/rest/api/3/search/jql?jql=project%20%3D%20ENG&maxResults=100&fields=summary%2Cstatus%2Cassignee%2Cpriority%2Cissuetype%2Clabels",
                 expect.any(Object),
             );
             expect(mockFetch).toHaveBeenNthCalledWith(
                 2,
-                "https://saturam.atlassian.net/rest/api/3/search/jql?jql=project%20%3D%20ENG&maxResults=100&fields=summary%2Cstatus%2Cassignee%2Cpriority%2Cissuetype%2Clabels&nextPageToken=token-page-2",
+                "https://my-company.atlassian.net/rest/api/3/search/jql?jql=project%20%3D%20ENG&maxResults=100&fields=summary%2Cstatus%2Cassignee%2Cpriority%2Cissuetype%2Clabels&nextPageToken=token-page-2",
                 expect.any(Object),
             );
         });
@@ -288,18 +288,18 @@ describe("JiraService", () => {
                 });
             global.fetch = mockFetch as any;
 
-            const result = await service.listAllComments("https://saturam.atlassian.net", "ENG-1");
+            const result = await service.listAllComments("https://my-company.atlassian.net", "ENG-1");
 
             expect(result).toEqual([{ id: "1" }, { id: "2" }, { id: "3" }]);
             expect(mockFetch).toHaveBeenCalledTimes(2);
             expect(mockFetch).toHaveBeenNthCalledWith(
                 1,
-                "https://saturam.atlassian.net/rest/api/3/issue/ENG-1/comment?startAt=0&maxResults=100",
+                "https://my-company.atlassian.net/rest/api/3/issue/ENG-1/comment?startAt=0&maxResults=100",
                 expect.any(Object),
             );
             expect(mockFetch).toHaveBeenNthCalledWith(
                 2,
-                "https://saturam.atlassian.net/rest/api/3/issue/ENG-1/comment?startAt=2&maxResults=100",
+                "https://my-company.atlassian.net/rest/api/3/issue/ENG-1/comment?startAt=2&maxResults=100",
                 expect.any(Object),
             );
         });
@@ -312,7 +312,7 @@ describe("JiraService", () => {
             });
             global.fetch = mockFetch as any;
 
-            const result = await service.listAllComments("https://saturam.atlassian.net", "ENG-1");
+            const result = await service.listAllComments("https://my-company.atlassian.net", "ENG-1");
 
             expect(result).toEqual([]);
             expect(mockFetch).toHaveBeenCalledTimes(1);
@@ -343,11 +343,11 @@ describe("JiraService", () => {
             });
             global.fetch = mockFetch as any;
 
-            const result = await service.listChildIssues("https://saturam.atlassian.net", "ENG-101");
+            const result = await service.listChildIssues("https://my-company.atlassian.net", "ENG-101");
 
             expect(result.issues?.[0].key).toBe("ENG-102");
             expect(mockFetch).toHaveBeenCalledWith(
-                "https://saturam.atlassian.net/rest/api/3/search/jql?jql=parent%20%3D%20ENG-101&maxResults=100&fields=summary%2Cstatus%2Cassignee%2Cpriority%2Cissuetype%2Clabels",
+                "https://my-company.atlassian.net/rest/api/3/search/jql?jql=parent%20%3D%20ENG-101&maxResults=100&fields=summary%2Cstatus%2Cassignee%2Cpriority%2Cissuetype%2Clabels",
                 expect.objectContaining({
                     headers: {
                         Accept: "application/json",
@@ -359,7 +359,7 @@ describe("JiraService", () => {
 
         it("should throw error for invalid parentKey format", async () => {
             await expect(
-                service.listChildIssues("https://saturam.atlassian.net", "invalid_key; DELETE"),
+                service.listChildIssues("https://my-company.atlassian.net", "invalid_key; DELETE"),
             ).rejects.toThrow("Invalid Jira issue key format");
         });
     });
