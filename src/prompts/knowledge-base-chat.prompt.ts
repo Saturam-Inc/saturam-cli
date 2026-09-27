@@ -2,7 +2,7 @@ import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { RetrievedChunk } from "../integrations/aws/services/bedrock-knowledge-base.service";
 
 /**
- * Builds the RAG prompt for `sat-cli onboard --chat`: instructs the LLM to answer strictly
+ * Builds the RAG prompt for `sat-cli onboard`: instructs the LLM to answer strictly
  * from the retrieved Bedrock Knowledge Base chunks. Source URLs are printed by the CLI,
  * so the generated answer should not include inline citation markers.
  */

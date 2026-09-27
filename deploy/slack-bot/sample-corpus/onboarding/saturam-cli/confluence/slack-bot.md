@@ -10,7 +10,7 @@ follow-up questions, and buttons to rate the answer.
    came from Slack, posts a "Searching the knowledge base…" placeholder, and puts the question on an
    SQS FIFO queue. It has to reply to Slack within three seconds, so it does nothing slower.
 2. The worker Lambda takes the question from the queue and runs the same answering flow as
-   `sat-cli onboard --chat`: an agent searches the Bedrock Knowledge Base, reads what comes back,
+   `sat-cli onboard`: an agent searches the Bedrock Knowledge Base, reads what comes back,
    searches again if it needs to, and writes the answer with Claude Sonnet 4.6 on Amazon Bedrock.
 3. The worker replaces the placeholder with the answer.
 

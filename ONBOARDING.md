@@ -95,7 +95,7 @@ Two things that pipeline produces are contracts this repo depends on:
 - **`<content-key>.metadata.json`** beside each content object, holding `metadataAttributes`
   (`title`, `source`, `url`, `category`, `project`, `updatedAt`, `author`). Bedrock turns these
   into query-time filters, which is what `--knowledge-base --project` and the agent's
-  project-scoped searches use, and what supplies the source URLs printed under a `--chat` answer.
+  project-scoped searches use, and what supplies the source URLs printed under a chat answer.
 - **`registry.json`** under the S3 _state_ prefix (a sibling of the content prefix, so Bedrock
   never ingests it as a document), listing the indexed projects. `ProjectRegistryService` reads it
   to know which projects exist — Bedrock can filter on a `project` value but cannot enumerate the
@@ -134,13 +134,13 @@ sat-cli onboard --knowledge-base --project "Saturam"
 
 Enter questions interactively to see ranked matching chunks with their relevance scores, source locations, and metadata. This command calls Bedrock's `Retrieve` API and does not generate an AI answer. Enter a blank question, type `exit`, `quit`, or `:q`, or press Ctrl+C to stop.
 
-#### Asking questions (`--chat`)
+#### Asking questions (`sat-cli onboard`)
 
-`--knowledge-base` shows you the raw retrieved chunks. `--chat` answers the question the way a senior engineer would explain it to someone who just joined:
+`--knowledge-base` shows you the raw retrieved chunks. `sat-cli onboard` on its own answers the question the way a senior engineer would explain it to someone who just joined:
 
 ```bash
-sat-cli onboard --chat
-sat-cli onboard --chat --new-session
+sat-cli onboard
+sat-cli onboard --new-session
 ```
 
 There is no `--project` flag here — the project is determined per question. `--project` still applies to `--knowledge-base`, which is a raw retrieval tool.

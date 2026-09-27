@@ -19,24 +19,18 @@ const INPUTS = [
     {
         name: "project",
         description:
-            'Limit --knowledge-base retrieval to documents indexed for this project (for example, --project "Saturam"). --chat routes to the right project automatically and ignores this.',
+            'Only with --knowledge-base: limit retrieval to documents indexed for this project (for example, --project "Saturam"). The chat determines the project automatically per question and does not accept this.',
         schema: z.string().optional(),
     },
     {
         name: "knowledge-base",
         description:
-            "Interactively ask questions against the configured Bedrock Knowledge Base and print retrieved chunks (Retrieve only — no answer generation). Requires Bedrock Knowledge Base to be configured via 'sat-cli init' → Cloud",
-        schema: z.boolean().optional(),
-    },
-    {
-        name: "chat",
-        description:
-            "Ask questions and get a mentoring answer grounded in the Bedrock Knowledge Base. The project is inferred per question from the documents retrieved; when they span more than one project, the answer is given without a project label rather than asking you to choose. Each answer comes with follow-up questions you can select. Requires both an AI/LLM provider (sat-cli init → AI / LLM providers) and Bedrock Knowledge Base (sat-cli init → Cloud) to be configured",
+            "Instead of the chat, interactively ask questions against the configured Bedrock Knowledge Base and print the retrieved chunks (Retrieve only — no answer generation). Requires Bedrock Knowledge Base to be configured via 'sat-cli init' → Cloud",
         schema: z.boolean().optional(),
     },
     {
         name: "new-session",
-        description: "Start --chat with a fresh conversation history instead of continuing the previous session",
+        description: "Start the chat with a fresh conversation history instead of continuing the previous session",
         schema: z.boolean().optional(),
     },
 ] as const;
@@ -49,16 +43,18 @@ const INPUTS = [
  * whole side now runs in AWS Lambda (see the `on-boarding` service in sat-cli-internal-infra),
  * on a schedule and off a Google Sheet, so it no longer needs a developer to run it by hand.
  * What is left here is the half a developer actually invokes: asking the indexed corpus questions.
+ *
+ * Bare `sat-cli onboard` is the chat. `--knowledge-base` swaps it for the raw retrieval inspector,
+ * which is a debugging tool rather than a way to get answers.
  */
 @Service()
 export class OnboardCommand implements TypedCommand<typeof INPUTS> {
     readonly name = "onboard";
-    readonly description = "Ask questions about your projects, answered from the indexed onboarding documentation";
+    readonly description =
+        "Chat with a mentor about your projects, grounded in the indexed onboarding documentation (needs an AI/LLM provider and a Bedrock Knowledge Base from 'sat-cli init'); --knowledge-base shows raw retrieval results instead";
     readonly category = "common" as const;
     readonly aliases = ["ob", "onboarding"];
     readonly inputs = INPUTS;
-    /** Bare `sat-cli onboard` selects no mode, so show the modes rather than exiting silently. */
-    readonly helpWhenNoInputs = true;
 
     constructor(
         private readonly configService: ConfigService,
@@ -66,32 +62,21 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
         private readonly answerFlow: AnswerFlowService,
     ) {}
 
-    private static readonly EXCLUSIVE_MODE_FLAGS = ["chat", "knowledge-base"] as const;
-
     public async execute(inputs: Partial<TypedInputs<typeof INPUTS>>): Promise<void> {
-        const activeModes = OnboardCommand.EXCLUSIVE_MODE_FLAGS.filter((flag) => inputs[flag]);
-        if (activeModes.length > 1) {
-            throw new Error(`--${activeModes.join(", --")} are mutually exclusive — pass only one of them at a time.`);
-        }
-
-        if (inputs.chat) {
-            if (inputs.project) {
-                logger.warn("--project is ignored by --chat: the project is determined automatically per question.");
-            }
-            await this.runChatSearch(inputs["new-session"]);
-            return;
-        }
-
         if (inputs["knowledge-base"]) {
             await this.runKnowledgeBaseSearch(inputs.project);
             return;
         }
 
-        // Reached when flags were passed but no mode was selected (e.g. --project on its own).
-        // A bare `sat-cli onboard` never gets here — the CLI prints this command's help instead.
-        throw new Error(
-            "No mode selected — pass --chat to ask a question, or --knowledge-base to inspect raw retrieval results.",
-        );
+        // Loud rather than ignored: someone passing --project wants answers scoped to a project,
+        // which the chat does not offer, and a warning would scroll past before the first prompt.
+        if (inputs.project) {
+            throw new Error(
+                "--project applies only to --knowledge-base. The chat determines the project automatically per question, so run `sat-cli onboard` without it.",
+            );
+        }
+
+        await this.runChatSearch(inputs["new-session"]);
     }
 
     private static readonly KB_EXIT_COMMANDS = new Set(["exit", "quit", ":q"]);
@@ -270,7 +255,7 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
         if (!hasLlm) {
             logger.warn("No AI/LLM provider is configured yet.");
             logger.info(
-                "Run 'sat-cli init' and select 'AI / LLM providers' to configure one (Anthropic, OpenAI, Gemini, Bedrock, etc.), then try 'sat-cli onboard --chat' again.",
+                "Run 'sat-cli init' and select 'AI / LLM providers' to configure one (Anthropic, OpenAI, Gemini, Bedrock, etc.), then try 'sat-cli onboard' again.",
             );
             return;
         }

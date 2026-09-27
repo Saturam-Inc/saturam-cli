@@ -7,7 +7,7 @@
  *   Ingress function handler:  ingress.handler
  *   Worker function handler:   worker.handler
  *
- * Only the `sat-cli onboard --chat` answering path goes in. The CLI's commands, code review, SCM
+ * Only the `sat-cli onboard` answering path goes in. The CLI's commands, code review, SCM
  * and ingestion integrations are unreachable from the two handlers, and the build fails if any of
  * them slips in. Of the model providers, only those the bot can be deployed with are included:
  * Bedrock (@langchain/aws), and for the Appendix alternatives Claude on Azure AI Foundry
@@ -102,7 +102,7 @@ async function bundle() {
     const violations = inputs.filter((path) => FORBIDDEN_INPUTS.some((pattern) => pattern.test(`/${path}`)));
     if (violations.length > 0) {
         throw new Error(
-            `The bundle reaches code outside the onboard --chat path:\n  ${violations.join("\n  ")}\n` +
+            `The bundle reaches code outside the onboard path:\n  ${violations.join("\n  ")}\n` +
                 "Find the import that pulls it in, or widen FORBIDDEN_INPUTS only if the chat path now needs it.",
         );
     }

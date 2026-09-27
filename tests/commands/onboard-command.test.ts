@@ -18,7 +18,7 @@ describe("OnboardCommand Mode Routing", () => {
 
     beforeAll(() => {
         originalStdinIsTTY = process.stdin.isTTY;
-        // The REPL modes (--knowledge-base/--chat) refuse to prompt on a non-TTY stdin (real
+        // Both REPL modes (the chat and --knowledge-base) refuse to prompt on a non-TTY stdin (real
         // pipes/redirects can't be typed into) — force it on so mocked `input()` drives the loop
         // the way an interactive terminal would.
         Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
@@ -145,8 +145,8 @@ describe("OnboardCommand Mode Routing", () => {
         });
     });
 
-    describe("--chat RAG search", () => {
-        const chatInputs = { chat: true } as const;
+    describe("the chat (bare `sat-cli onboard`)", () => {
+        const chatInputs = {} as const;
 
         it("shows a setup suggestion and skips everything else when no LLM provider is configured", async () => {
             (mockConfigService.hasAnyLLMProviderConfigured as jest.Mock).mockResolvedValue(false);
@@ -180,14 +180,15 @@ describe("OnboardCommand Mode Routing", () => {
             expect((command as any).renderAnswer("The auth flow uses OAuth2. [1]")).toBe("The auth flow uses OAuth2.");
         });
 
-        it("ignores --project, since the flow determines the project per question", async () => {
-            (input as jest.Mock).mockResolvedValueOnce("give me the overview").mockResolvedValueOnce("");
+        it("refuses --project, since the flow determines the project per question", async () => {
+            await expect(command.execute({ ...chatInputs, project: "Saturam Core" })).rejects.toThrow(
+                /--project applies only to --knowledge-base/,
+            );
 
-            await command.execute({ ...chatInputs, project: "Saturam Core" });
-
-            // The question reaches the flow unscoped: routing is automatic, and a stale manual
-            // filter silently returning nothing is the failure mode the redesign removes.
-            expect(mockAnswerFlow.ask).toHaveBeenCalledWith("give me the overview");
+            // Loud rather than ignored: a manual filter that silently did nothing is the failure
+            // mode the redesign removed, and a warning would scroll past the first prompt.
+            expect(input).not.toHaveBeenCalled();
+            expect(mockAnswerFlow.ask).not.toHaveBeenCalled();
         });
 
         it("starts a fresh conversation when --new-session is passed", async () => {
@@ -274,22 +275,24 @@ describe("OnboardCommand Mode Routing", () => {
     });
 
     describe("mode selection", () => {
-        it("rejects combining --chat and --knowledge-base", async () => {
-            await expect(command.execute({ chat: true, "knowledge-base": true })).rejects.toThrow(/mutually exclusive/);
-            expect(input).not.toHaveBeenCalled();
+        it("runs the chat when invoked with no flags at all", async () => {
+            (input as jest.Mock).mockResolvedValueOnce("");
+
+            await command.execute({});
+
+            // Reaching the question prompt is the chat starting: the retrieval inspector is
+            // only entered through --knowledge-base.
+            expect(input).toHaveBeenCalled();
+            expect(mockChatService.search).not.toHaveBeenCalled();
         });
 
-        it("explains itself when flags are passed but no mode is selected", async () => {
-            // A bare `sat-cli onboard` never reaches execute() — the CLI prints the command's
-            // help instead — but `--project` on its own does, and must not silently do nothing.
-            await expect(command.execute({ project: "Saturam" })).rejects.toThrow(/No mode selected/);
-            expect(input).not.toHaveBeenCalled();
-            expect(mockAnswerFlow.ask).not.toHaveBeenCalled();
+        it("no longer accepts --chat, since the chat is what a bare invocation runs", () => {
+            expect(command.inputs.map((i) => i.name)).not.toContain("chat");
         });
 
         it("no longer accepts the retired sync flags", () => {
             const names = command.inputs.map((i) => i.name);
-            expect(names).toEqual(["project", "knowledge-base", "chat", "new-session"]);
+            expect(names).toEqual(["project", "knowledge-base", "new-session"]);
             for (const retired of ["configOrSheet", "project-name", "upload-to-s3", "list", "format", "force"]) {
                 expect(names).not.toContain(retired);
             }

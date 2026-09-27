@@ -72,11 +72,11 @@ export class Cli {
                 .aliases(command.aliases)
                 .description(command.description + "\n\n");
 
-            // A mode selector takes no positional input, so a stray one is a mistake — most
-            // likely an invocation written against an argument the command used to accept.
-            // Commander ignores excess arguments by default, which would turn that into a
-            // silent success (help printed, exit 0) in whatever script is still running it.
-            if (command.helpWhenNoInputs) {
+            // A command with no positional input treats a stray one as a mistake — most likely
+            // an invocation written against an argument the command used to accept (`onboard`
+            // once took a spreadsheet). Commander ignores excess arguments by default, which
+            // would turn that into a silent success in whatever script is still running it.
+            if (!command.inputs.some((input) => input.argument)) {
                 cmd.allowExcessArguments(false);
             }
 
@@ -116,16 +116,6 @@ export class Cli {
                         return acc;
                     }, {});
                 const globalOpts = this.program?.opts() ?? {};
-
-                // Nothing was asked for, and this command has no default action — show it what it
-                // offers. cmd.help() exits through handleExit, so nothing below it runs.
-                if (
-                    command.helpWhenNoInputs &&
-                    Object.keys(optionInputs).length === 0 &&
-                    Object.keys(argumentInputs).length === 0
-                ) {
-                    cmd.help();
-                }
 
                 const session = SessionConfigurationSchema.parse({ ...globalOpts, ...opts });
                 await this.configService.setSessionConfiguration(session);

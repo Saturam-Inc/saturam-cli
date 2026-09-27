@@ -540,7 +540,7 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
 
         let conversationTable: CloudProviderConfig["conversationTable"] = existing?.conversationTable;
         const configureTable = await confirm({
-            message: "Configure DynamoDB conversation history for 'onboard --chat'?",
+            message: "Configure DynamoDB conversation history for 'onboard'?",
             default: !!existing?.conversationTable,
         });
         if (configureTable) {

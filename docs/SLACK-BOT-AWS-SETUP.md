@@ -119,17 +119,17 @@ pipeline (A5) uses those, and they're configured in that pipeline's own reposito
 
 ## What gets deployed
 
-The bot runs **only the `sat-cli onboard --chat` answering flow**: the same `AnswerFlowService`,
+The bot runs **only the `sat-cli onboard` answering flow**: the same `AnswerFlowService`,
 agent, retrieval, guards and conversation memory as in the terminal. Nothing else from sat-cli
 (code review, `init`, SCM or ingestion integrations) is deployed. The build fails if any of it gets
 into the Lambda package.
 
-| Entry point              | Runs where                         | Source                                    | Purpose                                                                           |
-| ------------------------ | ---------------------------------- | ----------------------------------------- | --------------------------------------------------------------------------------- |
-| `ingress.handler`        | Lambda `saturam-slack-bot-ingress` | `src/entrypoints/slack-ingress.lambda.ts` | Receives Slack events, replies within 3 s, queues questions                       |
-| `worker.handler`         | Lambda `saturam-slack-bot-worker`  | `src/entrypoints/slack-worker.lambda.ts`  | Answers queued questions with the `onboard --chat` flow                           |
-| `pnpm slack:dev`         | your machine                       | `src/entrypoints/slack-socket-mode.ts`    | The whole bot locally over Socket Mode (Part C)                                   |
-| `sat-cli onboard --chat` | a terminal                         | `src/entrypoints/main.ts`                 | Unchanged; can use the same model (`sat-cli init` → _AWS Bedrock (Claude, Nova)_) |
+| Entry point       | Runs where                         | Source                                    | Purpose                                                                           |
+| ----------------- | ---------------------------------- | ----------------------------------------- | --------------------------------------------------------------------------------- |
+| `ingress.handler` | Lambda `saturam-slack-bot-ingress` | `src/entrypoints/slack-ingress.lambda.ts` | Receives Slack events, replies within 3 s, queues questions                       |
+| `worker.handler`  | Lambda `saturam-slack-bot-worker`  | `src/entrypoints/slack-worker.lambda.ts`  | Answers queued questions with the `onboard` flow                                  |
+| `pnpm slack:dev`  | your machine                       | `src/entrypoints/slack-socket-mode.ts`    | The whole bot locally over Socket Mode (Part C)                                   |
+| `sat-cli onboard` | a terminal                         | `src/entrypoints/main.ts`                 | Unchanged; can use the same model (`sat-cli init` → _AWS Bedrock (Claude, Nova)_) |
 
 Both handlers ship in **one zip** (`pnpm slack:bundle` → `dist/slack-bot/slack-bot-lambda.zip`,
 about 3 MB). You upload it to both functions and set a different handler on each.
@@ -146,7 +146,7 @@ about 3 MB). You upload it to both functions and set a different handler on each
                                      │ Retrieve
  ┌──────────────────────── Part B ───┼──────────────────────────────────┐
  │ Slack ─▶ API Gateway ─▶ ingress Lambda ─▶ SQS FIFO ─▶ worker Lambda   │
- │           POST /slack/events   │                 │   (onboard --chat) │
+ │           POST /slack/events   │                 │   (sat-cli onboard)│
  │                                │                 ├─▶ Bedrock          │
  │               placeholder ◀────┘                 │   Claude Sonnet 4.6│
  │               answer      ◀──────────────────────┘                    │
@@ -543,7 +543,7 @@ Expected output ends with:
 What the build does:
 
 1. Compiles with `tsc`, which keeps the metadata typedi needs to wire services.
-2. Bundles only the two handlers and what they reach, which is the `onboard --chat` flow and the
+2. Bundles only the two handlers and what they reach, which is the `onboard` flow and the
    model clients for Bedrock and, for the Appendix alternatives, Azure AI Foundry and Azure OpenAI.
 3. Fails if code review, CLI commands, SCM or ingestion code, or another provider's SDK has crept
    in.

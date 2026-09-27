@@ -9,7 +9,7 @@ const logger = getLogger("SlackLambdaRuntime");
 /**
  * What is true of the Slack bot on Lambda and of nothing else.
  *
- * The Lambda artifact carries only the `onboard --chat` path and the model providers the bot is
+ * The Lambda artifact carries only the `onboard` path and the model providers the bot is
  * deployed with (deploy/slack-bot/build.mjs leaves every other provider out), and it has no home
  * directory for a config file.
  */

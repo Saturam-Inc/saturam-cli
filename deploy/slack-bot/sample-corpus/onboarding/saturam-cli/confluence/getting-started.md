@@ -9,7 +9,7 @@ settings in `~/.config/sateng/config.json`.
 - `sat-cli review <PR>` runs a multi-agent AI code review on a GitHub, GitLab or Bitbucket pull request.
   Two reviewers analyse the change independently, an auditor cross-checks them, and findings are
   posted as inline comments on the exact lines.
-- `sat-cli onboard --chat` answers questions about our projects from the onboarding knowledge base,
+- `sat-cli onboard` answers questions about our projects from the onboarding knowledge base,
   the way a senior engineer would explain them to someone who just joined.
 - `sat-cli onboard --knowledge-base` shows the raw passages the knowledge base returns for a question,
   for checking what is indexed.
@@ -18,7 +18,7 @@ settings in `~/.config/sateng/config.json`.
 
 Documentation is not written into the tool. A scheduled ingestion job reads a Google Sheet listing
 each project's Confluence pages, Jira tickets and Google Drive files, converts them to Markdown, and
-uploads them to S3. An Amazon Bedrock Knowledge Base indexes that bucket, and `onboard --chat`
+uploads them to S3. An Amazon Bedrock Knowledge Base indexes that bucket, and `onboard`
 searches it.
 
 ## Running it locally

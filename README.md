@@ -91,21 +91,21 @@ sat-cli init
 Ask questions about your projects, answered from the onboarding documentation indexed in the Bedrock Knowledge Base.
 
 ```bash
-# Interactively test the configured Bedrock Knowledge Base using retrieval only
-sat-cli onboard --knowledge-base
-
-# Restrict retrieval to one project's indexed documents
-sat-cli onboard --knowledge-base --project "Saturam"
-
-# Ask questions and get a mentoring answer grounded in the Knowledge Base.
+# Chat: ask questions and get a mentoring answer grounded in the Knowledge Base.
 # The project is worked out per question — no --project flag needed.
-sat-cli onboard --chat
+sat-cli onboard
 
 # Start over with a fresh conversation instead of continuing the last one
-sat-cli onboard --chat --new-session
+sat-cli onboard --new-session
+
+# Instead of the chat, inspect raw retrieval from the configured Bedrock Knowledge Base
+sat-cli onboard --knowledge-base
+
+# Restrict that retrieval to one project's indexed documents
+sat-cli onboard --knowledge-base --project "Saturam"
 ```
 
-Run it with no options to see the modes above.
+Running it with no options starts the chat; `--knowledge-base` is the only other mode.
 
 > **Syncing is no longer a CLI command.** Fetching Confluence pages, Jira tickets and Google
 > Drive files, and uploading them to S3 for Bedrock to ingest, now runs as a scheduled AWS Lambda
@@ -114,7 +114,7 @@ Run it with no options to see the modes above.
 > `sat-cli onboard <spreadsheet-url-or-id>` form now fail with an "unknown option" error rather
 > than silently doing nothing, so any script still calling them is told plainly.
 
-### How `--chat` answers
+### How the chat answers
 
 Each question goes to a single mentor agent that searches the Knowledge Base as it needs to, rather than through a fixed retrieve-then-summarize step:
 
@@ -129,7 +129,7 @@ For more on how the corpus is built and queried, see [ONBOARDING.md](ONBOARDING.
 
 `--knowledge-base` opens an interactive prompt in the terminal. Enter a question to display the ranked chunks, relevance scores, source locations, and metadata returned by Bedrock. This uses the Knowledge Base `Retrieve` API—the equivalent of the AWS console's **Standard retrieval only** mode—and does not generate an AI answer. Submit an empty question, type `exit`, `quit`, or `:q`, or press Ctrl+C to leave the prompt.
 
-`--chat` is the RAG version: it uses the same Knowledge Base retrieval as `--knowledge-base`, but your **configured LLM** (whichever AI/LLM provider and model are set up via `sat-cli init` → "AI / LLM providers" — Anthropic, OpenAI, Gemini, Bedrock, etc.) runs the searches and writes a synthesized answer from what they return instead of printing raw chunks. `--project` applies only to `--knowledge-base`; `--chat` ignores it and infers the project from what it retrieves. If no LLM provider is configured yet, it tells you to run `sat-cli init` first instead of failing partway through. Requires both an LLM provider and Bedrock Knowledge Base to be configured.
+The chat (bare `sat-cli onboard`) is the RAG version: it uses the same Knowledge Base retrieval as `--knowledge-base`, but your **configured LLM** (whichever AI/LLM provider and model are set up via `sat-cli init` → "AI / LLM providers" — Anthropic, OpenAI, Gemini, Bedrock, etc.) runs the searches and writes a synthesized answer from what they return instead of printing raw chunks. `--project` applies only to `--knowledge-base`; the chat refuses it and infers the project from what it retrieves. If no LLM provider is configured yet, it tells you to run `sat-cli init` first instead of failing partway through. Requires both an LLM provider and Bedrock Knowledge Base to be configured.
 
 ## Cloud (AWS S3 & Bedrock Knowledge Base)
 
@@ -156,7 +156,7 @@ The knowledge base, bucket, conversation table and model can also be set with `S
 
 ## Slack bot
 
-`sat-cli onboard --chat` also runs as a Slack bot — the same answering flow, and nothing else from the CLI. Mention it in a channel or DM it; it answers in a thread with sources, follow-up buttons and 👍/👎 feedback. Each thread is its own conversation, and each person's history carries across threads.
+`sat-cli onboard` also runs as a Slack bot — the same answering flow, and nothing else from the CLI. Mention it in a channel or DM it; it answers in a thread with sources, follow-up buttons and 👍/👎 feedback. Each thread is its own conversation, and each person's history carries across threads.
 
 It runs on AWS as two Lambdas behind API Gateway, with an SQS FIFO queue between them because Slack needs a reply within 3 seconds and an answer takes tens of seconds. Retrieval uses the Bedrock Knowledge Base, and answers are written by Claude Sonnet 4.6 on Bedrock (`SATENG_MODEL=anthropic.claude-sonnet-4-6`, through the `global.` cross-region inference profile), invoked with the worker's IAM role, so no model credentials are stored anywhere. Both Lambdas are deployed from one ~3 MB zip that carries only the chat path. The code is in [src/slack/](src/slack/); deployment assets, IAM policies and a sample corpus are in [deploy/slack-bot/](deploy/slack-bot/).
 
