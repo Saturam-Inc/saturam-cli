@@ -165,7 +165,7 @@ pnpm slack:bundle   # → dist/slack-bot/slack-bot-lambda.zip (handlers: ingress
 pnpm slack:dev      # the whole bot locally over Socket Mode (needs SLACK_APP_TOKEN, SLACK_BOT_TOKEN in .env)
 ```
 
-Releases: tagging `vX.Y.Z` (matching `package.json`) makes CI build the zip and attach it to the GitHub Release. Deploying it to AWS — the functions, IAM, environment values, secrets and the setup guide — lives in the private repository, `sat-cli-internal-infra/onboarding-slack-lamba`.
+Deployment lives in the private repository, `sat-cli-internal-infra/onboarding-slack-lamba`: its GitHub Actions workflow checks out any branch, tag or commit of this repository, runs `pnpm slack:bundle`, and updates the two functions. The functions, IAM, environment values, secrets and the setup guide are there too. Nothing here deploys on its own.
 
 ## Ollama
 

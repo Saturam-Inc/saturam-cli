@@ -7,8 +7,8 @@ import { z } from "zod";
  * answering flow.
  *
  * Changing this shape is a deployment-contract change: one package must reach both functions in
- * one deploy (the private deploy script never updates just one), and a release that changes it
- * says so in its notes (docs/SLACK-BOT.md, "Deployment contract").
+ * one deploy — the private deploy never updates just one (docs/SLACK-BOT.md, "Deployment
+ * contract").
  */
 
 /** Long enough for any real question, short enough that one message cannot run up the bill. */

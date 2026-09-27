@@ -63,8 +63,8 @@ feedback job stored under `slack-feedback#<team>`.
 ## Deployment contract
 
 These are what the private deployment relies on. Renaming or reshaping one is a
-deployment-contract change: bump the minor version, say so in the release notes, and the deployer
-updates the function settings in the same change.
+deployment-contract change: the deploy that carries it must also change the private repository's
+`lambda-env.example` and the functions' settings, so tell whoever deploys.
 
 | Item                                                                                                                                                                                                                                                                                                 | Defined in                                                                                                                                                                                                |
 | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -93,14 +93,15 @@ Environment variables the two functions read (the values are the deployer's):
 | `SLACK_ALLOWED_TEAM_IDS`, `SLACK_ALLOWED_CHANNEL_IDS`, `SLACK_ALLOW_DIRECT_MESSAGES`                                                | ingress  | Access control                                                  |
 | `LOG_LEVEL`, `NODE_OPTIONS`                                                                                                         | both     | `info` or `debug`; `--enable-source-maps`                       |
 
-## Releases
+## Deployment
 
-The bot's code is released with the CLI. On a version tag (`vX.Y.Z`, matching `package.json`), the
-workflow `.github/workflows/release-slack-bot.yml` runs the tests, builds the package and attaches
-`slack-bot-lambda.zip` and a `.sha256` file to the tag's GitHub Release. The private deployment
-downloads that zip by tag and updates both functions. Run the workflow by hand on a branch to get the
-same zip as a workflow artifact, for testing before a release. Every PR also builds the package, so
-an import that would drag CLI-only code into the Lambda fails in CI.
+The bot is deployed from the private repository, `sat-cli-internal-infra/onboarding-slack-lamba`.
+Its "Deploy Slack bot" GitHub Actions workflow takes a repository (this one, or a fork) and a
+branch, tag or commit, checks it out, runs the tests and `pnpm slack:bundle`, and updates the two
+functions with the zip. The deployed source is recorded as tags on the functions (`sat-cli-source`,
+`sat-cli-ref`, `sat-cli-sha`). Nothing in this repository triggers a deploy: merging to `main`
+changes the bot only when someone deploys `main`. Every PR builds the package, so an import that
+would drag CLI-only code into the Lambda fails in CI before it can be deployed.
 
 ## Local development (Socket Mode)
 

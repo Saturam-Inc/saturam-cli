@@ -10,8 +10,8 @@ const logger = getLogger("SlackSettings");
  * CLI; these are only what is specific to talking to Slack.
  *
  * The names are a deployment contract: the private deployment sets them on the two Lambda
- * functions (docs/SLACK-BOT.md, "Deployment contract"). Renaming one means a minor version bump and
- * a note in the release, so the deployer changes the function settings in the same step.
+ * functions (docs/SLACK-BOT.md, "Deployment contract"). Renaming one means changing that
+ * repository's lambda-env.example and the functions' settings in the same deploy.
  */
 export const SLACK_ENV = {
     /** Secrets Manager secret id/ARN holding SLACK_BOT_TOKEN and SLACK_SIGNING_SECRET as JSON. */

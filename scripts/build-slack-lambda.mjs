@@ -9,8 +9,8 @@
  *
  * The entry names and handler names are a deployment contract: the private deployment
  * (sat-cli-internal-infra/onboarding-slack-lamba) sets `ingress.handler` and `worker.handler` on
- * its two functions and always deploys one zip to both. CI attaches this zip to every version tag's
- * GitHub Release (.github/workflows/release-slack-bot.yml); docs/SLACK-BOT.md describes the hand-off.
+ * its two functions and always deploys one zip to both. That repository's deploy workflow runs this
+ * build and pushes the zip; docs/SLACK-BOT.md describes the hand-off.
  *
  * Only the `sat-cli onboard` answering path goes in. The CLI's commands, code review, SCM
  * and ingestion integrations are unreachable from the two handlers, and the build fails if any of
