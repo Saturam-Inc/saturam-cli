@@ -187,7 +187,7 @@ them that appears tells you which stage to look at
    │  1  load the project list     ◀──  S3                onboarding-state/registry.json
    │  2  read and save history     ◀─▶  DynamoDB          slack#<team>#<user>
    │  3  search the docs (repeats) ◀──  Bedrock KB        Retrieve
-   │  4  write the answer          ◀─▶  Bedrock           Claude Sonnet 4.6, up to 6 calls
+   │  4  write the answer          ◀─▶  Bedrock           Claude Sonnet 4.6, typically 4–6 calls
    │  5  replace the placeholder   ──▶  Slack             bot token from saturam/slack-bot
    │     log: Answered event:Ev… in …ms (attempt 1/2, … chunk(s), project …)
    ▼
@@ -700,14 +700,14 @@ policy → **Edit** → replace the JSON → **Save changes**.
     2. **Select a source:** type `SQS` → choose **SQS**. The form fills in with the SQS settings.
     3. Fill in the form:
 
-        | Field                          | Value                                                                         | Why                                                                                                                                               |
-        | ------------------------------ | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-        | **SQS queue**                  | `saturam-slack-bot-jobs.fifo` from the dropdown (shown as an ARN). Not `-dlq` | The queue the ingress sends questions to                                                                                                          |
-        | **Activate trigger**           | ticked                                                                        | Otherwise the trigger is created switched off, and questions wait in the queue                                                                    |
-        | **Batch size**                 | `1` (the default is 10)                                                       | One question per run, so a slow answer never holds up others                                                                                      |
-        | **Batch window** (if shown)    | empty                                                                         | FIFO queues don't use it                                                                                                                          |
-        | **Maximum concurrency**        | `5`                                                                           | Caps simultaneous answers, and so the load on the model's tokens-per-minute quota in Bedrock and your cost. Each answer makes up to 6 model calls |
-        | **Filter criteria** (if shown) | empty                                                                         | A filter would silently drop questions                                                                                                            |
+        | Field                          | Value                                                                         | Why                                                                                                                                                                                                                                                                                               |
+        | ------------------------------ | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+        | **SQS queue**                  | `saturam-slack-bot-jobs.fifo` from the dropdown (shown as an ARN). Not `-dlq` | The queue the ingress sends questions to                                                                                                                                                                                                                                                          |
+        | **Activate trigger**           | ticked                                                                        | Otherwise the trigger is created switched off, and questions wait in the queue                                                                                                                                                                                                                    |
+        | **Batch size**                 | `1` (the default is 10)                                                       | One question per run, so a slow answer never holds up others                                                                                                                                                                                                                                      |
+        | **Batch window** (if shown)    | empty                                                                         | FIFO queues don't use it                                                                                                                                                                                                                                                                          |
+        | **Maximum concurrency**        | `5`                                                                           | Caps simultaneous answers, and so the load on the model's tokens-per-minute quota in Bedrock and your cost. Each answer makes several model calls: an agent loop of up to 6 search-and-write rounds, plus the follow-up suggestions, a one-line gist, and every fifth turn a conversation summary |
+        | **Filter criteria** (if shown) | empty                                                                         | A filter would silently drop questions                                                                                                                                                                                                                                                            |
 
     4. Expand **Additional settings** → tick **Report batch item failures**. This is required. The
        worker reports each failed question itself; without this setting Lambda ignores that, deletes
@@ -745,11 +745,11 @@ policy → **Edit** → replace the JSON → **Save changes**.
 
     Optional access control (comma-separated; empty means no restriction):
 
-    | Key                           | Effect                                                                                                                                    |
-    | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-    | `SLACK_ALLOWED_TEAM_IDS`      | Answer only in these workspaces                                                                                                           |
-    | `SLACK_ALLOWED_CHANNEL_IDS`   | Answer @mentions only in these channels (channel → _About_ → ID at the bottom). Elsewhere the user gets a private "not enabled here" note |
-    | `SLACK_ALLOW_DIRECT_MESSAGES` | `false` turns DMs off                                                                                                                     |
+    | Key                           | Effect                                                                                                                                                   |
+    | ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+    | `SLACK_ALLOWED_TEAM_IDS`      | Answer only in these workspaces                                                                                                                          |
+    | `SLACK_ALLOWED_CHANNEL_IDS`   | Answer @mentions only in these channels (channel → _About_ → ID at the bottom). Elsewhere the user gets a private _I'm not enabled in this channel_ note |
+    | `SLACK_ALLOW_DIRECT_MESSAGES` | `false` turns DMs off                                                                                                                                    |
 
     Leave all three out for the first test; nothing is restricted then. Only the ingress reads
     them, and a change takes effect on the next message.
@@ -1026,8 +1026,10 @@ The terminal CLI can use the same model: `sat-cli init` → **AI / LLM providers
 - **Answer screening.** Answers pass the CLI's guards: credential-shaped text is redacted, and
   identifiers the sources never mention are revised away. Errors shown in Slack carry a reference
   ID, never internals.
-- **Logs.** They record IDs, timings and outcomes, not questions or answers. The one exception is a
-  failed knowledge-base search, which logs its query.
+- **Logs.** At `LOG_LEVEL` `info` they record IDs, timings and outcomes, not questions or answers;
+  the one exception is a failed knowledge-base search, which logs its query as a warning. At
+  `debug`, every search query the agent runs is logged too, so switch back to `info` after
+  troubleshooting if that matters for the documentation you index.
 
 ## Troubleshooting
 
