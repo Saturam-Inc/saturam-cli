@@ -8,7 +8,7 @@ import type { SlackMessage } from "./slack-messages";
  * ingress and worker depend on "post", "update" and "whisper" rather than on the SDK.
  *
  * Needs the bot token scopes `chat:write` (and `im:write` for DMs, which Slack grants with the
- * Messages tab); see docs/SLACK-BOT-AWS-SETUP.md.
+ * Messages tab); see docs/SLACK-BOT.md.
  */
 @Service()
 export class SlackGateway {

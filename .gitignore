@@ -1,8 +1,6 @@
 node_modules/
 built/
 dist/
-# Filled-in copies of the Slack bot IAM templates hold your account values (docs/SLACK-BOT-AWS-SETUP.md, B6).
-deploy/slack-bot/iam/*.local.json
 *.js.map
 *.d.ts
 !src/**/*.d.ts

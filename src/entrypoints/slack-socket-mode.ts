@@ -23,7 +23,7 @@ const logger = getLogger("SlackSocketMode");
  *
  * Needs SLACK_APP_TOKEN (xapp-…, with connections:write) and SLACK_BOT_TOKEN (xoxb-…), plus the
  * SATENG_* knowledge base settings or an existing `sat-cli init` config. See
- * docs/SLACK-BOT-AWS-SETUP.md, "Local development".
+ * docs/SLACK-BOT.md, "Local development".
  */
 async function main(): Promise<void> {
     const appToken = process.env[SLACK_ENV.APP_TOKEN];

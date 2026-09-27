@@ -158,14 +158,14 @@ The knowledge base, bucket, conversation table and model can also be set with `S
 
 `sat-cli onboard` also runs as a Slack bot — the same answering flow, and nothing else from the CLI. Mention it in a channel or DM it; it answers in a thread with sources, follow-up buttons and 👍/👎 feedback. Each thread is its own conversation, and each person's history carries across threads.
 
-It runs on AWS as two Lambdas behind API Gateway, with an SQS FIFO queue between them because Slack needs a reply within 3 seconds and an answer takes tens of seconds. Retrieval uses the Bedrock Knowledge Base, and answers are written by Claude Sonnet 4.6 on Bedrock (`SATENG_MODEL=anthropic.claude-sonnet-4-6`, through the `global.` cross-region inference profile), invoked with the worker's IAM role, so no model credentials are stored anywhere. Both Lambdas are deployed from one ~3 MB zip that carries only the chat path. The code is in [src/slack/](src/slack/); deployment assets, IAM policies and a sample corpus are in [deploy/slack-bot/](deploy/slack-bot/).
+It runs on AWS as two Lambdas behind API Gateway, with an SQS FIFO queue between them because Slack needs a reply within 3 seconds and an answer takes tens of seconds. Retrieval uses the Bedrock Knowledge Base, and answers are written by Claude on Bedrock, invoked with the worker's IAM role, so no model credentials are stored anywhere. Both Lambdas are deployed from one ~3 MB zip that carries only the chat path. The code is in [src/slack/](src/slack/); [docs/SLACK-BOT.md](docs/SLACK-BOT.md) describes what gets deployed, the contract the deployment relies on, and local development.
 
 ```bash
 pnpm slack:bundle   # → dist/slack-bot/slack-bot-lambda.zip (handlers: ingress.handler, worker.handler)
 pnpm slack:dev      # the whole bot locally over Socket Mode (needs SLACK_APP_TOKEN, SLACK_BOT_TOKEN in .env)
 ```
 
-Setting it up from an empty AWS account — knowledge base included — is a step-by-step console guide: [docs/SLACK-BOT-AWS-SETUP.md](docs/SLACK-BOT-AWS-SETUP.md).
+Releases: tagging `vX.Y.Z` (matching `package.json`) makes CI build the zip and attach it to the GitHub Release. Deploying it to AWS — the functions, IAM, environment values, secrets and the setup guide — lives in the private repository, `sat-cli-internal-infra/onboarding-slack-lamba`.
 
 ## Ollama
 

@@ -5,7 +5,7 @@ queries is produced.
 
 > **Ingestion moved out of the CLI.** Fetching Confluence pages, Jira tickets and Google Drive
 > files, normalizing them to Markdown, and uploading them to S3 for Bedrock to ingest now runs as
-> a scheduled AWS Lambda off a Google Sheet — see the `on-boarding` service in
+> a scheduled AWS Lambda off a Google Sheet — see the `onboarding-gsheet-lamba` service in
 > `sat-cli-internal-infra` (`README.md`, `DEPLOY.md`, and `SHEET-COLUMNS.md` for the sheet
 > format). `sat-cli onboard` no longer syncs anything; it is now purely the query side.
 
@@ -77,7 +77,7 @@ Each integration service wraps target REST APIs and handles authorization intern
 ## 2. Normalization
 
 Raw payloads are converted to Markdown before they are indexed, but that happens in the
-`on-boarding` Lambda (`sat-cli-internal-infra/on-boarding/src/normalize/`), not in this repo: Jira
+`onboarding-gsheet-lamba` Lambda (`sat-cli-internal-infra/onboarding-gsheet-lamba/src/normalize/`), not in this repo: Jira
 ADF, Confluence storage-format XHTML and Word documents (via `mammoth`) are all normalized there.
 The API clients above return raw responses and do no conversion of their own.
 
@@ -88,7 +88,9 @@ The API clients above return raw responses and do no conversion of their own.
 The CLI reads an already-indexed corpus; it does not build one. Ingestion — resolving each
 project's Confluence pages, Jira tickets and Google Drive files from a Google Sheet, normalizing
 them, writing them to S3 under `<project>/<category>/`, and emitting the `registry.json` the CLI's
-project routing reads — runs in the `on-boarding` Lambda in `sat-cli-internal-infra`.
+project routing reads — runs in the `onboarding-gsheet-lamba` Lambda in `sat-cli-internal-infra`. The Slack bot's
+deployment lives beside it, in `onboarding-slack-lamba`; what the bot needs from this repo is in
+[docs/SLACK-BOT.md](docs/SLACK-BOT.md).
 
 Two things that pipeline produces are contracts this repo depends on:
 

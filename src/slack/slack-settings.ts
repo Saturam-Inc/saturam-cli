@@ -8,6 +8,10 @@ const logger = getLogger("SlackSettings");
  * Environment variables the Slack bot reads. The knowledge base, model, bucket and conversation
  * table are configured through the SATENG_* variables in config-environment.ts, shared with the
  * CLI; these are only what is specific to talking to Slack.
+ *
+ * The names are a deployment contract: the private deployment sets them on the two Lambda
+ * functions (docs/SLACK-BOT.md, "Deployment contract"). Renaming one means a minor version bump and
+ * a note in the release, so the deployer changes the function settings in the same step.
  */
 export const SLACK_ENV = {
     /** Secrets Manager secret id/ARN holding SLACK_BOT_TOKEN and SLACK_SIGNING_SECRET as JSON. */

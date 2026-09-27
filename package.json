@@ -26,7 +26,7 @@
         "fix:format": "prettier --write .",
         "test:eval": "jest --config jest.eval.config.ts --runInBand",
         "slack:dev": "ts-node ./src/entrypoints/slack-socket-mode.ts",
-        "slack:bundle": "node deploy/slack-bot/build.mjs"
+        "slack:bundle": "node scripts/build-slack-lambda.mjs"
     },
     "keywords": [
         "cli"

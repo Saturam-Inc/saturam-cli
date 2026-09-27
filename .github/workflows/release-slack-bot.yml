@@ -1,0 +1,69 @@
+name: Slack bot release
+
+# Builds the Slack bot's Lambda package from this commit and publishes it where the private
+# deployment (sat-cli-internal-infra/onboarding-slack-lamba) picks it up:
+#   - on a version tag (v1.2.0): attached to that tag's GitHub Release, with a sha256 sidecar;
+#   - run by hand on any branch: uploaded as a workflow artifact, for testing before a release.
+# The package carries only the `sat-cli onboard` answering path; the build fails if anything
+# else creeps in (scripts/build-slack-lambda.mjs). docs/SLACK-BOT.md explains the hand-off.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check the tag matches package.json
+        if: github.ref_type == 'tag'
+        run: |
+          version="v$(node -p "require('./package.json').version")"
+          if [ "$GITHUB_REF_NAME" != "$version" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match package.json version $version" >&2
+            exit 1
+          fi
+
+      - name: Run tests
+        run: pnpm test
+
+      - name: Build the Lambda package
+        run: pnpm slack:bundle
+
+      - name: Write the checksum
+        working-directory: dist/slack-bot
+        run: sha256sum slack-bot-lambda.zip > slack-bot-lambda.zip.sha256
+
+      - name: Attach to the release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/slack-bot/slack-bot-lambda.zip
+            dist/slack-bot/slack-bot-lambda.zip.sha256
+          generate_release_notes: true
+
+      - name: Upload as a workflow artifact
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: slack-bot-lambda-${{ github.sha }}
+          path: |
+            dist/slack-bot/slack-bot-lambda.zip
+            dist/slack-bot/slack-bot-lambda.zip.sha256

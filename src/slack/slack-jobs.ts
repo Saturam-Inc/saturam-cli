@@ -5,6 +5,10 @@ import { z } from "zod";
  * the body of every SQS message. Validated on both sides of the queue: a message that fails here
  * is a deploy mismatch or a hand-edited message, and belongs in the dead-letter queue, not in the
  * answering flow.
+ *
+ * Changing this shape is a deployment-contract change: one package must reach both functions in
+ * one deploy (the private deploy script never updates just one), and a release that changes it
+ * says so in its notes (docs/SLACK-BOT.md, "Deployment contract").
  */
 
 /** Long enough for any real question, short enough that one message cannot run up the bill. */

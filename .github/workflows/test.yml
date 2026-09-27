@@ -24,3 +24,7 @@ jobs:
 
       - name: Run tests
         run: pnpm test
+
+      # Fails if the Slack bot's Lambda package reaches code outside the answering path.
+      - name: Build the Slack bot package
+        run: pnpm slack:bundle

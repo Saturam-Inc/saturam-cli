@@ -7,6 +7,11 @@
  *   Ingress function handler:  ingress.handler
  *   Worker function handler:   worker.handler
  *
+ * The entry names and handler names are a deployment contract: the private deployment
+ * (sat-cli-internal-infra/onboarding-slack-lamba) sets `ingress.handler` and `worker.handler` on
+ * its two functions and always deploys one zip to both. CI attaches this zip to every version tag's
+ * GitHub Release (.github/workflows/release-slack-bot.yml); docs/SLACK-BOT.md describes the hand-off.
+ *
  * Only the `sat-cli onboard` answering path goes in. The CLI's commands, code review, SCM
  * and ingestion integrations are unreachable from the two handlers, and the build fails if any of
  * them slips in. Of the model providers, only those the bot can be deployed with are included:
@@ -27,7 +32,7 @@ import { fileURLToPath } from "node:url";
 import * as zlib from "node:zlib";
 import { build } from "esbuild";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const OUT = join(ROOT, "dist", "slack-bot");
 const COMPILED = join(OUT, "tsc");
 const BUNDLE = join(OUT, "bundle");

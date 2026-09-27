@@ -9,6 +9,10 @@
  *
  * Values here win over the file, field by field, so a developer can also point a local run at a
  * different knowledge base or table without editing their saved config.
+ *
+ * The names are a deployment contract: the Slack bot's private deployment sets them on its Lambda
+ * functions (docs/SLACK-BOT.md, "Deployment contract"). Renaming one means a minor version bump and
+ * a note in the release, so the deployer changes the function settings in the same step.
  */
 
 export const CONFIG_ENV = {
