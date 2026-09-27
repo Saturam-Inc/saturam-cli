@@ -54,7 +54,7 @@ export class JiraService {
     /**
      * Fetch a single Jira issue by key.
      * Returns the raw API response — description and comments are in native ADF format.
-     * No Markdown conversion happens here; the on-boarding Lambda normalizes ADF at ingestion.
+     * No Markdown conversion happens here; the onboarding-gsheet-lamba Lambda normalizes ADF at ingestion.
      */
     public async getIssue(baseUrl: string, issueKey: string): Promise<JiraIssueApiResponse> {
         const apiBase = this.getApiBase(baseUrl);

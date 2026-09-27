@@ -109,7 +109,7 @@ Running it with no options starts the chat; `--knowledge-base` is the only other
 
 > **Syncing is no longer a CLI command.** Fetching Confluence pages, Jira tickets and Google
 > Drive files, and uploading them to S3 for Bedrock to ingest, now runs as a scheduled AWS Lambda
-> off a Google Sheet — see the `on-boarding` service in `sat-cli-internal-infra`. The retired
+> off a Google Sheet — see the `onboarding-gsheet-lamba` service in `sat-cli-internal-infra`. The retired
 > flags (`--format`, `--project-name`, `--list`, `--upload-to-s3`, `--forget-sheet`) and the
 > `sat-cli onboard <spreadsheet-url-or-id>` form now fail with an "unknown option" error rather
 > than silently doing nothing, so any script still calling them is told plainly.
@@ -125,7 +125,7 @@ Each question goes to a single mentor agent that searches the Knowledge Base as 
 
 Conversation history is kept so follow-ups work: "and how does it fail?" is understood against the previous answer. History lives in memory by default, or in DynamoDB when a `conversationTable` is configured (see "Cloud" below), which is what lets a later run continue the same conversation.
 
-For more on how the corpus is built and queried, see [ONBOARDING.md](ONBOARDING.md). The sheet format that drives ingestion is documented with the Lambda that reads it, in `sat-cli-internal-infra/on-boarding` (`SHEET-COLUMNS.md`).
+For more on how the corpus is built and queried, see [ONBOARDING.md](ONBOARDING.md). The sheet format that drives ingestion is documented with the Lambda that reads it, in `sat-cli-internal-infra/onboarding-gsheet-lamba` (`SHEET-COLUMNS.md`).
 
 `--knowledge-base` opens an interactive prompt in the terminal. Enter a question to display the ranked chunks, relevance scores, source locations, and metadata returned by Bedrock. This uses the Knowledge Base `Retrieve` API—the equivalent of the AWS console's **Standard retrieval only** mode—and does not generate an AI answer. Submit an empty question, type `exit`, `quit`, or `:q`, or press Ctrl+C to leave the prompt.
 

@@ -60,7 +60,7 @@ export class ConfluenceService {
     /**
      * Fetch a single Confluence page by ID.
      * Returns the raw API response including `body.storage.value` (Confluence Storage Format).
-     * No Markdown conversion happens here; the on-boarding Lambda normalizes it at ingestion.
+     * No Markdown conversion happens here; the onboarding-gsheet-lamba Lambda normalizes it at ingestion.
      */
     public async getPage(baseUrl: string, pageId: string): Promise<ConfluencePageApiResponse> {
         const apiBase = this.getApiBase(baseUrl);

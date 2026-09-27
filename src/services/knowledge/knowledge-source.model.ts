@@ -1,7 +1,7 @@
 /**
  * Canonical domain type for a piece of knowledge fetched from any external source
  * (Jira, Confluence, Google Drive, etc.).
- * The adapters that produced these now live in the `on-boarding` Lambda; what remains here is the
+ * The adapters that produced these now live in the `onboarding-gsheet-lamba` Lambda; what remains here is the
  * shared vocabulary its output is described in — notably KnowledgeSourceType, whose values are the
  * folder names the pipeline writes under and the `source`/`category` metadata the CLI filters on.
  */

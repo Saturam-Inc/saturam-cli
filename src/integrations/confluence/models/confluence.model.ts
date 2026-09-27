@@ -36,7 +36,7 @@ export interface ConfluenceAncestor {
 
 /**
  * Raw page body containers. `storage` is the canonical Confluence Storage Format
- * (XHTML-like). Markdown conversion happens in the on-boarding Lambda, not in this repo.
+ * (XHTML-like). Markdown conversion happens in the onboarding-gsheet-lamba Lambda, not in this repo.
  */
 export interface ConfluencePageBody {
     storage?: { value?: string; representation?: string };

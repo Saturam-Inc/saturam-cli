@@ -40,7 +40,7 @@ const INPUTS = [
  *
  * This command used to also *build* that corpus — fetching Confluence pages, Jira tickets and
  * Google Drive files, writing them locally, and uploading them to S3 for Bedrock to ingest. That
- * whole side now runs in AWS Lambda (see the `on-boarding` service in sat-cli-internal-infra),
+ * whole side now runs in AWS Lambda (see the `onboarding-gsheet-lamba` service in sat-cli-internal-infra),
  * on a schedule and off a Google Sheet, so it no longer needs a developer to run it by hand.
  * What is left here is the half a developer actually invokes: asking the indexed corpus questions.
  *

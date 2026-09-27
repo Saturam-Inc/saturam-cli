@@ -80,18 +80,18 @@ deployment-contract change: the deploy that carries it must also change the priv
 
 Environment variables the two functions read (the values are the deployer's):
 
-| Variable                                                                                                                            | Function | Purpose                                                         |
-| ----------------------------------------------------------------------------------------------------------------------------------- | -------- | --------------------------------------------------------------- |
-| `SLACK_SECRET_ID`                                                                                                                   | both     | Secrets Manager secret holding the Slack tokens                 |
-| `SLACK_JOB_QUEUE_URL`                                                                                                               | both     | The FIFO queue; unset means answer in-process (local runs)      |
-| `SATENG_CONVERSATION_TABLE`                                                                                                         | both     | History, delivery de-duplication, feedback                      |
-| `SLACK_WORKER_MAX_ATTEMPTS`                                                                                                         | worker   | Must equal the queue's redrive maximum receives (default 2)     |
-| `SATENG_MODEL`, `SATENG_BEDROCK_PROFILE_PREFIX`                                                                                     | worker   | Bedrock model id and, when needed, its inference-profile prefix |
-| `SATENG_KB_ID`, `SATENG_S3_BUCKET`, `SATENG_S3_PREFIX`, `SATENG_S3_STATE_PREFIX`                                                    | worker   | The knowledge base and where `registry.json` is read from       |
-| `SATENG_CONVERSATION_TTL_DAYS`, `SATENG_KB_REGION`, `SATENG_S3_REGION`, `SATENG_CONVERSATION_TABLE_REGION`, `SATENG_BEDROCK_REGION` | worker   | Optional                                                        |
-| `SATENG_LLM_SECRET_ID`                                                                                                              | worker   | Azure providers only: the secret holding their credentials      |
-| `SLACK_ALLOWED_TEAM_IDS`, `SLACK_ALLOWED_CHANNEL_IDS`, `SLACK_ALLOW_DIRECT_MESSAGES`                                                | ingress  | Access control                                                  |
-| `LOG_LEVEL`, `NODE_OPTIONS`                                                                                                         | both     | `info` or `debug`; `--enable-source-maps`                       |
+| Variable                                                                                                                                                                             | Function | Purpose                                                         |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------- | --------------------------------------------------------------- |
+| `SLACK_SECRET_ID`                                                                                                                                                                    | both     | Secrets Manager secret holding the Slack tokens                 |
+| `SLACK_JOB_QUEUE_URL`                                                                                                                                                                | both     | The FIFO queue; unset means answer in-process (local runs)      |
+| `SATENG_CONVERSATION_TABLE`                                                                                                                                                          | both     | History, delivery de-duplication, feedback                      |
+| `SLACK_WORKER_MAX_ATTEMPTS`                                                                                                                                                          | worker   | Must equal the queue's redrive maximum receives (default 2)     |
+| `SATENG_MODEL`, `SATENG_BEDROCK_PROFILE_PREFIX`                                                                                                                                      | worker   | Bedrock model id and, when needed, its inference-profile prefix |
+| `SATENG_KB_ID`, `SATENG_S3_BUCKET`, `SATENG_S3_PREFIX`, `SATENG_S3_STATE_PREFIX`                                                                                                     | worker   | The knowledge base and where `registry.json` is read from       |
+| `SATENG_CONVERSATION_TTL_DAYS`, `SATENG_KB_REGION`, `SATENG_S3_REGION`, `SATENG_CONVERSATION_TABLE_REGION`, `SATENG_BEDROCK_REGION`, `SATENG_AWS_REGION`, `SATENG_KB_DATA_SOURCE_ID` | worker   | Optional                                                        |
+| `SATENG_LLM_SECRET_ID`                                                                                                                                                               | worker   | Azure providers only: the secret holding their credentials      |
+| `SLACK_ALLOWED_TEAM_IDS`, `SLACK_ALLOWED_CHANNEL_IDS`, `SLACK_ALLOW_DIRECT_MESSAGES`                                                                                                 | ingress  | Access control                                                  |
+| `LOG_LEVEL`, `NODE_OPTIONS`                                                                                                                                                          | both     | `info` or `debug`; `--enable-source-maps`                       |
 
 ## Deployment
 
