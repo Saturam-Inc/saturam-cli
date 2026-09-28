@@ -5,6 +5,7 @@ import {
     ChatModel,
     LLMModel,
     LLMOptions,
+    getModelProvider,
     isAnthropicModel,
     isBedrockModel,
     isDeepSeekModel,
@@ -16,6 +17,7 @@ import {
 } from "../constants/llm-models";
 import { AIProvider, ConfigService, ProviderConfig } from "./config-service";
 import { RemoteCredentialService, type AwsCredentials } from "./remote-credential.service";
+import { TokenUsageTracker } from "./token-usage-tracker";
 
 import { normalizeBaseUrl } from "../utils/url-utils";
 
@@ -63,13 +65,19 @@ function getErrorMessage(error: unknown): string {
     return String(error);
 }
 
-function parseOllamaChatResponse(text: string): string {
+function parseOllamaChatResponse(text: string): {
+    content: string;
+    usage_metadata?: { input_tokens?: number; output_tokens?: number };
+} {
     const trimmed = text.trim();
     if (!trimmed) {
         throw new Error("Self-hosted LLM returned an empty response.");
     }
 
     let content = "";
+    let inputTokens: number | undefined;
+    let outputTokens: number | undefined;
+
     for (const line of trimmed.split(/\r?\n/)) {
         if (!line.trim()) continue;
 
@@ -84,13 +92,28 @@ function parseOllamaChatResponse(text: string): string {
         if (typeof messageContent === "string") {
             content += messageContent;
         }
+
+        const promptEvalCount = (data as { prompt_eval_count?: unknown }).prompt_eval_count;
+        if (typeof promptEvalCount === "number") {
+            inputTokens = promptEvalCount;
+        }
+
+        const evalCount = (data as { eval_count?: unknown }).eval_count;
+        if (typeof evalCount === "number") {
+            outputTokens = evalCount;
+        }
     }
 
     if (!content) {
         throw new Error("Self-hosted LLM returned an invalid response: missing message.content.");
     }
 
-    return content;
+    const usage_metadata =
+        inputTokens !== undefined || outputTokens !== undefined
+            ? { input_tokens: inputTokens, output_tokens: outputTokens }
+            : undefined;
+
+    return { content, usage_metadata };
 }
 
 @Service()
@@ -120,22 +143,84 @@ export class LlmService {
         return llm;
     }
 
-    public async prompt(messages: BaseMessage[], model?: LLMModel, options?: LLMOptions): Promise<string> {
+    public async prompt(
+        messages: BaseMessage[],
+        model?: LLMModel,
+        options?: LLMOptions,
+        tracking?: { tracker: TokenUsageTracker; label: string },
+    ): Promise<string> {
         const llm = await this.getModel(model, options);
         const response = await llm.invoke(messages);
+
+        // Extract and record token usage if tracking is enabled
+        if (tracking) {
+            const usageMeta =
+                "usage_metadata" in response
+                    ? (
+                          response as {
+                              usage_metadata?: { input_tokens?: number; output_tokens?: number };
+                          }
+                      ).usage_metadata
+                    : undefined;
+            tracking.tracker.record(tracking.label, {
+                inputTokens: typeof usageMeta?.input_tokens === "number" ? usageMeta.input_tokens : null,
+                outputTokens: typeof usageMeta?.output_tokens === "number" ? usageMeta.output_tokens : null,
+            });
+        }
+
         return typeof response.content === "string" ? response.content : JSON.stringify(response.content);
     }
 
+    /**
+     * Resolves the AIProvider enum value for a given model (or configured model if omitted).
+     */
+    public async resolveProvider(model?: LLMModel): Promise<AIProvider> {
+        const selectedModel = model ?? (await this.config.getModel());
+        return getModelProvider(selectedModel) as AIProvider;
+    }
+
+    /**
+     * Resolves the actual wire model name that will be used (respecting provider configs & env vars).
+     */
+    public async resolveModel(model?: LLMModel): Promise<string> {
+        const selectedModel = model ?? (await this.config.getModel());
+        if (selectedModel === LLMModel.SELF_HOSTED_CUSTOM) {
+            const providerConfig = await this.config.getProviderConfig(AIProvider.SELF_HOSTED);
+            return providerConfig?.model ?? process.env.SELF_HOSTED_MODEL ?? selectedModel;
+        }
+        if (selectedModel === LLMModel.OLLAMA_CUSTOM) {
+            const providerConfig = await this.config.getProviderConfig(AIProvider.OLLAMA);
+            return providerConfig?.model ?? "llama3";
+        }
+        if (selectedModel === LLMModel.BEDROCK_CUSTOM) {
+            const providerConfig = await this.config.getProviderConfig(AIProvider.BEDROCK);
+            return providerConfig?.model ?? selectedModel;
+        }
+        return selectedModel;
+    }
+
     private async createModel(model: LLMModel, options?: LLMOptions): Promise<ChatModel> {
-        if (isAnthropicModel(model)) return this.createAnthropicModel(model, options);
-        if (isBedrockModel(model)) return this.createBedrockModel(model, options);
-        if (isGeminiModel(model)) return this.createGeminiModel(model, options);
-        if (isOpenAIModel(model)) return this.createOpenAIModel(model, options);
-        if (isGrokModel(model)) return this.createGrokModel(model, options);
-        if (isDeepSeekModel(model)) return this.createDeepSeekModel(model, options);
-        if (isOllamaModel(model)) return this.createOllamaModel(model, options);
-        if (isSelfHostedModel(model)) return this.createSelfHostedModel(model, options);
-        throw new Error(`Unsupported model: ${model}`);
+        const provider = await this.resolveProvider(model);
+        switch (provider) {
+            case AIProvider.ANTHROPIC:
+                return this.createAnthropicModel(model, options);
+            case AIProvider.BEDROCK:
+                return this.createBedrockModel(model, options);
+            case AIProvider.GOOGLE:
+                return this.createGeminiModel(model, options);
+            case AIProvider.OPENAI:
+                return this.createOpenAIModel(model, options);
+            case AIProvider.XAI:
+                return this.createGrokModel(model, options);
+            case AIProvider.DEEPSEEK:
+                return this.createDeepSeekModel(model, options);
+            case AIProvider.OLLAMA:
+                return this.createOllamaModel(model, options);
+            case AIProvider.SELF_HOSTED:
+                return this.createSelfHostedModel(model, options);
+            default:
+                throw new Error(`Unsupported model: ${model}`);
+        }
     }
 
     // --- Anthropic (direct API) ---
@@ -185,13 +270,12 @@ export class LlmService {
         }
 
         if (model === LLMModel.BEDROCK_CUSTOM && !providerConfig?.model) {
-            throw new Error("Custom Bedrock model ID or ARN is required. Run 'sat-cli init' to configure your custom Bedrock model.");
+            throw new Error(
+                "Custom Bedrock model ID or ARN is required. Run 'sat-cli init' to configure your custom Bedrock model.",
+            );
         }
 
-        const targetModel =
-            model === LLMModel.BEDROCK_CUSTOM
-                ? providerConfig!.model!
-                : (model as string);
+        const targetModel = model === LLMModel.BEDROCK_CUSTOM ? providerConfig!.model! : (model as string);
         const regionPrefix = region.startsWith("eu") ? "eu" : region.startsWith("ap") ? "ap" : "us";
         const resolvedModel =
             targetModel.startsWith("anthropic.") && !targetModel.startsWith(`${regionPrefix}.`)
@@ -286,9 +370,7 @@ export class LlmService {
         const apiToken = providerConfig?.apiToken ?? process.env.OLLAMA_API_TOKEN;
 
         // For remote/custom Ollama deployments, prefer the exact configured model name.
-        const modelName =
-            providerConfig?.model ??
-            (model === LLMModel.OLLAMA_CUSTOM ? "llama3" : (model as string));
+        const modelName = providerConfig?.model ?? (model === LLMModel.OLLAMA_CUSTOM ? "llama3" : (model as string));
         if (model === LLMModel.OLLAMA_CUSTOM) {
             logger.info(`Using custom Ollama model: ${modelName}`);
         }
@@ -305,11 +387,8 @@ export class LlmService {
 
     private async createSelfHostedModel(model: LLMModel, options?: LLMOptions): Promise<ChatModel> {
         const providerConfig = await this.config.getProviderConfig(AIProvider.SELF_HOSTED);
-        const endpoint =
-            providerConfig?.endpoint ?? process.env.SELF_HOSTED_ENDPOINT;
-        const modelName =
-            providerConfig?.model ??
-            process.env.SELF_HOSTED_MODEL;
+        const endpoint = providerConfig?.endpoint ?? process.env.SELF_HOSTED_ENDPOINT;
+        const modelName = providerConfig?.model ?? process.env.SELF_HOSTED_MODEL;
 
         if (!endpoint) {
             throw new Error(
@@ -318,9 +397,7 @@ export class LlmService {
         }
 
         if (!modelName) {
-            throw new Error(
-                "Self-hosted model name is required. Set SELF_HOSTED_MODEL or run 'sat-cli init'.",
-            );
+            throw new Error("Self-hosted model name is required. Set SELF_HOSTED_MODEL or run 'sat-cli init'.");
         }
 
         const accessToken = getSelfHostedAuthToken(providerConfig);
@@ -370,7 +447,7 @@ export class LlmService {
                 throw new Error("Self-hosted LLM response stream failed.");
             }
 
-            return { content: parseOllamaChatResponse(body) };
+            return parseOllamaChatResponse(body);
         };
 
         return {

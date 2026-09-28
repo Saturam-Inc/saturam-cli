@@ -70,7 +70,10 @@ export enum LLMModel {
 }
 
 export interface SelfHostedChatModel {
-    invoke(messages: BaseMessage[]): Promise<{ content: string }>;
+    invoke(messages: BaseMessage[]): Promise<{
+        content: string;
+        usage_metadata?: { input_tokens?: number; output_tokens?: number };
+    }>;
 }
 
 export type ChatModel =
@@ -229,4 +232,18 @@ export function isOllamaModel(model: LLMModel): boolean {
 
 export function isSelfHostedModel(model: LLMModel): boolean {
     return SELF_HOSTED_MODELS.has(model);
+}
+
+export function getModelProvider(
+    model: LLMModel,
+): "anthropic" | "bedrock" | "google" | "openai" | "xai" | "deepseek" | "ollama" | "self-hosted" {
+    if (isAnthropicModel(model)) return "anthropic";
+    if (isBedrockModel(model)) return "bedrock";
+    if (isGeminiModel(model)) return "google";
+    if (isOpenAIModel(model)) return "openai";
+    if (isGrokModel(model)) return "xai";
+    if (isDeepSeekModel(model)) return "deepseek";
+    if (isOllamaModel(model)) return "ollama";
+    if (isSelfHostedModel(model)) return "self-hosted";
+    throw new Error(`Unsupported model: ${model}`);
 }
