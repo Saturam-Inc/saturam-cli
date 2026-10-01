@@ -93,6 +93,87 @@ describe("mentor agent prompt", () => {
         });
     });
 
+    describe("messages that are not questions", () => {
+        it("answers a bare greeting without searching or returning to the previous turn", () => {
+            const text = systemTextOf();
+            expect(text).toContain("A bare greeting, thanks or pleasantry");
+            expect(text).toContain("No searching, and no returning to anything asked earlier");
+        });
+
+        it("continues the previous turn only for a message with no subject of its own", () => {
+            expect(systemTextOf()).toContain("a greeting or a new subject never does");
+        });
+    });
+
+    describe("turns carried from an earlier session", () => {
+        const turn = {
+            index: 0,
+            question: "who owns the scheduler?",
+            answer: "I don't have that information.",
+            answerGist: "said the owner is not recorded and to ask the team lead",
+            retrievedChunkIds: [],
+            createdAt: "2026-09-30T00:00:00Z",
+        };
+        const lastMessageOf = (params: { recentTurns: (typeof turn)[]; carriedTurns?: number }) => {
+            const messages = getMentorAgentMessages({ question: "Hi", ...params });
+            return String(messages[messages.length - 1].content);
+        };
+
+        it("marks them as a previous session's, so a greeting is not read as a continuation", () => {
+            const text = lastMessageOf({ recentTurns: [turn], carriedTurns: 1 });
+            expect(text).toContain("from a previous session");
+            expect(text).toContain("not a subject to return to");
+        });
+
+        it("says which ones when the window also holds this session's own turns", () => {
+            const text = lastMessageOf({
+                recentTurns: [turn, { ...turn, index: 1 }, { ...turn, index: 2 }],
+                carriedTurns: 2,
+            });
+            expect(text).toContain("The first 2 exchanges above are from a previous session");
+        });
+
+        it("says nothing when every turn in the window is this session's own", () => {
+            expect(lastMessageOf({ recentTurns: [turn], carriedTurns: 0 })).not.toContain("previous session");
+            expect(lastMessageOf({ recentTurns: [turn] })).not.toContain("previous session");
+        });
+    });
+
+    describe("gaps", () => {
+        it("has the agent own a gap in its own voice rather than report on the documents", () => {
+            const text = systemTextOf();
+            expect(text).toContain('"I don\'t have that information"');
+            expect(text).toContain('never "the docs don\'t name it"');
+        });
+
+        it("names the negative attribution phrases as the same habit", () => {
+            const text = systemTextOf();
+            expect(text).toContain("isn't documented anywhere");
+            expect(text).toContain("the documentation does not mention");
+        });
+
+        it("points the reader at a person who would know", () => {
+            expect(systemTextOf()).toContain("their manager or team lead");
+        });
+
+        it("treats questions about people as ones the documentation rarely answers", () => {
+            expect(systemTextOf()).toContain("documentation rarely records people");
+        });
+
+        it("still gives the general way to find the thing out", () => {
+            expect(systemTextOf()).toContain("the repository's code owners file");
+        });
+
+        it("applies the same to the unanswered part of a partial answer", () => {
+            expect(systemTextOf()).toContain("say plainly that you do not have the rest, and say who would");
+        });
+
+        it("applies the same when the provider cannot call tools", () => {
+            const text = systemTextOf({ preGatheredContext: "(nothing retrieved)" });
+            expect(text).toContain("say you do not have that information and who they could ask");
+        });
+    });
+
     describe("revision after the identifier check", () => {
         const reviseTextOf = () => {
             const [system] = getReviseAnswerMessages({

@@ -103,6 +103,8 @@ export class AnswerFlowService {
         const produced = await this.mentor.answer({
             question,
             recentTurns,
+            // Turns in the window this session did not say itself were carried from earlier ones.
+            carriedTurns: Math.max(0, recentTurns.length - session.turns.length),
             digest: session.digest,
             history,
         });

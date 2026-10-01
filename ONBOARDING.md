@@ -167,7 +167,7 @@ The agent searches until it can answer, within six tool rounds. A model without 
 
 ##### Conversation memory
 
-History is what makes follow-ups work. Each turn stores the question, the answer, a one-line gist, and the resolved project. Agents receive the last three turns as attributed messages plus a rolling digest of everything older, rather than the full transcript — a mentor-length answer runs 400–600 tokens, so replaying twenty of them would dominate every prompt.
+History is what makes follow-ups work. Each turn stores the question, the answer, a one-line gist, and the resolved project. Agents receive the last three turns as attributed messages plus a rolling digest of everything older, rather than the full transcript — a mentor-length answer runs 400–600 tokens, so replaying twenty of them would dominate every prompt. A new run opens with the owner's most recent turns from earlier sessions, marked as such, so a follow-up still resolves while a greeting or a new subject starts fresh rather than continuing what was last asked.
 
 By default history lives in memory and lasts only for the session. Configure a `conversationTable` under your AWS cloud config to persist it in DynamoDB, which is what lets a later run continue the same conversation:
 

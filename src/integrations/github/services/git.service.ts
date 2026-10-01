@@ -10,7 +10,14 @@ export class GitService {
     constructor(private readonly dir: WorkingDirectory) {}
 
     public static async getRepoRootByCwd(cwd: string): Promise<string> {
-        return execSync("git rev-parse --show-toplevel", { cwd, encoding: "utf8" }).trim();
+        // stderr is dropped: outside a repository git prints "fatal: not a git repository", which
+        // the caller handles by falling back to cwd, and a chat started from a home directory
+        // should not open with a line that looks like a crash.
+        return execSync("git rev-parse --show-toplevel", {
+            cwd,
+            encoding: "utf8",
+            stdio: ["ignore", "pipe", "ignore"],
+        }).trim();
     }
 
     public async getCurrentBranch(): Promise<string> {

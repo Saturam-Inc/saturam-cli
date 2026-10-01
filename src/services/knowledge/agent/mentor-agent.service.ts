@@ -65,6 +65,8 @@ export class MentorAgentService {
         digest?: SessionDigest;
         /** Full history for `recall_conversation`, which may reach past the verbatim window. */
         history: ChatTurn[];
+        /** Leading turns of recentTurns that came from earlier sessions; see getMentorAgentMessages. */
+        carriedTurns?: number;
     }): Promise<MentorAnswer> {
         const model = await this.llm.getModel(undefined, { temperature: TEMPERATURE });
         const executor = this.tools.create(params.history);
@@ -79,6 +81,7 @@ export class MentorAgentService {
             question: params.question,
             recentTurns: params.recentTurns,
             digest: params.digest,
+            carriedTurns: params.carriedTurns,
         });
 
         for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
@@ -114,7 +117,7 @@ export class MentorAgentService {
             [
                 ...messages,
                 new HumanMessage(
-                    "Answer now, using only what you have already retrieved. If it does not cover the question, say exactly that.",
+                    "Answer now, using only what you have already retrieved. If it does not cover the question, say you do not have that information and who they could ask instead.",
                 ),
             ],
             undefined,
@@ -129,7 +132,7 @@ export class MentorAgentService {
      * A degraded path that is itself complicated is how the old branch tree started.
      */
     private async answerWithoutTools(
-        params: { question: string; recentTurns: ChatTurn[]; digest?: SessionDigest },
+        params: { question: string; recentTurns: ChatTurn[]; digest?: SessionDigest; carriedTurns?: number },
         executor: KnowledgeToolExecutor,
     ): Promise<MentorAnswer> {
         const context = await executor.run({
@@ -143,6 +146,7 @@ export class MentorAgentService {
                 question: params.question,
                 recentTurns: params.recentTurns,
                 digest: params.digest,
+                carriedTurns: params.carriedTurns,
                 preGatheredContext: context,
             }),
             undefined,

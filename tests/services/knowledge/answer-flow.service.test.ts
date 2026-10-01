@@ -160,6 +160,19 @@ describe("AnswerFlowService", () => {
         expect(latest.history.map((turn: any) => turn.question)).toContain("how does the scheduler work?");
     });
 
+    it("tells the agent how many of the turns it sees came from an earlier session", async () => {
+        await flow.ask("how does the scheduler work?");
+
+        const continued = new AnswerFlowService(mentor, writer, followUps, registry, digest, stores);
+        await continued.ask("Hi");
+        await continued.ask("and what triggers it?");
+
+        const carried = mentor.answer.mock.calls.map((call: any[]) => call[0].carriedTurns);
+        // Nothing carried into the first run; the new run's first message sees one carried turn,
+        // and its second still sees that one ahead of its own first turn.
+        expect(carried).toEqual([0, 1, 1]);
+    });
+
     it("starts clean when a new session is requested", async () => {
         await flow.ask("how does the scheduler work?");
 
