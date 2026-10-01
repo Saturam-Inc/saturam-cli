@@ -269,6 +269,13 @@ export class ReviewCommand implements TypedCommand<typeof INPUTS> {
             return count.toLocaleString("en-US");
         };
 
+        const formatCost = (cost: number | null): string => {
+            if (cost === null) return "n/a";
+            if (cost === 0) return "$0.00";
+            if (cost < 0.0001) return "< $0.0001";
+            return `$${cost.toFixed(4)}`;
+        };
+
         logger.info("");
         logger.info("─── Token Usage ───");
         logger.info(`Provider:  ${usage.provider}`);
@@ -285,6 +292,8 @@ export class ReviewCommand implements TypedCommand<typeof INPUTS> {
         const totalIn = formatTokens(usage.totalInput);
         const totalOut = formatTokens(usage.totalOutput);
         logger.info(`  ${"TOTAL".padEnd(24)} ${totalIn.padStart(8)} in / ${totalOut.padStart(6)} out`);
+        const costStr = formatCost(usage.estimatedCost);
+        logger.info(`  ${"Est. Cost:".padEnd(24)} ${costStr}`);
         logger.info("");
     }
 }

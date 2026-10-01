@@ -90,4 +90,30 @@ describe("TokenUsageTracker", () => {
         expect(summary.totalInput).toBe(1100);
         expect(summary.totalOutput).toBe(250);
     });
+
+    it("should calculate estimatedCost correctly for paid models", () => {
+        tracker.setProviderInfo(AIProvider.ANTHROPIC, "claude-sonnet-4-5-20250929");
+        // Rate: $3.00/1M input, $15.00/1M output
+        // 100,000 in = $0.30, 20,000 out = $0.30 -> total $0.60
+        tracker.record("call1", { inputTokens: 100_000, outputTokens: 20_000 });
+
+        const summary = tracker.getSummary();
+        expect(summary.estimatedCost).toBeCloseTo(0.6, 4);
+    });
+
+    it("should return $0 estimatedCost for local / self-hosted models", () => {
+        tracker.setProviderInfo(AIProvider.OLLAMA, "llama3");
+        tracker.record("call1", { inputTokens: 50_000, outputTokens: 10_000 });
+
+        const summary = tracker.getSummary();
+        expect(summary.estimatedCost).toBe(0);
+    });
+
+    it("should return null estimatedCost if any token counts are missing", () => {
+        tracker.setProviderInfo(AIProvider.OPENAI, "gpt-4o");
+        tracker.record("call1", { inputTokens: null, outputTokens: 500 });
+
+        const summary = tracker.getSummary();
+        expect(summary.estimatedCost).toBeNull();
+    });
 });

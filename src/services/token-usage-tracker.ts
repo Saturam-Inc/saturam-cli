@@ -1,4 +1,5 @@
 import { AIProvider } from "./config-service";
+import { calculateCost } from "../constants/model-pricing";
 
 export interface CallUsage {
     label: string;
@@ -12,6 +13,7 @@ export interface UsageSummary {
     calls: CallUsage[];
     totalInput: number | null;
     totalOutput: number | null;
+    estimatedCost: number | null;
 }
 
 /**
@@ -61,12 +63,17 @@ export class TokenUsageTracker {
             }
         }
 
+        const totalIn = anyInputMissing ? null : totalInput;
+        const totalOut = anyOutputMissing ? null : totalOutput;
+        const estimatedCost = calculateCost(this.model, totalIn, totalOut, this.provider);
+
         return {
             provider: this.provider,
             model: this.model,
             calls: this.calls.map((call) => ({ ...call })),
-            totalInput: anyInputMissing ? null : totalInput,
-            totalOutput: anyOutputMissing ? null : totalOutput,
+            totalInput: totalIn,
+            totalOutput: totalOut,
+            estimatedCost,
         };
     }
 }
