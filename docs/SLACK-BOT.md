@@ -136,6 +136,9 @@ over a WebSocket.
   context.
 - In channels the bot must be mentioned every time, including in its own threads. In DMs each
   top-level message starts a thread.
+- Follow-ups are listed as rows: the full question as the row's text, with an _Ask_ button beside
+  it. Slack clips a button's label to the width its row allows and cannot widen it to fit, so the
+  question is never the label.
 - Follow-up buttons ask on behalf of whoever clicks, and the answer shows who asked. 👍/👎 is stored
   per answer and per rater; a second click replaces the first.
 

@@ -123,6 +123,7 @@ export class AnswerFlowService {
                 chunks: produced.chunks,
                 digest: session.digest,
                 projectDisplayName: project?.displayName,
+                projectSlug: project?.slug,
             }),
             this.writer.summarize(question, answer),
         ]);

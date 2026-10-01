@@ -163,7 +163,7 @@ The agent searches until it can answer, within six tool rounds. A model without 
 
 **Checks on the answer.** Two guards run in code on whatever the model wrote. Any file, path, script or table the answer names that appears in neither the sources nor the recent conversation triggers one revision, and anything shaped like a credential is redacted.
 
-**Follow-ups.** Suggestions are constrained to material the Knowledge Base holds — a suggestion it cannot answer wastes a turn. Select one to continue, or choose "Let me put it another way" to type your own.
+**Follow-ups.** Each suggestion is drawn from one of the documents the answer retrieved and must cite it. One that cites nothing, or whose best matches in the Knowledge Base are not among those documents, is dropped before it is shown — a suggestion the corpus cannot answer wastes a turn. An answer that retrieved nothing offers none. Select one to continue, or choose "Let me put it another way" to type your own.
 
 ##### Conversation memory
 

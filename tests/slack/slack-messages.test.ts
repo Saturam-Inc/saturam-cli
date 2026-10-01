@@ -44,13 +44,28 @@ describe("answerMessage", () => {
         expect(texts(answerMessage(result(), typed, conversation).blocks)).toContain("Orion");
     });
 
-    it("offers each follow-up as a button carrying the full question", () => {
-        const actions: any = answerMessage(result(), typed, conversation).blocks.find(
-            (b: any) => b.block_id === "follow_ups",
+    it("lists each follow-up in full as a row whose Ask button carries the question", () => {
+        const question = "Walk me through what the scheduler does when a job it depends on has not finished";
+        const rows: any[] = answerMessage(
+            result({ followUps: [{ question, rationale: "" }] }),
+            typed,
+            conversation,
+        ).blocks.filter((b: any) => String(b.block_id ?? "").startsWith("follow_ups:"));
+
+        expect(rows).toHaveLength(1);
+        expect(rows[0].type).toBe("section");
+        expect(rows[0].text.text).toBe(question);
+        expect(rows[0].accessory).toEqual(
+            expect.objectContaining({ type: "button", action_id: `${FOLLOW_UP_ACTION_PREFIX}0`, value: question }),
         );
-        expect(actions.elements).toEqual([
-            expect.objectContaining({ action_id: `${FOLLOW_UP_ACTION_PREFIX}0`, value: "What triggers it?" }),
-        ]);
+    });
+
+    it("shows at most three follow-ups", () => {
+        const followUps = Array.from({ length: 5 }, (_, i) => ({ question: `Question ${i}?`, rationale: "" }));
+        const rows = answerMessage(result({ followUps }), typed, conversation).blocks.filter((b: any) =>
+            String(b.block_id ?? "").startsWith("follow_ups:"),
+        );
+        expect(rows).toHaveLength(3);
     });
 
     it("attaches feedback buttons that identify the conversation", () => {
@@ -63,7 +78,8 @@ describe("answerMessage", () => {
 
     it("omits the follow-up section when there are none", () => {
         const blocks = answerMessage(result({ followUps: [] }), typed, conversation).blocks;
-        expect(blocks.find((b: any) => b.block_id === "follow_ups")).toBeUndefined();
+        expect(blocks.find((b: any) => String(b.block_id ?? "").startsWith("follow_ups:"))).toBeUndefined();
+        expect(texts(blocks)).not.toContain("You could ask next");
     });
 
     it("echoes a clicked follow-up, which nobody typed into the thread", () => {
@@ -73,7 +89,8 @@ describe("answerMessage", () => {
 
     it("stays within Slack's 50-block limit for a very long answer", () => {
         const long = Array.from({ length: 1000 }, (_, i) => `Paragraph ${i} ${"word ".repeat(40)}`).join("\n\n");
-        const message = answerMessage(result({ answer: long }), typed, conversation);
+        const followUps = Array.from({ length: 3 }, (_, i) => ({ question: `Question ${i}?`, rationale: "" }));
+        const message = answerMessage(result({ answer: long, followUps }), typed, conversation);
         expect(message.blocks.length).toBeLessThanOrEqual(50);
         expect(texts(message.blocks)).toContain("cut short");
         for (const block of message.blocks as any[]) {

@@ -4,7 +4,7 @@ import type { RetrievedChunk } from "../integrations/aws/services/bedrock-knowle
 import type { AnswerResult } from "../services/knowledge/answer-flow.service";
 import { stripInlineCitations } from "../utils/citations.util";
 import type { QuestionSource } from "./slack-inbound";
-import { escapeMrkdwn, markdownToMrkdwn, splitMrkdwn } from "./slack-mrkdwn";
+import { SECTION_TEXT_LIMIT, escapeMrkdwn, markdownToMrkdwn, splitMrkdwn } from "./slack-mrkdwn";
 
 /**
  * Every message the bot posts, as Block Kit. Pure: given what to say, returns what to send, so
@@ -25,13 +25,16 @@ export const FeedbackButtonValueSchema = z.object({ o: z.string().min(1), s: z.s
 
 /** Slack's limits, from the Block Kit reference. */
 const MAX_BLOCKS = 50;
-const BUTTON_TEXT_LIMIT = 75;
 const BUTTON_VALUE_LIMIT = 2000;
 const FALLBACK_TEXT_LIMIT = 300;
 const MAX_SOURCES = 6;
+const MAX_FOLLOW_UPS_SHOWN = 3;
 
-/** Room kept below MAX_BLOCKS for the header, sources, follow-ups and feedback blocks. */
-const MAX_ANSWER_SECTIONS = MAX_BLOCKS - 8;
+/**
+ * Room kept below MAX_BLOCKS: the echoed question, project, sources, divider, follow-up heading
+ * and feedback blocks, the "cut short" notice, and one block per follow-up.
+ */
+const MAX_ANSWER_SECTIONS = MAX_BLOCKS - (7 + MAX_FOLLOW_UPS_SHOWN);
 
 function truncate(text: string, limit: number): string {
     return text.length <= limit ? text : `${text.slice(0, limit - 1).trimEnd()}…`;
@@ -94,6 +97,29 @@ function shortUrl(url: string): string {
     }
 }
 
+/**
+ * One row per follow-up: the question as the row's text, with an "Ask" button beside it.
+ *
+ * They used to be buttons in one actions block, with the question as the label. Slack sizes a
+ * button to its label but clips the label at the width the row allows, and a row holding three or
+ * four of them allows very little, so a question showed as its first few words. There is no way to
+ * ask for a wider button. Section text wraps to the full message width, so the question goes
+ * there, and the button only needs to say what clicking it does.
+ */
+function followUpRow(followUp: { question: string }, index: number): KnownBlock {
+    return {
+        type: "section",
+        block_id: `follow_ups:${index}`,
+        text: { type: "mrkdwn", text: escapeMrkdwn(truncate(followUp.question, SECTION_TEXT_LIMIT)) },
+        accessory: {
+            type: "button",
+            action_id: `${FOLLOW_UP_ACTION_PREFIX}${index}`,
+            text: { type: "plain_text", text: "Ask", emoji: true },
+            value: truncate(followUp.question, BUTTON_VALUE_LIMIT),
+        },
+    };
+}
+
 export function answerMessage(
     result: AnswerResult,
     asked: AskedQuestion,
@@ -115,20 +141,11 @@ export function answerMessage(
         blocks.push(context(`*Sources:* ${links}`));
     }
 
-    const followUps = result.followUps.slice(0, 4);
+    const followUps = result.followUps.slice(0, MAX_FOLLOW_UPS_SHOWN);
     if (followUps.length > 0) {
         blocks.push({ type: "divider" });
         blocks.push(context("*You could ask next:*"));
-        blocks.push({
-            type: "actions",
-            block_id: "follow_ups",
-            elements: followUps.map((followUp, index) => ({
-                type: "button",
-                action_id: `${FOLLOW_UP_ACTION_PREFIX}${index}`,
-                text: { type: "plain_text", text: truncate(followUp.question, BUTTON_TEXT_LIMIT), emoji: true },
-                value: truncate(followUp.question, BUTTON_VALUE_LIMIT),
-            })),
-        });
+        blocks.push(...followUps.map(followUpRow));
     }
 
     const feedbackValue = JSON.stringify({ o: conversation.ownerId, s: conversation.sessionId });

@@ -121,7 +121,7 @@ Each question goes to a single mentor agent that searches the Knowledge Base as 
 1. **Search until it can answer** — the agent searches broadly or within one project, looks up which projects are indexed, and recalls earlier turns, choosing which of these a question needs and searching again with different wording when the first results miss.
 2. **Project from the evidence** — the project an answer is labelled with is read off the documents it retrieved, not decided in advance. When those documents come from more than one project, the answer is given without a project label; you are never asked to choose one.
 3. **Mentoring answer** — explains the thing the way a senior engineer would, at the length the question deserves, rather than quoting document excerpts back. Anything the answer names that the sources do not mention is revised out, and anything shaped like a credential is redacted.
-4. **Follow-up suggestions** — three or four questions you can select to keep going, each one grounded in material the Knowledge Base can actually answer.
+4. **Follow-up suggestions** — up to three short questions you can select to keep going. Each is drawn from a document the answer retrieved and checked against the Knowledge Base before it is shown; an answer that retrieved nothing offers none.
 
 Conversation history is kept so follow-ups work: "and how does it fail?" is understood against the previous answer. History lives in memory by default, or in DynamoDB when a `conversationTable` is configured (see "Cloud" below), which is what lets a later run continue the same conversation.
 
