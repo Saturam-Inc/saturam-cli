@@ -36,6 +36,21 @@ describe("markdownToMrkdwn", () => {
         expect(markdownToMrkdwn("see [the file](./README.md)")).toBe("see the file");
     });
 
+    it("links an image at a web address, which Slack cannot show inline", () => {
+        expect(markdownToMrkdwn("![diagram](https://x.io/a.png) and ![](https://x.io/b.png)")).toBe(
+            "<https://x.io/a.png|diagram> and <https://x.io/b.png>",
+        );
+    });
+
+    it("never turns an image into a Slack mention, keeping only its alt text", () => {
+        // The bug this guards: the image rule runs after escaping and wrapped whatever stood in
+        // the URL position in <…>, so text in an answer could notify a channel, a user or a group.
+        expect(markdownToMrkdwn("heads up ![](!channel) all")).toBe("heads up  all");
+        expect(markdownToMrkdwn("ping ![x](@U024BE7LH)")).toBe("ping x");
+        expect(markdownToMrkdwn("![grp](!subteam^S0123)")).toBe("grp");
+        expect(markdownToMrkdwn("![](!here) ![everyone](!everyone) ![chan](#C024BE7LR)")).toBe("everyone chan");
+    });
+
     it("closes a code block the answer left open", () => {
         expect(markdownToMrkdwn("```\ncode")).toBe("```\ncode\n```");
     });

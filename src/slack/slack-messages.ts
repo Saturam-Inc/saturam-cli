@@ -75,13 +75,17 @@ export function placeholderMessage(asked: AskedQuestion): SlackMessage {
  * The document URLs behind an answer. Prefers the original URL the ingestion pipeline stored in
  * metadata (Confluence, Jira, Drive) over `location`, which is the S3 object Bedrock ingested and
  * not something a person can open; an s3:// location alone is dropped for the same reason.
+ *
+ * A URL containing "<", ">" or "|" is dropped too. These end up inside Slack's <url|title>, where
+ * any of the three closes the link early, and what follows could start a token of its own — a
+ * metadata URL ending in "> <!channel" would notify the whole channel.
  */
 export function sourceLinks(chunks: RetrievedChunk[]): Array<{ url: string; title: string }> {
     const seen = new Map<string, string>();
     for (const chunk of chunks) {
         const metadataUrl = chunk.metadata?.url;
         const url = (typeof metadataUrl === "string" && metadataUrl) || chunk.location;
-        if (!url || !/^https?:\/\//.test(url) || seen.has(url)) continue;
+        if (!url || !/^https?:\/\//.test(url) || /[<>|]/.test(url) || seen.has(url)) continue;
         const title = chunk.metadata?.title;
         seen.set(url, typeof title === "string" && title.trim() ? title.trim() : shortUrl(url));
     }
@@ -168,7 +172,8 @@ export function answerMessage(
         ],
     });
 
-    return { text: truncate(stripInlineCitations(result.answer).trim(), FALLBACK_TEXT_LIMIT), blocks };
+    // Escaped like everything else built from the answer: Slack reads the fallback as mrkdwn too.
+    return { text: escapeMrkdwn(truncate(stripInlineCitations(result.answer).trim(), FALLBACK_TEXT_LIMIT)), blocks };
 }
 
 /**

@@ -40,6 +40,11 @@ describe("answerMessage", () => {
         expect(message.text).toBe("The **scheduler** reads the jobs table.");
     });
 
+    it("escapes the fallback text, so nothing in an answer reads as a mention there either", () => {
+        const message = answerMessage(result({ answer: "ping <!channel> & <@U024BE7LH>" }), typed, conversation);
+        expect(message.text).toBe("ping &lt;!channel&gt; &amp; &lt;@U024BE7LH&gt;");
+    });
+
     it("names the project the evidence came from", () => {
         expect(texts(answerMessage(result(), typed, conversation).blocks)).toContain("Orion");
     });
@@ -102,6 +107,19 @@ describe("answerMessage", () => {
 describe("sourceLinks", () => {
     it("prefers the original document URL, deduplicates, and drops bare s3:// locations", () => {
         expect(sourceLinks(result().chunks)).toEqual([{ url: "https://wiki.example.com/a", title: "Scheduler" }]);
+    });
+
+    it("drops a URL that would close Slack's link early and start a token of its own", () => {
+        const chunks = [
+            { content: "a", location: "s3://bucket/a.md", metadata: { url: "https://a.example/x> <!channel" } },
+            { content: "b", location: "s3://bucket/b.md", metadata: { url: "https://a.example/x|<!here" } },
+            { content: "c", location: "s3://bucket/c.md", metadata: { url: "https://a.example/ok", title: "Fine" } },
+        ];
+
+        expect(sourceLinks(chunks)).toEqual([{ url: "https://a.example/ok", title: "Fine" }]);
+        const blocks = answerMessage(result({ chunks }), typed, conversation).blocks;
+        expect(texts(blocks)).not.toContain("<!channel");
+        expect(texts(blocks)).not.toContain("<!here");
     });
 });
 

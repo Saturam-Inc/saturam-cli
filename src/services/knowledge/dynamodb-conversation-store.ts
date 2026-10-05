@@ -16,6 +16,9 @@ const APPEND_MAX_ATTEMPTS = 5;
 /** Items scanned when listing an owner's recent sessions. */
 const RECENT_SESSION_SCAN_LIMIT = 200;
 
+/** How long the in-memory store stands in after a failed call before DynamoDB is tried again. */
+const DEGRADED_COOLDOWN_MS = 30 * 1000;
+
 /**
  * Sort keys are "session#<id>#meta" and "session#<id>#turn#<index>". Session ids sort
  * chronologically, so the newest session is simply the largest sort key under the owner — that is
@@ -59,24 +62,33 @@ export class DynamoDbConversationStore implements ConversationStore {
     private client: import("@aws-sdk/lib-dynamodb").DynamoDBDocumentClient | undefined;
 
     /**
-     * Set after the first failed call. Losing the table must not silently disable conversation
-     * memory altogether: without this the flow would start a fresh session on every question, so
-     * follow-ups answer as if nothing had been said. Once degraded, the in-memory store takes over
-     * for the rest of the process, so context still works within the session.
+     * Set by a failed call, to the time DynamoDB may next be tried. Losing the table must not
+     * silently disable conversation memory altogether: without this the flow would start a fresh
+     * session on every question, so follow-ups answer as if nothing had been said. While degraded,
+     * the in-memory store takes over, so context still works within the session.
+     *
+     * A cool-down rather than a switch for the rest of the process, because a process is not
+     * always one short session: a warm Slack worker serves many people for hours, and a single
+     * throttled call must not keep all of them off the table until the next cold start. If the
+     * retry fails as well, the in-memory store carries on with everything it already holds.
      */
-    private degraded = false;
+    private degradedUntil = 0;
 
     constructor(
         private readonly config: ConfigService,
         private readonly fallback: InMemoryConversationStore,
     ) {}
 
-    /** Records the first failure, explains it once, and hands over to the in-memory store. */
+    private get degraded(): boolean {
+        return Date.now() < this.degradedUntil;
+    }
+
+    /** Records a failure, explains it once per cool-down, and hands over to the in-memory store. */
     private degrade(err: unknown): void {
         if (this.degraded) return;
-        this.degraded = true;
+        this.degradedUntil = Date.now() + DEGRADED_COOLDOWN_MS;
         logger.warn(
-            `Conversation history is not reachable, so this session is keeping history in memory only: ${(err as Error).message}`,
+            `Conversation history is not reachable, so history is kept in memory only for the next ${DEGRADED_COOLDOWN_MS / 1000}s: ${(err as Error).message}`,
         );
         logger.warn(
             "History will not carry across runs until this is fixed — check the table name, region, and that the IAM identity has dynamodb:Query, PutItem and UpdateItem on it.",
@@ -328,6 +340,10 @@ export class DynamoDbConversationStore implements ConversationStore {
 /**
  * Chooses the conversation store for this run: DynamoDB when a table is configured, otherwise
  * the in-memory store. Resolved once per process, since the answer depends only on config.
+ *
+ * A config read that fails is not an answer, so it is not remembered: that question uses the
+ * in-memory store and the next one reads the config again. Remembering it would keep a long-lived
+ * process (a warm Slack worker) off DynamoDB for good after one failed read.
  */
 @Service()
 export class ConversationStoreProvider {
@@ -342,7 +358,16 @@ export class ConversationStoreProvider {
     public async get(): Promise<ConversationStore> {
         if (this.resolved) return this.resolved;
 
-        const table = await this.config.getConversationTableConfig().catch(() => undefined);
+        let table: Awaited<ReturnType<ConfigService["getConversationTableConfig"]>>;
+        try {
+            table = await this.config.getConversationTableConfig();
+        } catch (err) {
+            logger.warn(
+                `Could not read the conversation table config, so this question uses in-memory history: ${(err as Error).message}`,
+            );
+            return this.memory;
+        }
+
         if (table) {
             logger.debug(`Using DynamoDB conversation history (table: ${table.tableName}).`);
             this.resolved = this.dynamo;

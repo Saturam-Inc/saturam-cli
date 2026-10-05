@@ -27,8 +27,11 @@ function linkText(text: string): string {
 function convertProse(text: string): string {
     return (
         text
+            // Only a web address may become a <…> token. Slack reads <!channel>, <@U…> and
+            // <!subteam^…> as live mentions, and this runs after escaping, so an image pointing
+            // anywhere else keeps its alt text and nothing more.
             .replace(/!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g, (_m, alt: string, url: string) =>
-                alt ? `<${url}|${linkText(alt)}>` : `<${url}>`,
+                /^https?:/.test(url) ? (alt ? `<${url}|${linkText(alt)}>` : `<${url}>`) : alt,
             )
             .replace(/\[([^\]]+)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g, (_m, label: string, url: string) =>
                 /^(https?:|mailto:)/.test(url) ? `<${url}|${linkText(label)}>` : label,

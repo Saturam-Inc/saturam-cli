@@ -1,4 +1,3 @@
-
 const sendMock = jest.fn();
 
 jest.mock("@aws-sdk/client-dynamodb", () => ({
@@ -24,7 +23,10 @@ jest.mock("../../../src/integrations/aws/utils/aws-credentials.util", () => ({
     resolveAwsClientConfig: jest.fn().mockResolvedValue({ credentials: {} }),
 }));
 
-import { DynamoDbConversationStore } from "../../../src/services/knowledge/dynamodb-conversation-store";
+import {
+    ConversationStoreProvider,
+    DynamoDbConversationStore,
+} from "../../../src/services/knowledge/dynamodb-conversation-store";
 import { InMemoryConversationStore } from "../../../src/services/knowledge/conversation-store";
 import { SessionRef } from "../../../src/services/knowledge/session-identity";
 
@@ -212,7 +214,7 @@ describe("DynamoDbConversationStore", () => {
         expect(session.activeProject).toBe("mrf");
     });
 
-    it("stops calling DynamoDB once degraded, instead of retrying on every question", async () => {
+    it("stops calling DynamoDB while degraded, instead of retrying on every question", async () => {
         sendMock.mockRejectedValue(new Error("not authorized"));
 
         await store.load(ref("s1"));
@@ -221,6 +223,53 @@ describe("DynamoDbConversationStore", () => {
         await store.saveActiveProject(ref("s1"), "mrf");
 
         expect(sendMock.mock.calls.length).toBe(callsAfterFirstFailure);
+    });
+
+    it("goes back to DynamoDB after a cool-down, rather than staying in memory for the life of the process", async () => {
+        // The bug this guards: one throttled call on a warm Slack worker kept every later question,
+        // from every user that instance served, off the table until the next cold start.
+        const start = 1_800_000_000_000;
+        const now = jest.spyOn(Date, "now").mockReturnValue(start);
+        try {
+            sendMock.mockRejectedValueOnce(Object.assign(new Error("slow down"), { name: "ThrottlingException" }));
+            await store.load(ref("s1"));
+            const callsAfterFailure = sendMock.mock.calls.length;
+
+            now.mockReturnValue(start + 1000);
+            await store.appendTurn(ref("s1"), turn(0));
+            expect(sendMock.mock.calls.length).toBe(callsAfterFailure);
+
+            now.mockReturnValue(start + 10 * 60 * 1000);
+            await store.appendTurn(ref("s1"), turn(1));
+            await store.load(ref("s1"));
+
+            const later = sendMock.mock.calls.slice(callsAfterFailure).map((c: any) => c[0].type);
+            expect(later).toEqual(["Put", "Query", "Query"]);
+            expect(sendMock.mock.calls[callsAfterFailure][0].input.Item.sk).toBe("session#s1#turn#000001");
+        } finally {
+            now.mockRestore();
+        }
+    });
+
+    it("keeps what it held in memory when the retry after the cool-down fails too", async () => {
+        const start = 1_800_000_000_000;
+        const now = jest.spyOn(Date, "now").mockReturnValue(start);
+        try {
+            sendMock.mockRejectedValue(Object.assign(new Error("not authorized"), { name: "AccessDeniedException" }));
+            await store.load(ref("s1"));
+            await store.appendTurn(ref("s1"), turn(0));
+            const callsWhileDegraded = sendMock.mock.calls.length;
+
+            now.mockReturnValue(start + 10 * 60 * 1000);
+            await store.appendTurn(ref("s1"), turn(1));
+            const session = await store.load(ref("s1"));
+
+            // One more attempt was made, it failed, and the session carried on where it was.
+            expect(sendMock.mock.calls.length).toBe(callsWhileDegraded + 1);
+            expect(session.turns.map((t) => t.index)).toEqual([0, 1]);
+        } finally {
+            now.mockRestore();
+        }
     });
 
     it("preserves the digest through the fallback as well", async () => {
@@ -261,5 +310,44 @@ describe("DynamoDbConversationStore", () => {
 
         expect(sendMock).not.toHaveBeenCalled();
         expect((await store.load(ref("s1"))).turns).toHaveLength(1);
+    });
+});
+
+describe("ConversationStoreProvider", () => {
+    const table = { tableName: "sateng-conversations", region: "ap-south-1", ttlDays: 90 };
+
+    function provider(getConversationTableConfig: jest.Mock) {
+        const config: any = { getConversationTableConfig };
+        const memory = new InMemoryConversationStore();
+        const dynamo = new DynamoDbConversationStore(config, memory);
+        return { stores: new ConversationStoreProvider(config, dynamo, memory), memory, dynamo };
+    }
+
+    it("uses DynamoDB when a table is configured, and memory when none is", async () => {
+        const configured = provider(jest.fn().mockResolvedValue(table));
+        const unconfigured = provider(jest.fn().mockResolvedValue(undefined));
+
+        expect(await configured.stores.get()).toBe(configured.dynamo);
+        expect(await unconfigured.stores.get()).toBe(unconfigured.memory);
+    });
+
+    it("reads the config once it has an answer, not on every question", async () => {
+        const read = jest.fn().mockResolvedValue(table);
+        const { stores } = provider(read);
+
+        await stores.get();
+        await stores.get();
+
+        expect(read).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not settle on memory after one failed config read", async () => {
+        // The bug this guards: a single failed read cached the in-memory store for the life of the
+        // process, so a warm Slack worker never went back to the table.
+        const read = jest.fn().mockRejectedValueOnce(new Error("EMFILE: too many open files")).mockResolvedValue(table);
+        const { stores, memory, dynamo } = provider(read);
+
+        expect(await stores.get()).toBe(memory);
+        expect(await stores.get()).toBe(dynamo);
     });
 });
