@@ -1,23 +1,10 @@
-import type { BaseMessage } from "@langchain/core/messages";
+import type { BaseMessage, UsageMetadata } from "@langchain/core/messages";
 import { getLogger } from "log4js";
 import { Service } from "typedi";
-import {
-    ChatModel,
-    LLMModel,
-    LLMOptions,
-    getModelProvider,
-    isAnthropicModel,
-    isBedrockModel,
-    isDeepSeekModel,
-    isGeminiModel,
-    isGrokModel,
-    isOllamaModel,
-    isOpenAIModel,
-    isSelfHostedModel,
-} from "../constants/llm-models";
+import { ChatModel, LLMModel, LLMOptions, getModelProvider, isBedrockModel } from "../constants/llm-models";
 import { AIProvider, ConfigService, ProviderConfig } from "./config-service";
 import { RemoteCredentialService, type AwsCredentials } from "./remote-credential.service";
-import { TokenUsageTracker } from "./token-usage-tracker";
+import type { TokenUsageTracker } from "./token-usage-tracker";
 
 import { normalizeBaseUrl } from "../utils/url-utils";
 
@@ -149,22 +136,41 @@ export class LlmService {
         options?: LLMOptions,
         tracking?: { tracker: TokenUsageTracker; label: string },
     ): Promise<string> {
+        const selectedModel = model ?? (await this.config.getModel());
+        const provider = getModelProvider(selectedModel) as AIProvider;
         const llm = await this.getModel(model, options);
-        const response = await llm.invoke(messages);
+        let response: any;
+        try {
+            response = await llm.invoke(messages);
+        } catch (e) {
+            if (tracking) {
+                tracking.tracker.record(`${tracking.label} (failed)`, {
+                    inputTokens: null,
+                    outputTokens: null,
+                });
+            }
+            throw e;
+        }
 
         // Extract and record token usage if tracking is enabled
         if (tracking) {
-            const usageMeta =
-                "usage_metadata" in response
-                    ? (
-                          response as {
-                              usage_metadata?: { input_tokens?: number; output_tokens?: number };
-                          }
-                      ).usage_metadata
-                    : undefined;
+            const usageMeta: UsageMetadata | undefined =
+                "usage_metadata" in response ? (response.usage_metadata as UsageMetadata) : undefined;
+            const input = typeof usageMeta?.input_tokens === "number" ? usageMeta.input_tokens : null;
+            const total = typeof usageMeta?.total_tokens === "number" ? usageMeta.total_tokens : null;
+
+            // For Gemini models, usage_metadata.output_tokens only includes visible candidates,
+            // omitting reasoning/thinking tokens. Total includes thinking tokens and is billed at output rate.
+            const output =
+                provider === AIProvider.GOOGLE && total !== null && input !== null
+                    ? total - input
+                    : typeof usageMeta?.output_tokens === "number"
+                      ? usageMeta.output_tokens
+                      : null;
+
             tracking.tracker.record(tracking.label, {
-                inputTokens: typeof usageMeta?.input_tokens === "number" ? usageMeta.input_tokens : null,
-                outputTokens: typeof usageMeta?.output_tokens === "number" ? usageMeta.output_tokens : null,
+                inputTokens: input,
+                outputTokens: output,
             });
         }
 
@@ -172,35 +178,64 @@ export class LlmService {
     }
 
     /**
+     * Resolves both the AIProvider and wire model name in a single config lookup.
+     */
+    public async resolveSessionInfo(model?: LLMModel): Promise<{ provider: AIProvider; model: string }> {
+        const selectedModel = model ?? (await this.config.getModel());
+        const provider = getModelProvider(selectedModel);
+        const resolvedModel = await this.resolveModel(selectedModel);
+        return { provider, model: resolvedModel };
+    }
+
+    /**
      * Resolves the AIProvider enum value for a given model (or configured model if omitted).
      */
     public async resolveProvider(model?: LLMModel): Promise<AIProvider> {
         const selectedModel = model ?? (await this.config.getModel());
-        return getModelProvider(selectedModel) as AIProvider;
+        return getModelProvider(selectedModel);
     }
 
     /**
-     * Resolves the actual wire model name that will be used (respecting provider configs & env vars).
+     * Resolves the actual wire model name that will be used (respecting provider configs, region prefixes, & env vars).
      */
     public async resolveModel(model?: LLMModel): Promise<string> {
         const selectedModel = model ?? (await this.config.getModel());
-        if (selectedModel === LLMModel.SELF_HOSTED_CUSTOM) {
-            const providerConfig = await this.config.getProviderConfig(AIProvider.SELF_HOSTED);
-            return providerConfig?.model ?? process.env.SELF_HOSTED_MODEL ?? selectedModel;
+        const provider = getModelProvider(selectedModel);
+
+        switch (provider) {
+            case AIProvider.BEDROCK: {
+                const providerConfig = await this.config.getProviderConfig(AIProvider.BEDROCK);
+                const region = providerConfig?.awsRegion ?? process.env.AWS_REGION ?? "us-east-1";
+                const targetModel =
+                    selectedModel === LLMModel.BEDROCK_CUSTOM
+                        ? (providerConfig?.model ?? selectedModel)
+                        : (selectedModel as string);
+                const regionPrefix = region.startsWith("eu") ? "eu" : region.startsWith("ap") ? "ap" : "us";
+                return targetModel.startsWith("anthropic.") && !targetModel.startsWith(`${regionPrefix}.`)
+                    ? `${regionPrefix}.${targetModel}`
+                    : targetModel;
+            }
+            case AIProvider.OLLAMA: {
+                if (selectedModel === LLMModel.OLLAMA_CUSTOM) {
+                    const providerConfig = await this.config.getProviderConfig(AIProvider.OLLAMA);
+                    return providerConfig?.model ?? "llama3";
+                }
+                return selectedModel as string;
+            }
+            case AIProvider.SELF_HOSTED: {
+                if (selectedModel === LLMModel.SELF_HOSTED_CUSTOM) {
+                    const providerConfig = await this.config.getProviderConfig(AIProvider.SELF_HOSTED);
+                    return providerConfig?.model ?? process.env.SELF_HOSTED_MODEL ?? selectedModel;
+                }
+                return selectedModel as string;
+            }
+            default:
+                return selectedModel as string;
         }
-        if (selectedModel === LLMModel.OLLAMA_CUSTOM) {
-            const providerConfig = await this.config.getProviderConfig(AIProvider.OLLAMA);
-            return providerConfig?.model ?? "llama3";
-        }
-        if (selectedModel === LLMModel.BEDROCK_CUSTOM) {
-            const providerConfig = await this.config.getProviderConfig(AIProvider.BEDROCK);
-            return providerConfig?.model ?? selectedModel;
-        }
-        return selectedModel;
     }
 
     private async createModel(model: LLMModel, options?: LLMOptions): Promise<ChatModel> {
-        const provider = await this.resolveProvider(model);
+        const provider = getModelProvider(model);
         switch (provider) {
             case AIProvider.ANTHROPIC:
                 return this.createAnthropicModel(model, options);
@@ -275,12 +310,7 @@ export class LlmService {
             );
         }
 
-        const targetModel = model === LLMModel.BEDROCK_CUSTOM ? providerConfig!.model! : (model as string);
-        const regionPrefix = region.startsWith("eu") ? "eu" : region.startsWith("ap") ? "ap" : "us";
-        const resolvedModel =
-            targetModel.startsWith("anthropic.") && !targetModel.startsWith(`${regionPrefix}.`)
-                ? `${regionPrefix}.${targetModel}`
-                : targetModel;
+        const resolvedModel = await this.resolveModel(model);
 
         return new ChatBedrockConverse({
             model: resolvedModel,
@@ -369,8 +399,7 @@ export class LlmService {
         );
         const apiToken = providerConfig?.apiToken ?? process.env.OLLAMA_API_TOKEN;
 
-        // For remote/custom Ollama deployments, prefer the exact configured model name.
-        const modelName = providerConfig?.model ?? (model === LLMModel.OLLAMA_CUSTOM ? "llama3" : (model as string));
+        const modelName = await this.resolveModel(model);
         if (model === LLMModel.OLLAMA_CUSTOM) {
             logger.info(`Using custom Ollama model: ${modelName}`);
         }
@@ -388,7 +417,7 @@ export class LlmService {
     private async createSelfHostedModel(model: LLMModel, options?: LLMOptions): Promise<ChatModel> {
         const providerConfig = await this.config.getProviderConfig(AIProvider.SELF_HOSTED);
         const endpoint = providerConfig?.endpoint ?? process.env.SELF_HOSTED_ENDPOINT;
-        const modelName = providerConfig?.model ?? process.env.SELF_HOSTED_MODEL;
+        const modelName = await this.resolveModel(model);
 
         if (!endpoint) {
             throw new Error(
@@ -396,7 +425,7 @@ export class LlmService {
             );
         }
 
-        if (!modelName) {
+        if (!modelName || modelName === LLMModel.SELF_HOSTED_CUSTOM) {
             throw new Error("Self-hosted model name is required. Set SELF_HOSTED_MODEL or run 'sat-cli init'.");
         }
 

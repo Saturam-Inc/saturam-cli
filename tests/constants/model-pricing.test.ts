@@ -12,7 +12,7 @@ describe("ModelPricing", () => {
             expect(gpt4oPricing).toEqual({ inputPerMillion: 2.5, outputPerMillion: 10.0 });
 
             const geminiPricing = getModelPricing(LLMModel.GEMINI_2_5_FLASH);
-            expect(geminiPricing).toEqual({ inputPerMillion: 0.075, outputPerMillion: 0.3 });
+            expect(geminiPricing).toEqual({ inputPerMillion: 0.3, outputPerMillion: 2.5 });
         });
 
         it("should strip regional routing prefixes when matching pricing", () => {
@@ -24,27 +24,26 @@ describe("ModelPricing", () => {
             expect(euPricing).toEqual({ inputPerMillion: 0.8, outputPerMillion: 4.0 });
         });
 
-        it("should return $0 for local / self-hosted providers", () => {
-            expect(getModelPricing("custom-model", AIProvider.OLLAMA)).toEqual({
-                inputPerMillion: 0,
-                outputPerMillion: 0,
-            });
-            expect(getModelPricing("my-vllm-endpoint", AIProvider.SELF_HOSTED)).toEqual({
-                inputPerMillion: 0,
-                outputPerMillion: 0,
-            });
+        it("should return null for local / self-hosted providers", () => {
+            expect(getModelPricing("custom-model", AIProvider.OLLAMA)).toBeNull();
+            expect(getModelPricing("my-vllm-endpoint", AIProvider.SELF_HOSTED)).toBeNull();
         });
 
-        it("should use heuristic family fallbacks for unknown sub-variants", () => {
-            const unknownClaude = getModelPricing("custom-claude-3-5-sonnet-custom");
-            expect(unknownClaude).toEqual({ inputPerMillion: 3.0, outputPerMillion: 15.0 });
-
-            const unknownFlash = getModelPricing("google-flash-preview");
-            expect(unknownFlash).toEqual({ inputPerMillion: 0.075, outputPerMillion: 0.3 });
-        });
-
-        it("should return null for completely unknown models without provider hint", () => {
+        it("should return null for unknown or unlisted custom model IDs", () => {
+            expect(getModelPricing("custom-claude-3-5-sonnet-custom")).toBeNull();
+            expect(getModelPricing("google-flash-preview")).toBeNull();
             expect(getModelPricing("some-unknown-unrecognized-model")).toBeNull();
+        });
+
+        it("should pin canonical Bedrock Claude 4.6 model IDs and return accurate pricing", () => {
+            expect(LLMModel.BEDROCK_CLAUDE_4_6_SONNET).toBe("anthropic.claude-sonnet-4-6");
+            expect(LLMModel.BEDROCK_CLAUDE_4_6_OPUS).toBe("anthropic.claude-opus-4-6-v1");
+
+            const sonnetPricing = getModelPricing(LLMModel.BEDROCK_CLAUDE_4_6_SONNET);
+            expect(sonnetPricing).toEqual({ inputPerMillion: 3.0, outputPerMillion: 15.0 });
+
+            const opusPricing = getModelPricing(LLMModel.BEDROCK_CLAUDE_4_6_OPUS);
+            expect(opusPricing).toEqual({ inputPerMillion: 5.0, outputPerMillion: 25.0 });
         });
     });
 
@@ -65,9 +64,9 @@ describe("ModelPricing", () => {
             expect(calculateCost("totally-unknown-model", 50_000, 10_000)).toBeNull();
         });
 
-        it("should return 0 for Ollama / Self-hosted runs", () => {
+        it("should return null for Ollama / Self-hosted runs", () => {
             const cost = calculateCost("custom-model", 100_000, 50_000, AIProvider.OLLAMA);
-            expect(cost).toBe(0);
+            expect(cost).toBeNull();
         });
     });
 });

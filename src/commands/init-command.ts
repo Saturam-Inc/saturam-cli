@@ -150,7 +150,9 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         try {
             existing = await this.config.loadPersonalConfig();
         } catch (err) {
-            logger.warn(`Could not load existing config (${err instanceof Error ? err.message : String(err)}). Proceeding with fresh setup.`);
+            logger.warn(
+                `Could not load existing config (${err instanceof Error ? err.message : String(err)}). Proceeding with fresh setup.`,
+            );
         }
         const hasExisting = Object.keys(existing.providers ?? {}).length > 0;
 
@@ -183,7 +185,9 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
                     const remote = await this.configureRemote(existing.remote);
                     const updatedConfig: PersonalConfiguration = { ...existing, remote };
                     if (updatedConfig.providers?.bedrock?.awsProfile) {
-                        logger.info("Clearing local awsProfile from Bedrock provider configuration since remote mode is now enabled.");
+                        logger.info(
+                            "Clearing local awsProfile from Bedrock provider configuration since remote mode is now enabled.",
+                        );
                         updatedConfig.providers.bedrock = {
                             ...updatedConfig.providers.bedrock,
                             awsProfile: undefined,
@@ -195,9 +199,13 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
                     const newConfig = { ...existing };
                     delete newConfig.remote;
                     if (newConfig.providers?.bedrock?.awsProfile) {
-                        logger.info(`Remote mode disabled. Bedrock will use configured AWS profile '${newConfig.providers.bedrock.awsProfile}'.`);
+                        logger.info(
+                            `Remote mode disabled. Bedrock will use configured AWS profile '${newConfig.providers.bedrock.awsProfile}'.`,
+                        );
                     } else {
-                        logger.info("\nRemote credential mode disabled. Bedrock will use the default AWS credential chain.");
+                        logger.info(
+                            "\nRemote credential mode disabled. Bedrock will use the default AWS credential chain.",
+                        );
                     }
                     await this.config.savePersonalConfig(newConfig);
                 }
@@ -334,8 +342,12 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         const isLoopback = isLoopbackHostname(parsed.hostname);
 
         const hint = !isLoopback
-            ? (existing?.token ? " (press enter to keep existing)" : " (required for remote endpoint)")
-            : (existing?.token ? " (press enter to keep existing)" : " (optional for loopback, leave empty to skip)");
+            ? existing?.token
+                ? " (press enter to keep existing)"
+                : " (required for remote endpoint)"
+            : existing?.token
+              ? " (press enter to keep existing)"
+              : " (optional for loopback, leave empty to skip)";
 
         const tokenInput = await password({
             message: `Remote token${hint}:`,
@@ -459,7 +471,7 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
 
     private async configureOpenAIProvider(existing?: ProviderConfig): Promise<ProviderConfig> {
         const apiKey = await this.promptForApiKey(AIProvider.OPENAI, existing?.apiKey);
-        
+
         // Always ask for base URL, showing current/default value
         const currentUrl = existing?.baseUrl ?? process.env.OPENAI_BASE_URL;
         const baseUrl = await input({
@@ -536,8 +548,7 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
 
         const model = await input({
             message: "Model name:",
-            default:
-                existing?.model ?? process.env.SELF_HOSTED_MODEL ?? "qwen2.5-coder:latest",
+            default: existing?.model ?? process.env.SELF_HOSTED_MODEL ?? "qwen2.5-coder:latest",
             validate: (val) => (val.trim() ? true : "Model name is required"),
         });
 
@@ -763,9 +774,8 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
 
         // If we have an existing key, ask if user wants to keep it
         if (existingKey) {
-            const masked = existingKey.length > 16
-                ? `${existingKey.slice(0, 8)}...${existingKey.slice(-4)}`
-                : "(configured)";
+            const masked =
+                existingKey.length > 16 ? `${existingKey.slice(0, 8)}...${existingKey.slice(-4)}` : "(configured)";
             const useExisting = await confirm({
                 message: `Use existing API key ${masked}?`,
                 default: true,
@@ -788,7 +798,12 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
     ): Promise<
         Pick<
             PersonalConfiguration,
-            "githubToken" | "bitbucketToken" | "bitbucketEmail" | "bitbucketUsername" | "gitlabToken" | "gitlabInstanceUrl"
+            | "githubToken"
+            | "bitbucketToken"
+            | "bitbucketEmail"
+            | "bitbucketUsername"
+            | "gitlabToken"
+            | "gitlabInstanceUrl"
         >
     > {
         logger.info("\n--- Source Control Platforms ---");
@@ -797,15 +812,17 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         const platforms = await checkbox({
             message: "Which source control platforms do you use?",
             choices: [
-                { name: "GitHub", value: "github" as const, checked: isFirstRun ? this.checkGhCli() : !!existing.githubToken },
+                {
+                    name: "GitHub",
+                    value: "github" as const,
+                    checked: isFirstRun ? this.checkGhCli() : !!existing.githubToken,
+                },
                 { name: "Bitbucket", value: "bitbucket" as const, checked: !!existing.bitbucketToken },
                 { name: "GitLab", value: "gitlab" as const, checked: !!existing.gitlabToken },
             ],
         });
 
-        const githubToken = platforms.includes("github")
-            ? await this.resolveGitHubToken(existing)
-            : undefined;
+        const githubToken = platforms.includes("github") ? await this.resolveGitHubToken(existing) : undefined;
 
         const { bitbucketToken, bitbucketEmail, bitbucketUsername } = platforms.includes("bitbucket")
             ? await this.resolveBitbucketAuth(existing)
@@ -851,9 +868,11 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         return token || existing.githubToken;
     }
 
-    private async resolveBitbucketAuth(
-        existing: PersonalConfiguration,
-    ): Promise<{ bitbucketToken: string | undefined; bitbucketEmail: string | undefined; bitbucketUsername: string | undefined }> {
+    private async resolveBitbucketAuth(existing: PersonalConfiguration): Promise<{
+        bitbucketToken: string | undefined;
+        bitbucketEmail: string | undefined;
+        bitbucketUsername: string | undefined;
+    }> {
         logger.info("\nBitbucket API tokens replaced App Passwords as of September 2025.");
         logger.info("Create one at: Atlassian account → Security → Create and manage API tokens");
         logger.info("  → Select 'Bitbucket' as the app");
@@ -973,9 +992,7 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         // SCM platforms
         const scmPlatforms: string[] = [];
         if (config.githubToken) {
-            const masked = config.githubToken.length > 16
-                ? `${config.githubToken.slice(0, 8)}...`
-                : "(configured)";
+            const masked = config.githubToken.length > 16 ? `${config.githubToken.slice(0, 8)}...` : "(configured)";
             scmPlatforms.push(`GitHub (token: ${masked})`);
         } else if (this.checkGhCli()) {
             scmPlatforms.push("GitHub (via gh CLI)");
@@ -990,9 +1007,7 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         }
         if (config.gitlabToken) {
             const instance = config.gitlabInstanceUrl ?? "gitlab.com";
-            const masked = config.gitlabToken.length > 16
-                ? `${config.gitlabToken.slice(0, 8)}...`
-                : "(configured)";
+            const masked = config.gitlabToken.length > 16 ? `${config.gitlabToken.slice(0, 8)}...` : "(configured)";
             scmPlatforms.push(`GitLab (token: ${masked}, instance: ${instance})`);
         }
         if (scmPlatforms.length > 0) {

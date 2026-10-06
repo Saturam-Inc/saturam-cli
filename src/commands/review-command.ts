@@ -8,10 +8,11 @@ import { GitHubDiffService } from "../integrations/github/services/github-diff.s
 import { isPullRequestUrl, parsePullRequestUrl } from "../integrations/github/utils/github-url.util";
 import { SCMFactory } from "../integrations/scm/scm-factory.service";
 import { InlineComment, SCMRequestContext, SCMService } from "../integrations/scm/scm.model";
-import { ConfigService } from "../services/config-service";
+import { AIProvider, ConfigService } from "../services/config-service";
+import { LlmService } from "../services/llm-service";
 import { AuditResult, Finding } from "../services/review/finding-parser.service";
 import { MultiAgentReviewService, type ReviewResult } from "../services/review/multi-agent-review.service";
-import type { UsageSummary } from "../services/token-usage-tracker";
+import { TokenUsageTracker, type UsageSummary } from "../services/token-usage-tracker";
 // Line numbers are resolved by the finding parser using diff content directly
 import { TypedCommand, TypedInputs } from "./base";
 
@@ -65,6 +66,7 @@ export class ReviewCommand implements TypedCommand<typeof INPUTS> {
         private readonly scmFactory: SCMFactory,
         private readonly multiAgent: MultiAgentReviewService,
         private readonly config: ConfigService,
+        private readonly llm: LlmService,
     ) {}
 
     public async execute(inputs: TypedInputs<typeof INPUTS>): Promise<void> {
@@ -96,13 +98,18 @@ export class ReviewCommand implements TypedCommand<typeof INPUTS> {
         logger.info("");
 
         // Phases 1-3: Multi-agent review
+        const { provider, model: resolvedModel } = await this.llm.resolveSessionInfo();
+        const tracker = new TokenUsageTracker(provider, resolvedModel);
+
         let result: ReviewResult | undefined;
+        let succeeded = false;
         try {
             result = await this.multiAgent.run({
                 prNumber,
                 pr,
                 diff: filteredDiff,
                 ticketContext,
+                tracker,
             });
 
             const { audit } = result;
@@ -160,16 +167,18 @@ export class ReviewCommand implements TypedCommand<typeof INPUTS> {
                     logger.info(auditMd);
                 }
             }
+
+            succeeded = true;
         } finally {
             // Token usage footer — always printed regardless of exit path
-            if (result?.usage) {
-                this.printUsageSummary(result.usage);
-            }
+            this.printUsageSummary(tracker.getSummary());
 
-            // Phase 6: Cleanup
+            // Phase 6: Cleanup (only on success; preserve artifacts on failure)
             if (result) {
-                if (!inputs["keep-artifacts"]) {
-                    await this.multiAgent.cleanup(result.artifactsDir);
+                if (succeeded && !inputs["keep-artifacts"]) {
+                    await this.multiAgent
+                        .cleanup(result.artifactsDir)
+                        .catch((e) => logger.warn(`Cleanup failed: ${e instanceof Error ? e.message : String(e)}`));
                 } else {
                     logger.info(`Artifacts kept at: ${result.artifactsDir}`);
                 }
@@ -269,8 +278,13 @@ export class ReviewCommand implements TypedCommand<typeof INPUTS> {
             return count.toLocaleString("en-US");
         };
 
-        const formatCost = (cost: number | null): string => {
-            if (cost === null) return "n/a";
+        const formatCost = (cost: number | null, provider?: AIProvider): string => {
+            if (cost === null) {
+                if (provider === AIProvider.OLLAMA || provider === AIProvider.SELF_HOSTED) {
+                    return "n/a (self-hosted)";
+                }
+                return "n/a";
+            }
             if (cost === 0) return "$0.00";
             if (cost < 0.0001) return "< $0.0001";
             return `$${cost.toFixed(4)}`;
@@ -292,8 +306,8 @@ export class ReviewCommand implements TypedCommand<typeof INPUTS> {
         const totalIn = formatTokens(usage.totalInput);
         const totalOut = formatTokens(usage.totalOutput);
         logger.info(`  ${"TOTAL".padEnd(24)} ${totalIn.padStart(8)} in / ${totalOut.padStart(6)} out`);
-        const costStr = formatCost(usage.estimatedCost);
-        logger.info(`  ${"Est. Cost:".padEnd(24)} ${costStr}`);
+        const costStr = formatCost(usage.estimatedCost, usage.provider);
+        logger.info(`  ${"Est. Cost (list price):".padEnd(24)} ${costStr}`);
         logger.info("");
     }
 }

@@ -30,6 +30,7 @@ export interface ReviewContext {
     pr: PullRequestInfo;
     diff: string;
     ticketContext?: string;
+    tracker?: TokenUsageTracker;
 }
 
 export interface ReviewResult {
@@ -55,12 +56,11 @@ export class MultiAgentReviewService {
         const base = `pr${context.prNumber}`;
 
         // Initialize token usage tracking
-        const tracker = new TokenUsageTracker();
-        const [resolvedModel, resolvedProvider] = await Promise.all([
-            this.llm.resolveModel(),
-            this.llm.resolveProvider(),
-        ]);
-        tracker.setProviderInfo(resolvedProvider, resolvedModel);
+        let tracker = context.tracker;
+        if (!tracker) {
+            const { provider, model: resolvedModel } = await this.llm.resolveSessionInfo();
+            tracker = new TokenUsageTracker(provider, resolvedModel);
+        }
 
         // --- Phase 1: Dual Independent Review ---
         logger.info("Phase 1: Running 2 reviewers in parallel...");

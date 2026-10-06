@@ -24,7 +24,7 @@ export enum LLMModel {
     BEDROCK_CLAUDE_4_SONNET = "anthropic.claude-sonnet-4-20250514-v1:0",
     BEDROCK_CLAUDE_4_5_SONNET = "anthropic.claude-sonnet-4-5-20250929-v1:0",
     BEDROCK_CLAUDE_4_6_SONNET = "anthropic.claude-sonnet-4-6",
-    BEDROCK_CLAUDE_4_6_OPUS = "anthropic.claude-opus-4-6-v1:0",
+    BEDROCK_CLAUDE_4_6_OPUS = "anthropic.claude-opus-4-6-v1",
     BEDROCK_NOVA_PRO = "amazon.nova-pro-v1:0",
     BEDROCK_CUSTOM = "bedrock-custom",
 
@@ -234,16 +234,16 @@ export function isSelfHostedModel(model: LLMModel): boolean {
     return SELF_HOSTED_MODELS.has(model);
 }
 
-export function getModelProvider(
-    model: LLMModel,
-): "anthropic" | "bedrock" | "google" | "openai" | "xai" | "deepseek" | "ollama" | "self-hosted" {
-    if (isAnthropicModel(model)) return "anthropic";
-    if (isBedrockModel(model)) return "bedrock";
-    if (isGeminiModel(model)) return "google";
-    if (isOpenAIModel(model)) return "openai";
-    if (isGrokModel(model)) return "xai";
-    if (isDeepSeekModel(model)) return "deepseek";
-    if (isOllamaModel(model)) return "ollama";
-    if (isSelfHostedModel(model)) return "self-hosted";
+import { AIProvider } from "./ai-provider";
+
+export function getModelProvider(model: LLMModel): AIProvider {
+    if (isAnthropicModel(model)) return AIProvider.ANTHROPIC;
+    if (isBedrockModel(model)) return AIProvider.BEDROCK;
+    if (isGeminiModel(model)) return AIProvider.GOOGLE;
+    if (isOpenAIModel(model)) return AIProvider.OPENAI;
+    if (isGrokModel(model)) return AIProvider.XAI;
+    if (isDeepSeekModel(model)) return AIProvider.DEEPSEEK;
+    if (isOllamaModel(model)) return AIProvider.OLLAMA;
+    if (isSelfHostedModel(model)) return AIProvider.SELF_HOSTED;
     throw new Error(`Unsupported model: ${model}`);
 }

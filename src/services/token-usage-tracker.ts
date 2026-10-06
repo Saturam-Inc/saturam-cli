@@ -1,4 +1,4 @@
-import { AIProvider } from "./config-service";
+import type { AIProvider } from "../constants/ai-provider";
 import { calculateCost } from "../constants/model-pricing";
 
 export interface CallUsage {
@@ -21,19 +21,12 @@ export interface UsageSummary {
  * Safe for concurrent Promise.all usage (Node.js is single-threaded, array push is atomic).
  */
 export class TokenUsageTracker {
-    private calls: CallUsage[] = [];
-    private provider: AIProvider;
-    private model: string;
+    private readonly calls: CallUsage[] = [];
 
-    constructor(provider: AIProvider = AIProvider.ANTHROPIC, model: string = "") {
-        this.provider = provider;
-        this.model = model;
-    }
-
-    public setProviderInfo(provider: AIProvider, model: string): void {
-        this.provider = provider;
-        this.model = model;
-    }
+    constructor(
+        private readonly provider: AIProvider,
+        private readonly model: string,
+    ) {}
 
     public record(label: string, usage: { inputTokens: number | null; outputTokens: number | null }): void {
         this.calls.push({

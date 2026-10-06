@@ -29,10 +29,7 @@ jest.mock("@aws-sdk/credential-providers", () => ({
     fromIni: (args: any) => fromIniMock(args),
 }));
 
-function makeConfig(options: {
-    providerConfig?: ProviderConfig;
-    remote?: RemoteConfig;
-}): ConfigService {
+function makeConfig(options: { providerConfig?: ProviderConfig; remote?: RemoteConfig }): ConfigService {
     return {
         getModel: jest.fn().mockResolvedValue(LLMModel.BEDROCK_CLAUDE_4_SONNET),
         getProviderConfig: jest.fn().mockResolvedValue(options.providerConfig),
