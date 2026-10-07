@@ -98,14 +98,16 @@ git push origin feature/your-feature-name
 saturam-cli/
 ├── bin/              # CLI entry point
 ├── src/
-│   ├── commands/     # CLI commands (review, add-skill, init)
+│   ├── commands/     # CLI commands (review, onboard, add-skill, init)
 │   ├── constants/    # LLM model definitions
 │   ├── containers/   # Dependency injection setup
-│   ├── entrypoints/  # Main entry point
+│   ├── entrypoints/  # Main entry point, plus the Slack bot's Lambda handlers
 │   ├── integrations/ # GitHub, Bitbucket, SCM abstractions
 │   ├── prompts/      # LLM prompt templates
 │   ├── services/     # Core services (LLM, config, review)
+│   ├── slack/        # Slack bot (shares the onboard answering flow; see docs/SLACK-BOT.md)
 │   └── utils/        # Shared utilities
+├── scripts/          # Build scripts (the Slack bot's Lambda package)
 ├── skills/           # Bundled skill definitions
 ├── docs/             # Documentation
 └── built/            # Compiled output (generated)

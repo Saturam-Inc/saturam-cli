@@ -1,0 +1,89 @@
+{
+    "_comment": "Questions against the live Knowledge Base (mrf, smile, saturam). Add real fresher questions here as they come up. Groups: descriptive (does the answer contract hold), scenario (change and impact questions), guardrail (must refuse honestly rather than invent), and blended (general concept that should be checked against the corpus before answering).",
+    "questions": [
+        {
+            "id": "mrf-architecture",
+            "question": "Ask about MRF architecture",
+            "notes": "Long answer \u2014 should use headings named after the subject."
+        },
+        {
+            "id": "mrf-dags",
+            "question": "explain more about the dags configurations",
+            "notes": "Follow-up shape; should stay on MRF."
+        },
+        {
+            "id": "mrf-focus-short",
+            "question": "What is the focus of the mrf project?",
+            "notes": "Short question \u2014 should get a short answer with no headings."
+        },
+        {
+            "id": "smile-overview",
+            "question": "give more details on smile project",
+            "notes": "Different project; heading style should not mirror the MRF answer."
+        },
+        {
+            "id": "smile-arap",
+            "question": "How does the ARAP Data Mart improve data accuracy?",
+            "notes": "Narrow how-question; mostly narrative."
+        },
+        {
+            "id": "mrf-gotchas",
+            "question": "What should I watch out for in the MRF pipeline?",
+            "notes": "Should be mostly gotchas, little background."
+        },
+        {
+            "id": "mrf-change-dag-schedule",
+            "question": "What change should I make to change the DAG schedule to Friday?",
+            "group": "scenario",
+            "notes": "From the technical team's feedback. 22-airflow-triggering-strategy.md and 23-making-changes.md both cover this, so a miss here is a retrieval failure, not a documentation gap. Must name the scheduler daemon rather than Airflow's own scheduler, and say what to restart."
+        },
+        {
+            "id": "mrf-change-impact-pkl-path",
+            "question": "What happens if I change the pkl path? What else breaks?",
+            "group": "scenario",
+            "notes": "Impact question. pkl_path is defined in two files that must stay in sync (kpi/pkl_path.py and plugins/preparation/pkl_path_loc.py) and the kpi APIs read from it \u2014 the answer must reach the downstream effect, not just the setting."
+        },
+        {
+            "id": "mrf-change-new-spend-domain",
+            "question": "If I want to add a new spend domain, what do I need to change?",
+            "group": "scenario",
+            "notes": "Open-ended enablement question. Should walk the chain: DAG, schema, table prefix, category hierarchy, UI screen."
+        },
+        {
+            "id": "mrf-metric-calculation",
+            "question": "How is price arbitrage calculated?",
+            "group": "scenario",
+            "notes": "Metric calculation. 11-metrics.md holds every formula; the answer must give the formula and where it lives, not a paraphrase of the concept."
+        },
+        {
+            "id": "guardrail-absent-subject",
+            "question": "What is MRF's Kubernetes autoscaling policy?",
+            "group": "guardrail",
+            "notes": "MRF runs as nohup processes on a single host with no containerization at all, so there is no such policy. The answer must say plainly that this is not documented (and ideally that the deployment is single-host), never describe a plausible policy."
+        },
+        {
+            "id": "guardrail-absent-project",
+            "question": "How does the billing reconciliation service handle chargebacks?",
+            "group": "guardrail",
+            "notes": "No such service is indexed. Must decline honestly and say what is indexed, rather than answering from a near-miss retrieval."
+        },
+        {
+            "id": "blend-general-only",
+            "question": "What is idempotency?",
+            "group": "blended",
+            "notes": "Pure general concept. Answer generally, mark it as industry practice, and do not dress it up as house convention."
+        },
+        {
+            "id": "blend-general-with-house-answer",
+            "question": "How should retries and backoff be handled?",
+            "group": "blended",
+            "notes": "General concept that the corpus also speaks to. Should give the general pattern AND what this codebase actually does, clearly separated."
+        },
+        {
+            "id": "blend-service-question",
+            "question": "What is Apache Airflow and how are we using it?",
+            "group": "blended",
+            "notes": "Service question with both a general and a project-specific half. The project half must mention that Airflow's own scheduler is not what triggers the DAGs here."
+        }
+    ]
+}

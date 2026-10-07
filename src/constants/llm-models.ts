@@ -23,16 +23,24 @@ export enum LLMModel {
     BEDROCK_CLAUDE_3_5_HAIKU = "anthropic.claude-3-5-haiku-20241022-v1:0",
     BEDROCK_CLAUDE_4_SONNET = "anthropic.claude-sonnet-4-20250514-v1:0",
     BEDROCK_CLAUDE_4_5_SONNET = "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    // No version suffix: Bedrock's id for this one is "anthropic.claude-sonnet-4-6" (its
+    // cross-region profile is "global.anthropic.claude-sonnet-4-6"). A saved "-v1:0" form still
+    // resolves to it through migrateModelId's suffix matching.
     BEDROCK_CLAUDE_4_6_SONNET = "anthropic.claude-sonnet-4-6",
     BEDROCK_CLAUDE_4_6_OPUS = "anthropic.claude-opus-4-6-v1",
+    BEDROCK_CLAUDE_4_5_HAIKU = "anthropic.claude-haiku-4-5-20251001-v1:0",
     BEDROCK_NOVA_PRO = "amazon.nova-pro-v1:0",
     BEDROCK_CUSTOM = "bedrock-custom",
 
-    // Google Gemini
+    // Google Gemini — verified current IDs against ai.google.dev/gemini-api/docs/models
+    // (2026-09). There is no stable non-preview "Pro" tier past 2.5 yet — gemini-3.1-pro-preview
+    // is the current best "Pro" option, still in preview.
     GEMINI_2_5_PRO = "gemini-2.5-pro",
     GEMINI_2_5_FLASH = "gemini-2.5-flash",
-    GEMINI_3_PRO = "gemini-3-pro",
-    GEMINI_3_FLASH = "gemini-3-flash",
+    GEMINI_3_1_PRO_PREVIEW = "gemini-3.1-pro-preview",
+    GEMINI_3_5_FLASH = "gemini-3.5-flash",
+    GEMINI_3_6_FLASH = "gemini-3.6-flash",
+    GEMINI_3_7_FLASH = "gemini-3.7-flash",
 
     // OpenAI
     OPENAI_GPT_4O = "gpt-4o",
@@ -44,6 +52,14 @@ export enum LLMModel {
     OPENAI_GEMMA_4_26B_A4B_IT = "gemma-4-26b-a4b-it",
     OPENAI_GEMMA_4_31B_IT = "gemma-4-31b-it",
     OPENAI_LLAMA_3_3_70B_INSTRUCT = "llama-3.3-70b-instruct",
+
+    // Azure OpenAI — the real model is whichever deployment the user configured, so this is a
+    // single sentinel (like SELF_HOSTED_CUSTOM) resolved to the deployment name at call time.
+    AZURE_OPENAI_CUSTOM = "azure-openai-custom",
+
+    // Claude on Azure AI Foundry — served through Anthropic's own Messages API at the Foundry
+    // resource. Like AZURE_OPENAI_CUSTOM, a sentinel resolved to the deployment name at call time.
+    AZURE_FOUNDRY_CLAUDE = "azure-foundry-claude",
 
     // Grok
     GROK_2 = "grok-2-1212",
@@ -99,13 +115,16 @@ export const MODEL_CONTEXT_WINDOWS: Record<LLMModel, number> = {
     [LLMModel.BEDROCK_CLAUDE_4_5_SONNET]: 200000,
     [LLMModel.BEDROCK_CLAUDE_4_6_SONNET]: 200000,
     [LLMModel.BEDROCK_CLAUDE_4_6_OPUS]: 1000000,
+    [LLMModel.BEDROCK_CLAUDE_4_5_HAIKU]: 200000,
     [LLMModel.BEDROCK_NOVA_PRO]: 300000,
     [LLMModel.BEDROCK_CUSTOM]: 200000,
     // Gemini
     [LLMModel.GEMINI_2_5_PRO]: 1000000,
     [LLMModel.GEMINI_2_5_FLASH]: 1000000,
-    [LLMModel.GEMINI_3_PRO]: 1000000,
-    [LLMModel.GEMINI_3_FLASH]: 1000000,
+    [LLMModel.GEMINI_3_1_PRO_PREVIEW]: 1000000,
+    [LLMModel.GEMINI_3_5_FLASH]: 1000000,
+    [LLMModel.GEMINI_3_6_FLASH]: 1000000,
+    [LLMModel.GEMINI_3_7_FLASH]: 1000000,
     // OpenAI
     [LLMModel.OPENAI_GPT_4O]: 128000,
     [LLMModel.OPENAI_GPT_5]: 128000,
@@ -116,6 +135,14 @@ export const MODEL_CONTEXT_WINDOWS: Record<LLMModel, number> = {
     [LLMModel.OPENAI_GEMMA_4_26B_A4B_IT]: 128000,
     [LLMModel.OPENAI_GEMMA_4_31B_IT]: 128000,
     [LLMModel.OPENAI_LLAMA_3_3_70B_INSTRUCT]: 128000,
+    // Azure OpenAI (depends on the deployed model, configurable via AZURE_OPENAI_CONTEXT_WINDOW)
+    [LLMModel.AZURE_OPENAI_CUSTOM]: (() => {
+        const val = process.env.AZURE_OPENAI_CONTEXT_WINDOW;
+        const num = val ? parseInt(val, 10) : NaN;
+        return isNaN(num) || num <= 0 ? 128000 : num;
+    })(),
+    // Claude on Azure AI Foundry
+    [LLMModel.AZURE_FOUNDRY_CLAUDE]: 200000,
     // Grok
     [LLMModel.GROK_2]: 131072,
     // DeepSeek
@@ -165,14 +192,17 @@ const BEDROCK_MODELS = new Set([
     LLMModel.BEDROCK_CLAUDE_4_5_SONNET,
     LLMModel.BEDROCK_CLAUDE_4_6_SONNET,
     LLMModel.BEDROCK_CLAUDE_4_6_OPUS,
+    LLMModel.BEDROCK_CLAUDE_4_5_HAIKU,
     LLMModel.BEDROCK_NOVA_PRO,
     LLMModel.BEDROCK_CUSTOM,
 ]);
 const GEMINI_MODELS = new Set([
     LLMModel.GEMINI_2_5_PRO,
     LLMModel.GEMINI_2_5_FLASH,
-    LLMModel.GEMINI_3_PRO,
-    LLMModel.GEMINI_3_FLASH,
+    LLMModel.GEMINI_3_1_PRO_PREVIEW,
+    LLMModel.GEMINI_3_5_FLASH,
+    LLMModel.GEMINI_3_6_FLASH,
+    LLMModel.GEMINI_3_7_FLASH,
 ]);
 const OPENAI_MODELS = new Set([
     LLMModel.OPENAI_GPT_4O,
@@ -185,6 +215,8 @@ const OPENAI_MODELS = new Set([
     LLMModel.OPENAI_GEMMA_4_31B_IT,
     LLMModel.OPENAI_LLAMA_3_3_70B_INSTRUCT,
 ]);
+const AZURE_OPENAI_MODELS = new Set([LLMModel.AZURE_OPENAI_CUSTOM]);
+const AZURE_FOUNDRY_MODELS = new Set([LLMModel.AZURE_FOUNDRY_CLAUDE]);
 const GROK_MODELS = new Set([LLMModel.GROK_2]);
 const DEEPSEEK_MODELS = new Set([LLMModel.DEEPSEEK_CHAT, LLMModel.DEEPSEEK_REASONER]);
 const SELF_HOSTED_MODELS = new Set([LLMModel.SELF_HOSTED_CUSTOM]);
@@ -218,6 +250,14 @@ export function isOpenAIModel(model: LLMModel): boolean {
     return OPENAI_MODELS.has(model);
 }
 
+export function isAzureOpenAIModel(model: LLMModel): boolean {
+    return AZURE_OPENAI_MODELS.has(model);
+}
+
+export function isAzureFoundryModel(model: LLMModel): boolean {
+    return AZURE_FOUNDRY_MODELS.has(model);
+}
+
 export function isGrokModel(model: LLMModel): boolean {
     return GROK_MODELS.has(model);
 }
@@ -241,6 +281,8 @@ export function getModelProvider(model: LLMModel): AIProvider {
     if (isBedrockModel(model)) return AIProvider.BEDROCK;
     if (isGeminiModel(model)) return AIProvider.GOOGLE;
     if (isOpenAIModel(model)) return AIProvider.OPENAI;
+    if (isAzureOpenAIModel(model)) return AIProvider.AZURE_OPENAI;
+    if (isAzureFoundryModel(model)) return AIProvider.AZURE_FOUNDRY;
     if (isGrokModel(model)) return AIProvider.XAI;
     if (isDeepSeekModel(model)) return AIProvider.DEEPSEEK;
     if (isOllamaModel(model)) return AIProvider.OLLAMA;

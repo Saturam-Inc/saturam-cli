@@ -1,6 +1,6 @@
 {
     "include": ["**/*.d.ts", "src/**/*.ts", "tests/**/*.ts"],
-    "exclude": ["build", "built", "node_modules", "lambda"],
+    "exclude": ["build", "built", "dist", "node_modules", "lambda"],
     "ts-node": {
         "swc": true,
         "compilerOptions": {

@@ -1,5 +1,6 @@
 node_modules/
 built/
+dist/
 *.js.map
 *.d.ts
 !src/**/*.d.ts
@@ -8,4 +9,5 @@ built/
 logs/
 *.log
 .DS_Store
-
+.claude/*
+CLAUDE.md

@@ -37,8 +37,10 @@ export const MODEL_PRICING: Partial<Record<LLMModel, ModelPricing>> = {
     // Google Gemini
     [LLMModel.GEMINI_2_5_PRO]: { inputPerMillion: 1.25, outputPerMillion: 10.0 },
     [LLMModel.GEMINI_2_5_FLASH]: { inputPerMillion: 0.3, outputPerMillion: 2.5 },
-    [LLMModel.GEMINI_3_PRO]: { inputPerMillion: 2.0, outputPerMillion: 12.0 },
-    [LLMModel.GEMINI_3_FLASH]: { inputPerMillion: 0.3, outputPerMillion: 2.5 },
+    [LLMModel.GEMINI_3_1_PRO_PREVIEW]: { inputPerMillion: 2.0, outputPerMillion: 12.0 },
+    [LLMModel.GEMINI_3_5_FLASH]: { inputPerMillion: 0.3, outputPerMillion: 2.5 },
+    [LLMModel.GEMINI_3_6_FLASH]: { inputPerMillion: 0.3, outputPerMillion: 2.5 },
+    [LLMModel.GEMINI_3_7_FLASH]: { inputPerMillion: 0.3, outputPerMillion: 2.5 },
 
     // OpenAI
     [LLMModel.OPENAI_GPT_4O]: { inputPerMillion: 2.5, outputPerMillion: 10.0 },
