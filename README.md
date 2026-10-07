@@ -265,26 +265,28 @@ Without this, the CLI defaults to `https://gitlab.com`. This is required for any
 ### Configuration Steps
 
 1. **Create an API key from OpenRouter**
-   - Visit [OpenRouter.ai](https://openrouter.ai) and sign up
-   - Generate an API key from your dashboard
+    - Visit [OpenRouter.ai](https://openrouter.ai) and sign up
+    - Generate an API key from your dashboard
 
 2. **Configure the OpenAI provider with OpenRouter settings:**
 
-   **Option A: Environment variables**
-   ```bash
-   export OPENAI_API_KEY=sk-or-v1-xxxxxxxxxxxxxxxxxxxx
-   export OPENAI_BASE_URL=https://openrouter.ai/api/v1
-   ```
+    **Option A: Environment variables**
 
-   **Option B: Interactive setup via `sat-cli init`**
-   ```
-   ? OpenAI API key: sk-or-v1-xxxxxxxxxxxxxxxxxxxx
-   ? OpenAI base URL (leave empty for default OpenAI API): https://openrouter.ai/api/v1
-   ```
+    ```bash
+    export OPENAI_API_KEY=sk-or-v1-xxxxxxxxxxxxxxxxxxxx
+    export OPENAI_BASE_URL=https://openrouter.ai/api/v1
+    ```
 
-   **Note:**
-   - If you are using the official OpenAI API, use: `https://api.openai.com/v1`
-   - If you are using OpenRouter, use: `https://openrouter.ai/api/v1`
+    **Option B: Interactive setup via `sat-cli init`**
+
+    ```
+    ? OpenAI API key: sk-or-v1-xxxxxxxxxxxxxxxxxxxx
+    ? OpenAI base URL (leave empty for default OpenAI API): https://openrouter.ai/api/v1
+    ```
+
+    **Note:**
+    - If you are using the official OpenAI API, use: `https://api.openai.com/v1`
+    - If you are using OpenRouter, use: `https://openrouter.ai/api/v1`
 
 3. **Select any of the supported free models listed below**
 
@@ -413,13 +415,13 @@ All settings can also be provided via environment variables, which take priority
 
 **SCM platforms**
 
-| Variable              | Description                                                                     |
-| --------------------- | ------------------------------------------------------------------------------- |
-| `GITHUB_TOKEN`        | GitHub personal access token                                                    |
-| `BITBUCKET_EMAIL`     | Atlassian account email (used as username for Basic auth)                       |
-| `BITBUCKET_TOKEN`     | Bitbucket API token (create at Atlassian account → Security → API tokens)      |
-| `GITLAB_TOKEN`        | GitLab personal access token (`api` scope required)                             |
-| `GITLAB_INSTANCE_URL` | Base URL for self-hosted GitLab (e.g. `https://git.example.com`)                |
+| Variable              | Description                                                               |
+| --------------------- | ------------------------------------------------------------------------- |
+| `GITHUB_TOKEN`        | GitHub personal access token                                              |
+| `BITBUCKET_EMAIL`     | Atlassian account email (used as username for Basic auth)                 |
+| `BITBUCKET_TOKEN`     | Bitbucket API token (create at Atlassian account → Security → API tokens) |
+| `GITLAB_TOKEN`        | GitLab personal access token (`api` scope required)                       |
+| `GITLAB_INSTANCE_URL` | Base URL for self-hosted GitLab (e.g. `https://git.example.com`)          |
 
 ## License
 

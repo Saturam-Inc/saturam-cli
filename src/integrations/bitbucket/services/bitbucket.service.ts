@@ -40,9 +40,9 @@ export class BitbucketService {
 
         // 1. Env vars: new API token (email + token → Basic auth)
         if (process.env.BITBUCKET_TOKEN && process.env.BITBUCKET_EMAIL) {
-            const encoded = Buffer.from(
-                `${process.env.BITBUCKET_EMAIL}:${process.env.BITBUCKET_TOKEN}`,
-            ).toString("base64");
+            const encoded = Buffer.from(`${process.env.BITBUCKET_EMAIL}:${process.env.BITBUCKET_TOKEN}`).toString(
+                "base64",
+            );
             return { Authorization: `Basic ${encoded}`, Accept: "application/json" };
         }
 
@@ -58,9 +58,9 @@ export class BitbucketService {
         // 3. Personal config: new API token (email + token → Basic auth)
         const personalConfig = await this.config.loadPersonalConfig();
         if (personalConfig.bitbucketToken && personalConfig.bitbucketEmail) {
-            const encoded = Buffer.from(
-                `${personalConfig.bitbucketEmail}:${personalConfig.bitbucketToken}`,
-            ).toString("base64");
+            const encoded = Buffer.from(`${personalConfig.bitbucketEmail}:${personalConfig.bitbucketToken}`).toString(
+                "base64",
+            );
             return { Authorization: `Basic ${encoded}`, Accept: "application/json" };
         }
 
@@ -74,8 +74,8 @@ export class BitbucketService {
 
         throw new Error(
             "No Bitbucket credentials found.\n" +
-            "Set BITBUCKET_EMAIL (your Atlassian account email) and BITBUCKET_TOKEN (your API token),\n" +
-            "or run 'sat-cli init' to configure.",
+                "Set BITBUCKET_EMAIL (your Atlassian account email) and BITBUCKET_TOKEN (your API token),\n" +
+                "or run 'sat-cli init' to configure.",
         );
     }
 

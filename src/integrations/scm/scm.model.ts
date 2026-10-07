@@ -31,9 +31,20 @@ export interface SCMRequestContext {
 export interface SCMService {
     readonly provider: SCMProvider;
 
-    getPullRequest(owner: string, repo: string, prNumber: number, context?: SCMRequestContext): Promise<PullRequestInfo>;
+    getPullRequest(
+        owner: string,
+        repo: string,
+        prNumber: number,
+        context?: SCMRequestContext,
+    ): Promise<PullRequestInfo>;
     getPullRequestDiff(owner: string, repo: string, prNumber: number, context?: SCMRequestContext): Promise<string>;
-    postReviewComment(owner: string, repo: string, prNumber: number, body: string, context?: SCMRequestContext): Promise<void>;
+    postReviewComment(
+        owner: string,
+        repo: string,
+        prNumber: number,
+        body: string,
+        context?: SCMRequestContext,
+    ): Promise<void>;
     postInlineReview(
         owner: string,
         repo: string,
@@ -42,5 +53,10 @@ export interface SCMService {
         comments: InlineComment[],
         context?: SCMRequestContext,
     ): Promise<void>;
-    findPullRequestByBranch(owner: string, repo: string, branch: string, context?: SCMRequestContext): Promise<number | null>;
+    findPullRequestByBranch(
+        owner: string,
+        repo: string,
+        branch: string,
+        context?: SCMRequestContext,
+    ): Promise<number | null>;
 }

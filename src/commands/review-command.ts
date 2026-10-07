@@ -8,9 +8,11 @@ import { GitHubDiffService } from "../integrations/github/services/github-diff.s
 import { isPullRequestUrl, parsePullRequestUrl } from "../integrations/github/utils/github-url.util";
 import { SCMFactory } from "../integrations/scm/scm-factory.service";
 import { InlineComment, SCMRequestContext, SCMService } from "../integrations/scm/scm.model";
-import { ConfigService } from "../services/config-service";
+import { AIProvider, ConfigService } from "../services/config-service";
+import { LlmService } from "../services/llm-service";
 import { AuditResult, Finding } from "../services/review/finding-parser.service";
-import { MultiAgentReviewService } from "../services/review/multi-agent-review.service";
+import { MultiAgentReviewService, type ReviewResult } from "../services/review/multi-agent-review.service";
+import { TokenUsageTracker, type UsageSummary } from "../services/token-usage-tracker";
 // Line numbers are resolved by the finding parser using diff content directly
 import { TypedCommand, TypedInputs } from "./base";
 
@@ -64,6 +66,7 @@ export class ReviewCommand implements TypedCommand<typeof INPUTS> {
         private readonly scmFactory: SCMFactory,
         private readonly multiAgent: MultiAgentReviewService,
         private readonly config: ConfigService,
+        private readonly llm: LlmService,
     ) {}
 
     public async execute(inputs: TypedInputs<typeof INPUTS>): Promise<void> {
@@ -95,61 +98,91 @@ export class ReviewCommand implements TypedCommand<typeof INPUTS> {
         logger.info("");
 
         // Phases 1-3: Multi-agent review
-        const result = await this.multiAgent.run({
-            prNumber,
-            pr,
-            diff: filteredDiff,
-            ticketContext,
-        });
+        const { provider, model: resolvedModel } = await this.llm.resolveSessionInfo();
+        const tracker = new TokenUsageTracker(provider, resolvedModel);
 
-        const { audit } = result;
+        let result: ReviewResult | undefined;
+        let succeeded = false;
+        try {
+            result = await this.multiAgent.run({
+                prNumber,
+                pr,
+                diff: filteredDiff,
+                ticketContext,
+                tracker,
+            });
 
-        // Log findings
-        logger.info(`\n${audit.findings.length} finding(s) from audit:`);
-        for (const f of audit.findings) {
-            logger.info(
-                `  [${f.severity.toUpperCase()}] ${f.file}:${f.line} — ${f.title || f.description.slice(0, 60)}`,
-            );
-        }
+            const { audit } = result;
 
-        // Phase 4: Show audit
-        const auditMd = this.multiAgent.findingParser.formatAuditMarkdown(audit, prNumber, result.durationFormatted);
-        if (!autoMode || inputs.self) {
-            logger.info("\n--- Audit Review ---\n");
-            logger.info(auditMd);
-            logger.info("\n--- End Audit ---\n");
-        }
-
-        // Phase 5: Post decision (skip entirely in self-review mode)
-        if (inputs.self) {
-            logger.info("Self-review complete. Results displayed above (not posted).");
-        } else {
-            const shouldPost = autoMode
-                ? !!inputs.post
-                : inputs.post
-                  ? await confirm({
-                        message: `Post ${audit.findings.length} inline comment(s) to ${scm.provider}?`,
-                        default: true,
-                    })
-                  : await confirm({
-                        message: `Post this review as ${audit.findings.length} inline comment(s) on ${scm.provider}?`,
-                        default: false,
-                    });
-
-            if (shouldPost) {
-                await this.postReview(scm, owner, repo, prNumber, audit, rawDiff, context, result.durationFormatted);
-            } else if (!autoMode) {
-                logger.info(`Review not posted. Artifacts at: ${result.artifactsDir}`);
-            } else {
-                logger.info(auditMd);
+            // Log findings
+            logger.info(`\n${audit.findings.length} finding(s) from audit:`);
+            for (const f of audit.findings) {
+                logger.info(
+                    `  [${f.severity.toUpperCase()}] ${f.file}:${f.line} — ${f.title || f.description.slice(0, 60)}`,
+                );
             }
-        }
 
-        // Phase 6: Cleanup
-        if (!inputs["keep-artifacts"]) {
-            await this.multiAgent.cleanup(result.artifactsDir);
-        } else {
-            logger.info(`Artifacts kept at: ${result.artifactsDir}`);
+            // Phase 4: Show audit
+            const auditMd = this.multiAgent.findingParser.formatAuditMarkdown(
+                audit,
+                prNumber,
+                result.durationFormatted,
+            );
+            if (!autoMode || inputs.self) {
+                logger.info("\n--- Audit Review ---\n");
+                logger.info(auditMd);
+                logger.info("\n--- End Audit ---\n");
+            }
+
+            // Phase 5: Post decision (skip entirely in self-review mode)
+            if (inputs.self) {
+                logger.info("Self-review complete. Results displayed above (not posted).");
+            } else {
+                const shouldPost = autoMode
+                    ? !!inputs.post
+                    : inputs.post
+                      ? await confirm({
+                            message: `Post ${audit.findings.length} inline comment(s) to ${scm.provider}?`,
+                            default: true,
+                        })
+                      : await confirm({
+                            message: `Post this review as ${audit.findings.length} inline comment(s) on ${scm.provider}?`,
+                            default: false,
+                        });
+
+                if (shouldPost) {
+                    await this.postReview(
+                        scm,
+                        owner,
+                        repo,
+                        prNumber,
+                        audit,
+                        rawDiff,
+                        context,
+                        result.durationFormatted,
+                    );
+                } else if (!autoMode) {
+                    logger.info(`Review not posted. Artifacts at: ${result.artifactsDir}`);
+                } else {
+                    logger.info(auditMd);
+                }
+            }
+
+            succeeded = true;
+        } finally {
+            // Token usage footer — always printed regardless of exit path
+            this.printUsageSummary(tracker.getSummary());
+
+            // Phase 6: Cleanup (only on success; preserve artifacts on failure)
+            if (result) {
+                if (succeeded && !inputs["keep-artifacts"]) {
+                    await this.multiAgent
+                        .cleanup(result.artifactsDir)
+                        .catch((e) => logger.warn(`Cleanup failed: ${e instanceof Error ? e.message : String(e)}`));
+                } else {
+                    logger.info(`Artifacts kept at: ${result.artifactsDir}`);
+                }
+            }
         }
     }
 
@@ -233,5 +266,48 @@ export class ReviewCommand implements TypedCommand<typeof INPUTS> {
         const prNumber = await scm.findPullRequestByBranch(owner, repo, branch);
         if (!prNumber) throw new Error(`No open PR for branch '${branch}'.`);
         return { scm, owner, repo, prNumber };
+    }
+
+    private printUsageSummary(usage: UsageSummary): void {
+        if (!usage.calls || usage.calls.length === 0) {
+            return;
+        }
+
+        const formatTokens = (count: number | null): string => {
+            if (count === null) return "n/a";
+            return count.toLocaleString("en-US");
+        };
+
+        const formatCost = (cost: number | null, provider?: AIProvider): string => {
+            if (cost === null) {
+                if (provider === AIProvider.OLLAMA || provider === AIProvider.SELF_HOSTED) {
+                    return "n/a (self-hosted)";
+                }
+                return "n/a";
+            }
+            if (cost === 0) return "$0.00";
+            if (cost < 0.0001) return "< $0.0001";
+            return `$${cost.toFixed(4)}`;
+        };
+
+        logger.info("");
+        logger.info("─── Token Usage ───");
+        logger.info(`Provider:  ${usage.provider}`);
+        logger.info(`Model:     ${usage.model}`);
+        logger.info("");
+
+        for (const call of usage.calls) {
+            const inp = formatTokens(call.inputTokens);
+            const out = formatTokens(call.outputTokens);
+            logger.info(`  ${call.label.padEnd(24)} ${inp.padStart(8)} in / ${out.padStart(6)} out`);
+        }
+
+        logger.info("───────────────────────────────────────");
+        const totalIn = formatTokens(usage.totalInput);
+        const totalOut = formatTokens(usage.totalOutput);
+        logger.info(`  ${"TOTAL".padEnd(24)} ${totalIn.padStart(8)} in / ${totalOut.padStart(6)} out`);
+        const costStr = formatCost(usage.estimatedCost, usage.provider);
+        logger.info(`  ${"Est. Cost (list price):".padEnd(24)} ${costStr}`);
+        logger.info("");
     }
 }

@@ -12,16 +12,8 @@ const logger = getLogger("ConfigService");
 
 // --- Schemas ---
 
-export enum AIProvider {
-    ANTHROPIC = "anthropic",
-    BEDROCK = "bedrock",
-    OPENAI = "openai",
-    GOOGLE = "google",
-    XAI = "xai",
-    DEEPSEEK = "deepseek",
-    OLLAMA = "ollama",
-    SELF_HOSTED = "self-hosted",
-}
+import { AIProvider } from "../constants/ai-provider";
+export { AIProvider };
 
 export const ProviderConfigSchema = z.object({
     apiKey: z.string().optional().describe("API key for this provider"),
@@ -268,7 +260,9 @@ export class ConfigService {
                 raw = await readFile(configPath, "utf8");
             } catch (err) {
                 logger.error(`Failed to read personal config file at ${configPath}: ${err}`);
-                throw new Error(`Failed to read personal config file at ${configPath}: ${err instanceof Error ? err.message : String(err)}`);
+                throw new Error(
+                    `Failed to read personal config file at ${configPath}: ${err instanceof Error ? err.message : String(err)}`,
+                );
             }
 
             let json: unknown;
@@ -301,7 +295,9 @@ export class ConfigService {
                         logger.info("Recovered personal configuration while stripping invalid default model/provider.");
                         this.personalConfig = fallbackParsed.data;
                     } else {
-                        logger.error("Failed full schema recovery. Preserving validated providers, secret tokens, and scalar fields as fallback.");
+                        logger.error(
+                            "Failed full schema recovery. Preserving validated providers, secret tokens, and scalar fields as fallback.",
+                        );
                         const rec = normalized as Record<string, unknown>;
                         const droppedFields: string[] = [];
                         const baseConfig: Record<string, unknown> = { providers: {} };
@@ -309,7 +305,12 @@ export class ConfigService {
                         // 1. Iterate over all top-level schema shape keys and safeParse each field independently
                         const shape = PersonalConfigurationSchema.shape;
                         for (const key of Object.keys(shape) as Array<keyof typeof shape>) {
-                            if (key === "providers" || key === "remote" || key === "defaultModel" || key === "defaultProvider") {
+                            if (
+                                key === "providers" ||
+                                key === "remote" ||
+                                key === "defaultModel" ||
+                                key === "defaultProvider"
+                            ) {
                                 continue;
                             }
                             if (rec[key] !== undefined && rec[key] !== null) {
@@ -326,7 +327,9 @@ export class ConfigService {
                         // 2. Per-provider salvage for providers
                         if (rec.providers && typeof rec.providers === "object" && !Array.isArray(rec.providers)) {
                             const parsedProviders: Record<string, ProviderConfig> = {};
-                            for (const [providerKey, providerVal] of Object.entries(rec.providers as Record<string, unknown>)) {
+                            for (const [providerKey, providerVal] of Object.entries(
+                                rec.providers as Record<string, unknown>,
+                            )) {
                                 const parsedProvider = ProviderConfigSchema.safeParse(providerVal);
                                 if (parsedProvider.success) {
                                     parsedProviders[providerKey as AIProvider] = parsedProvider.data;
@@ -345,13 +348,17 @@ export class ConfigService {
                                     baseConfig.remote = remoteParsed.data;
                                 } else {
                                     const reasons = remoteParsed.error.issues.map((i) => i.message).join("; ");
-                                    logger.error(`Corrupted remote credential configuration in ${configPath}: ${reasons}`);
+                                    logger.error(
+                                        `Corrupted remote credential configuration in ${configPath}: ${reasons}`,
+                                    );
                                     throw new Error(
                                         `Corrupted remote credential configuration in ${configPath}: ${reasons}. Remote credential mode cannot be safely verified. Run 'sat-cli init' or fix ${configPath}.`,
                                     );
                                 }
                             } else {
-                                logger.error(`Invalid remote configuration block in ${configPath}: expected an object.`);
+                                logger.error(
+                                    `Invalid remote configuration block in ${configPath}: expected an object.`,
+                                );
                                 throw new Error(
                                     `Invalid remote configuration block in ${configPath}. Run 'sat-cli init' or fix ${configPath}.`,
                                 );
@@ -446,7 +453,7 @@ export class ConfigService {
         for (const [key, rawConfig] of Object.entries(rawProvidersObj)) {
             if (rawConfig && typeof rawConfig === "object") {
                 const config = { ...rawConfig };
-                
+
                 // Normalize selfHostedEndpoint to endpoint
                 if (config.selfHostedEndpoint) {
                     if (!config.endpoint) {
