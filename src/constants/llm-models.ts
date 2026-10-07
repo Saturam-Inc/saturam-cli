@@ -27,7 +27,7 @@ export enum LLMModel {
     // cross-region profile is "global.anthropic.claude-sonnet-4-6"). A saved "-v1:0" form still
     // resolves to it through migrateModelId's suffix matching.
     BEDROCK_CLAUDE_4_6_SONNET = "anthropic.claude-sonnet-4-6",
-    BEDROCK_CLAUDE_4_6_OPUS = "anthropic.claude-opus-4-6-v1:0",
+    BEDROCK_CLAUDE_4_6_OPUS = "anthropic.claude-opus-4-6-v1",
     BEDROCK_CLAUDE_4_5_HAIKU = "anthropic.claude-haiku-4-5-20251001-v1:0",
     BEDROCK_NOVA_PRO = "amazon.nova-pro-v1:0",
     BEDROCK_CUSTOM = "bedrock-custom",
@@ -86,7 +86,10 @@ export enum LLMModel {
 }
 
 export interface SelfHostedChatModel {
-    invoke(messages: BaseMessage[]): Promise<{ content: string }>;
+    invoke(messages: BaseMessage[]): Promise<{
+        content: string;
+        usage_metadata?: { input_tokens?: number; output_tokens?: number };
+    }>;
 }
 
 export type ChatModel =
@@ -269,4 +272,20 @@ export function isOllamaModel(model: LLMModel): boolean {
 
 export function isSelfHostedModel(model: LLMModel): boolean {
     return SELF_HOSTED_MODELS.has(model);
+}
+
+import { AIProvider } from "./ai-provider";
+
+export function getModelProvider(model: LLMModel): AIProvider {
+    if (isAnthropicModel(model)) return AIProvider.ANTHROPIC;
+    if (isBedrockModel(model)) return AIProvider.BEDROCK;
+    if (isGeminiModel(model)) return AIProvider.GOOGLE;
+    if (isOpenAIModel(model)) return AIProvider.OPENAI;
+    if (isAzureOpenAIModel(model)) return AIProvider.AZURE_OPENAI;
+    if (isAzureFoundryModel(model)) return AIProvider.AZURE_FOUNDRY;
+    if (isGrokModel(model)) return AIProvider.XAI;
+    if (isDeepSeekModel(model)) return AIProvider.DEEPSEEK;
+    if (isOllamaModel(model)) return AIProvider.OLLAMA;
+    if (isSelfHostedModel(model)) return AIProvider.SELF_HOSTED;
+    throw new Error(`Unsupported model: ${model}`);
 }

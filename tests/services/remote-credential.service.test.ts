@@ -38,9 +38,7 @@ describe("RemoteCredentialService", () => {
         );
         global.fetch = fetchMock as unknown as typeof fetch;
 
-        const service = new RemoteCredentialService(
-            makeConfig({ url: "https://example.com", token: "tok" }),
-        );
+        const service = new RemoteCredentialService(makeConfig({ url: "https://example.com", token: "tok" }));
         const credentials = await service.getCredentials();
 
         expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -55,14 +53,10 @@ describe("RemoteCredentialService", () => {
     });
 
     it("sends the Authorization header when token is configured", async () => {
-        const fetchMock = jest
-            .fn()
-            .mockResolvedValue(jsonResponse({ accessKeyId: "AKIA_TEST", secretAccessKey: "B" }));
+        const fetchMock = jest.fn().mockResolvedValue(jsonResponse({ accessKeyId: "AKIA_TEST", secretAccessKey: "B" }));
         global.fetch = fetchMock as unknown as typeof fetch;
 
-        const service = new RemoteCredentialService(
-            makeConfig({ url: "https://example.com", token: "my-token" }),
-        );
+        const service = new RemoteCredentialService(makeConfig({ url: "https://example.com", token: "my-token" }));
         await service.getCredentials();
 
         const [, options] = fetchMock.mock.calls[0];
@@ -70,9 +64,7 @@ describe("RemoteCredentialService", () => {
     });
 
     it("allows loopback http without token and omits Authorization header", async () => {
-        const fetchMock = jest
-            .fn()
-            .mockResolvedValue(jsonResponse({ accessKeyId: "AKIA_TEST", secretAccessKey: "B" }));
+        const fetchMock = jest.fn().mockResolvedValue(jsonResponse({ accessKeyId: "AKIA_TEST", secretAccessKey: "B" }));
         global.fetch = fetchMock as unknown as typeof fetch;
 
         const service = new RemoteCredentialService(makeConfig({ url: "http://localhost:8000" }));
@@ -83,35 +75,25 @@ describe("RemoteCredentialService", () => {
     });
 
     it("throws when non-loopback http is used", async () => {
-        const service = new RemoteCredentialService(
-            makeConfig({ url: "http://insecure.example.com", token: "tok" }),
-        );
+        const service = new RemoteCredentialService(makeConfig({ url: "http://insecure.example.com", token: "tok" }));
         await expect(service.getCredentials()).rejects.toThrow(/Plain HTTP is only allowed for loopback/);
     });
 
     it("throws when userinfo is embedded in URL", async () => {
-        const service = new RemoteCredentialService(
-            makeConfig({ url: "https://user:pass@example.com", token: "tok" }),
-        );
+        const service = new RemoteCredentialService(makeConfig({ url: "https://user:pass@example.com", token: "tok" }));
         await expect(service.getCredentials()).rejects.toThrow(/userinfo/i);
     });
 
     it("throws when token is missing for non-loopback remote endpoint", async () => {
-        const service = new RemoteCredentialService(
-            makeConfig({ url: "https://example.com" }),
-        );
+        const service = new RemoteCredentialService(makeConfig({ url: "https://example.com" }));
         await expect(service.getCredentials()).rejects.toThrow(/requires an authentication token/i);
     });
 
     it("strips trailing slashes from the configured URL", async () => {
-        const fetchMock = jest
-            .fn()
-            .mockResolvedValue(jsonResponse({ accessKeyId: "AKIA_TEST", secretAccessKey: "B" }));
+        const fetchMock = jest.fn().mockResolvedValue(jsonResponse({ accessKeyId: "AKIA_TEST", secretAccessKey: "B" }));
         global.fetch = fetchMock as unknown as typeof fetch;
 
-        const service = new RemoteCredentialService(
-            makeConfig({ url: "https://example.com/", token: "tok" }),
-        );
+        const service = new RemoteCredentialService(makeConfig({ url: "https://example.com/", token: "tok" }));
         await service.getCredentials();
 
         expect(fetchMock.mock.calls[0][0]).toBe("https://example.com/credentials");
@@ -129,9 +111,7 @@ describe("RemoteCredentialService", () => {
         );
         global.fetch = fetchMock as unknown as typeof fetch;
 
-        const service = new RemoteCredentialService(
-            makeConfig({ url: "https://example.com", token: "tok" }),
-        );
+        const service = new RemoteCredentialService(makeConfig({ url: "https://example.com", token: "tok" }));
         const credentials = await service.getCredentials();
 
         expect(credentials).toEqual({
@@ -145,9 +125,7 @@ describe("RemoteCredentialService", () => {
         const fetchMock = jest.fn().mockResolvedValue(jsonResponse({ accessKeyId: "only-one" }));
         global.fetch = fetchMock as unknown as typeof fetch;
 
-        const service = new RemoteCredentialService(
-            makeConfig({ url: "https://example.com", token: "tok" }),
-        );
+        const service = new RemoteCredentialService(makeConfig({ url: "https://example.com", token: "tok" }));
         await expect(service.getCredentials()).rejects.toThrow(/missing accessKeyId or secretAccessKey/i);
     });
 
@@ -160,9 +138,7 @@ describe("RemoteCredentialService", () => {
         );
         global.fetch = fetchMock as unknown as typeof fetch;
 
-        const service = new RemoteCredentialService(
-            makeConfig({ url: "https://example.com", token: "tok" }),
-        );
+        const service = new RemoteCredentialService(makeConfig({ url: "https://example.com", token: "tok" }));
         await expect(service.getCredentials()).rejects.toThrow(/without a required sessionToken/i);
     });
 
@@ -170,9 +146,7 @@ describe("RemoteCredentialService", () => {
         const fetchMock = jest.fn().mockResolvedValue(jsonResponse({}, false, 401));
         global.fetch = fetchMock as unknown as typeof fetch;
 
-        const service = new RemoteCredentialService(
-            makeConfig({ url: "https://example.com", token: "tok" }),
-        );
+        const service = new RemoteCredentialService(makeConfig({ url: "https://example.com", token: "tok" }));
         await expect(service.getCredentials()).rejects.toThrow(/Authentication failed \(HTTP 401\)/);
     });
 
@@ -180,14 +154,10 @@ describe("RemoteCredentialService", () => {
         const fetchMock = jest
             .fn()
             .mockResolvedValueOnce(jsonResponse({}, false, 500))
-            .mockResolvedValueOnce(
-                jsonResponse({ accessKeyId: "AKIA_RETRY", secretAccessKey: "SECRET" }),
-            );
+            .mockResolvedValueOnce(jsonResponse({ accessKeyId: "AKIA_RETRY", secretAccessKey: "SECRET" }));
         global.fetch = fetchMock as unknown as typeof fetch;
 
-        const service = new RemoteCredentialService(
-            makeConfig({ url: "https://example.com", token: "tok" }),
-        );
+        const service = new RemoteCredentialService(makeConfig({ url: "https://example.com", token: "tok" }));
         const creds = await service.getCredentials();
 
         expect(fetchMock).toHaveBeenCalledTimes(2);

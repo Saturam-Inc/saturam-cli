@@ -76,9 +76,13 @@ export class GitLabService {
                             { headers },
                         );
                         if (!response.ok) {
-                            throw new Error(`Failed to fetch GitLab MR diff !${mrIid} (page ${page}): ${response.status} ${response.statusText}`);
+                            throw new Error(
+                                `Failed to fetch GitLab MR diff !${mrIid} (page ${page}): ${response.status} ${response.statusText}`,
+                            );
                         }
-                        const diffs = await (response.json() as Promise<Array<{ diff: string; new_path: string; old_path: string }>>);
+                        const diffs = await (response.json() as Promise<
+                            Array<{ diff: string; new_path: string; old_path: string }>
+                        >);
                         allDiffs.push(...diffs);
                         if (diffs.length < perPage) {
                             break;

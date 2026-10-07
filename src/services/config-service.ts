@@ -13,18 +13,8 @@ const logger = getLogger("ConfigService");
 
 // --- Schemas ---
 
-export enum AIProvider {
-    ANTHROPIC = "anthropic",
-    BEDROCK = "bedrock",
-    OPENAI = "openai",
-    AZURE_OPENAI = "azure-openai",
-    AZURE_FOUNDRY = "azure-foundry",
-    GOOGLE = "google",
-    XAI = "xai",
-    DEEPSEEK = "deepseek",
-    OLLAMA = "ollama",
-    SELF_HOSTED = "self-hosted",
-}
+import { AIProvider } from "../constants/ai-provider";
+export { AIProvider };
 
 export const ProviderConfigSchema = z.object({
     apiKey: z.string().optional().describe("API key for this provider"),
