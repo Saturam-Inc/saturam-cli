@@ -25,6 +25,8 @@ export const CONFIG_ENV = {
     KB_ID: "SATENG_KB_ID",
     KB_DATA_SOURCE_ID: "SATENG_KB_DATA_SOURCE_ID",
     KB_REGION: "SATENG_KB_REGION",
+    /** HYBRID or SEMANTIC; only for a vector store that supports the override. */
+    KB_SEARCH_TYPE: "SATENG_KB_SEARCH_TYPE",
     S3_BUCKET: "SATENG_S3_BUCKET",
     S3_PREFIX: "SATENG_S3_PREFIX",
     S3_STATE_PREFIX: "SATENG_S3_STATE_PREFIX",
@@ -76,6 +78,8 @@ export function personalConfigFromEnvironment(env: Env = process.env): RawConfig
             knowledgeBaseId,
             dataSourceId: read(env, CONFIG_ENV.KB_DATA_SOURCE_ID),
             region: read(env, CONFIG_ENV.KB_REGION),
+            // Upper-cased so "hybrid" is accepted; anything else is left for the schema to name.
+            searchType: read(env, CONFIG_ENV.KB_SEARCH_TYPE)?.toUpperCase(),
         });
     }
     if (bucket) {

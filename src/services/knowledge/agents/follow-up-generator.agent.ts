@@ -70,6 +70,8 @@ export class FollowUpGeneratorAgent {
         projectDisplayName?: string;
         /** Narrows the answerability check to the project the answer came from, when it came from one. */
         projectSlug?: string;
+        /** Set when the answer is a change plan: the follow-ups then help carry it out rather than restate it. */
+        planGoal?: string;
     }): Promise<FollowUp[]> {
         const documents = followUpDocuments(params.chunks);
         if (documents.length === 0) {

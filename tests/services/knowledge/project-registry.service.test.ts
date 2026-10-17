@@ -104,4 +104,49 @@ describe("ProjectRegistryService", () => {
 
         await expect(service.describeForPrompt()).resolves.toBe("(no projects are indexed yet)");
     });
+
+    describe("registry v2, which lists repositories", () => {
+        const v2 = JSON.stringify({
+            generatedAt: "2026-10-15T02:10:00Z",
+            version: 2,
+            projects: [
+                {
+                    slug: "smile",
+                    displayName: "SMILE",
+                    aliases: [],
+                    documentCount: 555,
+                    sources: ["bitbucket", "confluence"],
+                    counts: { confluence: 24, bitbucket: 531 },
+                    repos: [
+                        {
+                            workspace: "acme",
+                            repoSlug: "smile-core",
+                            folder: "smile-core",
+                            branch: "main",
+                            commit: "3f2a9c1deadb",
+                            documentCount: 531,
+                            indexedAt: "2026-10-14T15:57:16Z",
+                            complete: true,
+                        },
+                    ],
+                },
+            ],
+        });
+
+        it("reads the repositories and per-category counts", async () => {
+            s3.getStateObject.mockResolvedValue(Buffer.from(v2));
+
+            const repos = await service.reposOf("smile");
+
+            expect(repos).toMatchObject([
+                { workspace: "acme", repoSlug: "smile-core", folder: "smile-core", branch: "main" },
+            ]);
+            expect((await service.getBySlug("smile"))?.counts).toEqual({ confluence: 24, bitbucket: 531 });
+        });
+
+        it("has no repositories for an older registry or an unknown project, rather than failing", async () => {
+            await expect(service.reposOf("smile")).resolves.toEqual([]);
+            await expect(service.reposOf("nowhere")).resolves.toEqual([]);
+        });
+    });
 });

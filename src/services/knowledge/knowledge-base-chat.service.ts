@@ -5,10 +5,18 @@ import {
 } from "../../integrations/aws/services/bedrock-knowledge-base.service";
 import { getKnowledgeBaseChatMessages } from "../../prompts/knowledge-base-chat.prompt";
 import { LlmService } from "../llm-service";
+import { DocumentKind, retrievalFiltersFor } from "./knowledge-source.model";
+
+/** How a search is scoped: by project, by the kind of material, or to one repository's code. */
+export interface SearchScope {
+    project?: string;
+    kind?: DocumentKind;
+    repo?: string;
+}
 
 /**
  * Owns Bedrock Knowledge Base retrieval and RAG chat (retrieve → prompt build → LLM call),
- * so commands stay thin — on `main` no command calls LlmService directly, and OnboardCommand's
+ * so commands stay thin — on `main` no command calls LlmService directly, and LumosCommand's
  * chat/`--knowledge-base` flows should follow the same pattern instead of building the
  * pipeline inline.
  */
@@ -20,9 +28,10 @@ export class KnowledgeBaseChatService {
     ) {}
 
     /** Retrieve-only: the ranked chunks for a question, with no LLM generation. */
-    public async search(question: string, options?: { project?: string }): Promise<RetrievedChunk[]> {
-        return options?.project
-            ? this.knowledgeBase.retrieve(question, { project: options.project })
+    public async search(question: string, scope?: SearchScope): Promise<RetrievedChunk[]> {
+        const filters = scope ? retrievalFiltersFor(scope) : {};
+        return Object.keys(filters).length > 0
+            ? this.knowledgeBase.retrieve(question, filters)
             : this.knowledgeBase.retrieve(question);
     }
 

@@ -30,6 +30,14 @@ describe("personalConfigFromEnvironment", () => {
         expect(parsed.cloud?.aws?.awsAccessKeyId).toBeUndefined();
     });
 
+    it("carries the knowledge base's search type, upper-cased, and leaves a bad one for the schema", () => {
+        const overlay = personalConfigFromEnvironment({ SATENG_KB_ID: "KB123", SATENG_KB_SEARCH_TYPE: "hybrid" });
+        expect(PersonalConfigurationSchema.parse(overlay).cloud?.aws?.bedrockKnowledgeBase?.searchType).toBe("HYBRID");
+
+        const bad = personalConfigFromEnvironment({ SATENG_KB_ID: "KB123", SATENG_KB_SEARCH_TYPE: "fuzzy" });
+        expect(() => PersonalConfigurationSchema.parse(bad)).toThrow();
+    });
+
     it("lets the schema reject a malformed value rather than silently dropping it", () => {
         const overlay = personalConfigFromEnvironment({
             SATENG_CONVERSATION_TABLE: "t",

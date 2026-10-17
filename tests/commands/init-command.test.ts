@@ -126,4 +126,65 @@ describe("InitCommand Platform Config Flow", () => {
 
         fetchSpy.mockRestore();
     });
+
+    it("drops the remote credential block when the Bedrock step is told to disable it", async () => {
+        // The step computed "disable" but never returned it, so the saved config kept the remote
+        // block and every Bedrock call still fetched credentials from the remote API.
+        mockConfig.loadPersonalConfig.mockResolvedValue({
+            defaultModel: LLMModel.BEDROCK_CLAUDE_4_5_HAIKU,
+            providers: { [AIProvider.BEDROCK]: { enabled: true, awsProfile: "stale-profile", awsRegion: "us-east-1" } },
+            remote: { url: "https://example.execute-api.us-east-1.amazonaws.com", token: "t0ken" },
+        });
+
+        // top-level "ai_providers" -> action "add" -> provider "bedrock"
+        (select as jest.Mock)
+            .mockResolvedValueOnce("ai_providers")
+            .mockResolvedValueOnce("add")
+            .mockResolvedValueOnce(AIProvider.BEDROCK);
+        // "Configure remote AWS credential API URL?" -> no; "Disable remote credentials?" -> yes
+        (confirm as jest.Mock).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+        // profile (empty: default chain), region
+        (input as jest.Mock).mockResolvedValueOnce("").mockResolvedValueOnce("ap-south-1");
+
+        await command.execute({});
+
+        const saved = mockConfig.savePersonalConfig.mock.calls.at(-1)![0];
+        expect(saved).not.toHaveProperty("remote");
+        expect(saved.providers![AIProvider.BEDROCK]).toMatchObject({ enabled: true, awsRegion: "ap-south-1" });
+        expect(saved.providers![AIProvider.BEDROCK]!.awsProfile).toBeUndefined();
+    });
+
+    it("keeps the Knowledge Base search type when init is re-run, and offers it as the default", async () => {
+        mockConfig.loadPersonalConfig.mockResolvedValue({
+            providers: {},
+            cloud: {
+                [CloudProvider.AWS]: {
+                    enabled: true,
+                    awsAuthMethod: "profile",
+                    awsRegion: "us-west-2",
+                    bedrockKnowledgeBase: { knowledgeBaseId: "KB123", searchType: "HYBRID" },
+                },
+            },
+        });
+        (select as jest.Mock)
+            .mockResolvedValueOnce("cloud")
+            .mockResolvedValueOnce(CloudProvider.AWS)
+            .mockResolvedValueOnce("profile")
+            .mockImplementationOnce(async (options: any) => options.default); // search type: accept the default
+        (input as jest.Mock)
+            .mockResolvedValueOnce("") // profile
+            .mockResolvedValueOnce("us-west-2") // region
+            .mockResolvedValueOnce("KB123") // knowledge base id
+            .mockResolvedValueOnce("") // data source
+            .mockResolvedValueOnce(""); // kb region
+        (confirm as jest.Mock).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+
+        await command.execute({});
+
+        const saved = mockConfig.savePersonalConfig.mock.calls.at(-1)![0];
+        expect(saved.cloud![CloudProvider.AWS]!.bedrockKnowledgeBase).toMatchObject({
+            knowledgeBaseId: "KB123",
+            searchType: "HYBRID",
+        });
+    });
 });

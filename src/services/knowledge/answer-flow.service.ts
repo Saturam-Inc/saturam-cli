@@ -115,7 +115,13 @@ export class AnswerFlowService {
         // are taken back by a single revision; anything shaped like a credential is redacted. The
         // reader sees the corrected answer, never a warning about it.
         const answer = this.withSecretsRedacted(
-            await this.withUnsupportedIdentifiersRevised(question, produced.answer, produced.chunks, recentTurns),
+            await this.withUnsupportedIdentifiersRevised(
+                question,
+                produced.answer,
+                produced.chunks,
+                recentTurns,
+                produced.knownIdentifiers ?? [],
+            ),
         );
 
         const [followUps, answerGist] = await Promise.all([
@@ -126,6 +132,7 @@ export class AnswerFlowService {
                 digest: session.digest,
                 projectDisplayName: project?.displayName,
                 projectSlug: project?.slug,
+                planGoal: produced.planGoal,
             }),
             this.writer.summarize(question, answer),
         ]);
@@ -134,6 +141,7 @@ export class AnswerFlowService {
             store,
             ref,
             session,
+            planGoal: produced.planGoal,
             turn: {
                 index: nextTurnIndex(session),
                 question,
@@ -168,19 +176,29 @@ export class AnswerFlowService {
      * sources nor the earlier conversation. A string check, not a judgement, so it does not
      * suffer the false alarms a model-judged audit did on exactly this task — and the correction
      * is applied to the answer rather than announced under it.
+     *
+     * A name the agent met by browsing a repository or reading a file whole is as real as one a
+     * passage contained, which is what `knownIdentifiers` carries; without it a correct path
+     * taken from a directory listing would be revised away as an invention.
+     *
+     * The agent itself gets the first chance: MentorAgentService sends unsupported names back to
+     * it once, with its tools still attached, so it can look them up. What arrives here is what
+     * survived that, and is revised blind as the last resort.
      */
     private async withUnsupportedIdentifiersRevised(
         question: string,
         answer: string,
         chunks: RetrievedChunk[],
         recentTurns: ChatTurn[],
+        knownIdentifiers: string[],
     ): Promise<string> {
-        if (chunks.length === 0) return answer;
+        if (chunks.length === 0 && knownIdentifiers.length === 0) return answer;
         const sources = chunks.map((chunk) => chunk.content).join("\n");
         const unsupported = findUnsupportedIdentifiers(
             answer,
             sources,
             recentTurns.map((turn) => turn.answer),
+            knownIdentifiers,
         );
         if (unsupported.length === 0) return answer;
 
@@ -293,6 +311,8 @@ export class AnswerFlowService {
         ref: SessionRef;
         session: ChatSession;
         turn: ChatTurn;
+        /** The change the agent declared it was planning; becomes the learner's goal for the conversation. */
+        planGoal?: string;
     }): Promise<void> {
         const { store, ref, session, turn } = params;
         await store.appendTurn(ref, turn);
@@ -300,6 +320,15 @@ export class AnswerFlowService {
         if (turn.resolvedProject && turn.resolvedProject !== session.activeProject) {
             await store.saveActiveProject(ref, turn.resolvedProject);
             session.activeProject = turn.resolvedProject;
+        }
+
+        // A declared change is the clearest statement of what the learner is here to do, so it
+        // takes the goal slot the digest carries forward — into later turns and later sessions.
+        if (params.planGoal && params.planGoal !== session.digest?.learnerGoal) {
+            const digest: SessionDigest = { ...(session.digest ?? emptyDigest()), learnerGoal: params.planGoal };
+            await store.saveDigest(ref, digest);
+            session.digest = digest;
+            logger.debug(`Learner goal from the change plan: ${params.planGoal}`);
         }
 
         const updated: ChatSession = { ...session, turns: [...session.turns, turn] };

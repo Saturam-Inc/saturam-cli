@@ -1,9 +1,9 @@
-import { OnboardCommand } from "../../src/commands/onboard-command";
+import { LumosCommand } from "../../src/commands/lumos-command";
 
 jest.mock("@inquirer/prompts", () => ({ input: jest.fn(), select: jest.fn() }));
 
 describe("stripInlineCitations", () => {
-    const strip = (text: string): string => (OnboardCommand.prototype as any).stripInlineCitations.call({}, text);
+    const strip = (text: string): string => (LumosCommand.prototype as any).stripInlineCitations.call({}, text);
 
     it("removes citation markers from prose", () => {
         expect(strip("The sync copies documents. [1]")).toBe("The sync copies documents.");

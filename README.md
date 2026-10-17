@@ -86,23 +86,30 @@ Initialize configuration for a project (AI providers, default model, SCM credent
 sat-cli init
 ```
 
-### `sat-cli onboard`
+### `sat-cli lumos`
 
-Ask questions about your projects, answered from the onboarding documentation indexed in the Bedrock Knowledge Base.
+Ask questions about your projects, answered from the onboarding documentation and the source code indexed in the Bedrock Knowledge Base. Formerly `sat-cli onboard`; the old name still works for now and prints a reminder to switch.
 
 ```bash
 # Chat: ask questions and get a mentoring answer grounded in the Knowledge Base.
 # The project is worked out per question — no --project flag needed.
-sat-cli onboard
+sat-cli lumos
 
 # Start over with a fresh conversation instead of continuing the last one
-sat-cli onboard --new-session
+sat-cli lumos --new-session
 
 # Instead of the chat, inspect raw retrieval from the configured Bedrock Knowledge Base
-sat-cli onboard --knowledge-base
+sat-cli lumos --knowledge-base
 
 # Restrict that retrieval to one project's indexed documents
-sat-cli onboard --knowledge-base --project "Saturam"
+sat-cli lumos --knowledge-base --project "Saturam"
+
+# Retrieve from the written documentation only, or from the indexed source code only
+sat-cli lumos --knowledge-base --kind docs
+sat-cli lumos --knowledge-base --kind code
+
+# Retrieve from one repository's code
+sat-cli lumos --knowledge-base --repo "workspace/repo-slug"
 ```
 
 Running it with no options starts the chat; `--knowledge-base` is the only other mode.
@@ -111,25 +118,28 @@ Running it with no options starts the chat; `--knowledge-base` is the only other
 > Drive files, and uploading them to S3 for Bedrock to ingest, now runs as a scheduled AWS Lambda
 > off a Google Sheet — see the `onboarding-gsheet-lamba` service in `sat-cli-internal-infra`. The retired
 > flags (`--format`, `--project-name`, `--list`, `--upload-to-s3`, `--forget-sheet`) and the
-> `sat-cli onboard <spreadsheet-url-or-id>` form now fail with an "unknown option" error rather
+> `sat-cli lumos <spreadsheet-url-or-id>` form now fail with an "unknown option" error rather
 > than silently doing nothing, so any script still calling them is told plainly.
 
 ### How the chat answers
 
 Each question goes to a single mentor agent that searches the Knowledge Base as it needs to, rather than through a fixed retrieve-then-summarize step:
 
-1. **Search until it can answer** — the agent searches broadly or within one project, looks up which projects are indexed, and recalls earlier turns, choosing which of these a question needs and searching again with different wording when the first results miss.
+1. **Search until it can answer** — the agent searches broadly or within one project, across the written documentation and the indexed source code or either alone, looks up which projects and repositories are indexed, and recalls earlier turns, choosing which of these a question needs and searching again with different wording when the first results miss. A search result is a slice; when the slice is code, the agent reads the file whole from S3 before explaining it, and browses a repository's directories when a question asks where something lives.
 2. **Project from the evidence** — the project an answer is labelled with is read off the documents it retrieved, not decided in advance. When those documents come from more than one project, the answer is given without a project label; you are never asked to choose one.
 3. **Mentoring answer** — explains the thing the way a senior engineer would, at the length the question deserves, rather than quoting document excerpts back. When it does not have something, it says so in its own words and points you to your manager, team lead or the owning team, with the general way to find it out where there is one. Anything the answer names that the sources do not mention is revised out, and anything shaped like a credential is redacted.
-4. **Follow-up suggestions** — up to three short questions you can select to keep going. Each is drawn from a document the answer retrieved and checked against the Knowledge Base before it is shown; an answer that retrieved nothing offers none.
+4. **Change plans** — a question that asks how to change, add or remove something gets a plan: the agent declares it first, finds where the thing is defined and everything that uses it from the symbol index the pipeline builds per repository, reads the files around the hits and the project's change-impact map or making-changes recipe when it has one, and answers as numbered steps with the impact above and verification, rollback and who to involve below.
+5. **Follow-up suggestions** — up to three short questions you can select to keep going. Each is drawn from a document the answer retrieved and checked against the Knowledge Base before it is shown; an answer that retrieved nothing offers none. After a plan, they are the steps that carry it out rather than the next topic.
 
 Conversation history is kept so follow-ups work: "and how does it fail?" is understood against the previous answer. History lives in memory by default, or in DynamoDB when a `conversationTable` is configured (see "Cloud" below), which is what lets a later run continue the same conversation.
 
 For more on how the corpus is built and queried, see [ONBOARDING.md](ONBOARDING.md). The sheet format that drives ingestion is documented with the Lambda that reads it, in `sat-cli-internal-infra/onboarding-gsheet-lamba` (`SHEET-COLUMNS.md`).
 
-`--knowledge-base` opens an interactive prompt in the terminal. Enter a question to display the ranked chunks, relevance scores, source locations, and metadata returned by Bedrock. This uses the Knowledge Base `Retrieve` API—the equivalent of the AWS console's **Standard retrieval only** mode—and does not generate an AI answer. Submit an empty question, type `exit`, `quit`, or `:q`, or press Ctrl+C to leave the prompt.
+`--knowledge-base` opens an interactive prompt in the terminal. Enter a question to display the ranked chunks, relevance scores, source locations, and metadata returned by Bedrock. This uses the Knowledge Base `Retrieve` API—the equivalent of the AWS console's **Standard retrieval only** mode—and does not generate an AI answer. `--kind docs|code|all` and `--repo workspace/repo-slug` narrow it the way the chat's own searches can be narrowed, which is how to check what retrieval returns for code apart from prose. Submit an empty question, type `exit`, `quit`, or `:q`, or press Ctrl+C to leave the prompt.
 
-The chat (bare `sat-cli onboard`) is the RAG version: it uses the same Knowledge Base retrieval as `--knowledge-base`, but your **configured LLM** (whichever AI/LLM provider and model are set up via `sat-cli init` → "AI / LLM providers" — Anthropic, OpenAI, Gemini, Bedrock, etc.) runs the searches and writes a synthesized answer from what they return instead of printing raw chunks. `--project` applies only to `--knowledge-base`; the chat refuses it and infers the project from what it retrieves. If no LLM provider is configured yet, it tells you to run `sat-cli init` first instead of failing partway through. Requires both an LLM provider and Bedrock Knowledge Base to be configured.
+The chat (bare `sat-cli lumos`) is the RAG version: it uses the same Knowledge Base retrieval as `--knowledge-base`, but your **configured LLM** (whichever AI/LLM provider and model are set up via `sat-cli init` → "AI / LLM providers" — Anthropic, OpenAI, Gemini, Bedrock, etc.) runs the searches and writes a synthesized answer from what they return instead of printing raw chunks. `--project`, `--kind` and `--repo` apply only to `--knowledge-base`; the chat refuses them and decides per question which project, and which kind of material, a question needs. If no LLM provider is configured yet, it tells you to run `sat-cli init` first instead of failing partway through. Requires both an LLM provider and Bedrock Knowledge Base to be configured; reading files whole and browsing repositories also need the S3 bucket configured, since those read the documents and the pipeline's code index directly rather than through Bedrock.
+
+If the Knowledge Base's vector store supports hybrid search (OpenSearch Serverless does; S3 Vectors does not), set `searchType` to `HYBRID` under the Bedrock Knowledge Base config, or `SATENG_KB_SEARCH_TYPE=HYBRID`: keyword matching is what finds an identifier such as a function or table name in code, where pure vector search can miss it.
 
 ## Cloud (AWS S3 & Bedrock Knowledge Base)
 
@@ -156,7 +166,7 @@ The knowledge base, bucket, conversation table and model can also be set with `S
 
 ## Slack bot
 
-`sat-cli onboard` also runs as a Slack bot — the same answering flow, and nothing else from the CLI. Mention it in a channel or DM it; it answers in a thread with sources, follow-up buttons and 👍/👎 feedback. Each thread is its own conversation, and each person's history carries across threads.
+`sat-cli lumos` also runs as a Slack bot — the same answering flow, and nothing else from the CLI. Mention it in a channel or DM it; it answers in a thread with sources, follow-up buttons and 👍/👎 feedback. Each thread is its own conversation, and each person's history carries across threads.
 
 It runs on AWS as two Lambdas behind API Gateway, with an SQS FIFO queue between them because Slack needs a reply within 3 seconds and an answer takes tens of seconds. Retrieval uses the Bedrock Knowledge Base, and answers are written by Claude on Bedrock, invoked with the worker's IAM role, so no model credentials are stored anywhere. Both Lambdas are deployed from one ~3 MB zip that carries only the chat path. The code is in [src/slack/](src/slack/); [docs/SLACK-BOT.md](docs/SLACK-BOT.md) describes what gets deployed, the contract the deployment relies on, and local development.
 

@@ -13,6 +13,23 @@ const logger = getLogger("ProjectRegistry");
 /** Fixed key the ingestion pipeline writes, relative to the configured S3 *state* prefix. */
 export const REGISTRY_S3_KEY = "registry.json";
 
+/**
+ * A repository the pipeline indexed for a project, as registry.json v2 lists it. Read off the
+ * pipeline's per-repository state, so `folder` is the directory its documents live under
+ * (`<project>/bitbucket/<folder>/`), which is what the browsing tools need to find them.
+ */
+export const RegistryRepoSchema = z.object({
+    workspace: z.string(),
+    repoSlug: z.string(),
+    folder: z.string(),
+    branch: z.string().optional(),
+    commit: z.string().optional(),
+    documentCount: z.number().optional(),
+    indexedAt: z.string().optional(),
+    /** False when the last run could not fetch every file; absent means complete. */
+    complete: z.boolean().optional(),
+});
+
 export const RegistryProjectSchema = z.object({
     slug: z.string(),
     displayName: z.string(),
@@ -20,15 +37,27 @@ export const RegistryProjectSchema = z.object({
     documentCount: z.number().optional(),
     summary: z.string().optional(),
     sources: z.array(z.string()).default([]),
+    /** Documents per source category, so the listing can say how much of a project is code. */
+    counts: z.record(z.string(), z.number()).optional(),
+    /** Absent on a registry written before repositories were listed, and for a project without code. */
+    repos: z.array(RegistryRepoSchema).optional(),
 });
 
 export const ProjectRegistrySchema = z.object({
     generatedAt: z.string().optional(),
+    /** Absent on a registry written before repositories were listed; every field above is optional for that reason. */
+    version: z.number().optional(),
     projects: z.array(RegistryProjectSchema),
 });
 
+export type RegistryRepo = z.infer<typeof RegistryRepoSchema>;
 export type RegistryProject = z.infer<typeof RegistryProjectSchema>;
 export type ProjectRegistry = z.infer<typeof ProjectRegistrySchema>;
+
+/** `workspace/repo-slug`, the form the code documents' `repo` attribute and Bitbucket both use. */
+export function repoFullName(repo: Pick<RegistryRepo, "workspace" | "repoSlug">): string {
+    return `${repo.workspace}/${repo.repoSlug}`;
+}
 
 /**
  * How long a loaded registry is trusted. A terminal run never gets near it; it exists for the
@@ -147,6 +176,11 @@ export class ProjectRegistryService {
     public async getBySlug(slug: string): Promise<RegistryProject | undefined> {
         const { projects } = await this.load();
         return projects.find((project) => project.slug === slug);
+    }
+
+    /** The repositories indexed for a project; empty for a project without code or an older registry. */
+    public async reposOf(slug: string): Promise<RegistryRepo[]> {
+        return (await this.getBySlug(slug))?.repos ?? [];
     }
 
     /**

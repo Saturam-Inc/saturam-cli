@@ -1,4 +1,7 @@
-import { BedrockKnowledgeBaseService } from "../../../../src/integrations/aws/services/bedrock-knowledge-base.service";
+import {
+    BedrockKnowledgeBaseService,
+    buildRetrievalFilter,
+} from "../../../../src/integrations/aws/services/bedrock-knowledge-base.service";
 import { ConfigService } from "../../../../src/services/config-service";
 
 const mockSend = jest.fn();
@@ -84,6 +87,82 @@ describe("BedrockKnowledgeBaseService", () => {
                 }),
             }),
         );
+    });
+
+    it("sends no retrieval configuration at all when nothing narrows the search", async () => {
+        mockSend.mockResolvedValueOnce({ retrievalResults: [] });
+
+        await service.retrieve("anything");
+
+        expect(mockSend).toHaveBeenCalledWith(
+            expect.objectContaining({ input: expect.objectContaining({ retrievalConfiguration: undefined }) }),
+        );
+    });
+
+    it("ANDs several filters, so code can be searched within one project and repository", async () => {
+        mockSend.mockResolvedValueOnce({ retrievalResults: [] });
+
+        await service.retrieve("nightly job", { project: "orion", category: "bitbucket", repo: "acme/orion-core" });
+
+        expect(mockSend).toHaveBeenCalledWith(
+            expect.objectContaining({
+                input: expect.objectContaining({
+                    retrievalConfiguration: {
+                        vectorSearchConfiguration: {
+                            numberOfResults: undefined,
+                            overrideSearchType: undefined,
+                            filter: {
+                                andAll: [
+                                    { equals: { key: "project", value: "orion" } },
+                                    { equals: { key: "category", value: "bitbucket" } },
+                                    { equals: { key: "repo", value: "acme/orion-core" } },
+                                ],
+                            },
+                        },
+                    },
+                }),
+            }),
+        );
+    });
+
+    it("passes the configured search type through, for a vector store that supports it", async () => {
+        (mockConfig.getBedrockKnowledgeBaseConfig as jest.Mock).mockResolvedValue({
+            knowledgeBaseId: "KB123",
+            region: "ap-south-1",
+            searchType: "HYBRID",
+        });
+        mockSend.mockResolvedValueOnce({ retrievalResults: [] });
+
+        await service.retrieve("nightly job");
+
+        expect(mockSend).toHaveBeenCalledWith(
+            expect.objectContaining({
+                input: expect.objectContaining({
+                    retrievalConfiguration: {
+                        vectorSearchConfiguration: expect.objectContaining({ overrideSearchType: "HYBRID" }),
+                    },
+                }),
+            }),
+        );
+    });
+
+    describe("buildRetrievalFilter", () => {
+        it("is undefined when nothing narrows the search", () => {
+            expect(buildRetrievalFilter({})).toBeUndefined();
+        });
+
+        it("sends one condition bare, since andAll needs at least two", () => {
+            expect(buildRetrievalFilter({ project: "orion" })).toEqual({ equals: { key: "project", value: "orion" } });
+        });
+
+        it("narrows to prose with a not-equals on the code category", () => {
+            expect(buildRetrievalFilter({ project: "orion", excludeCategory: "bitbucket" })).toEqual({
+                andAll: [
+                    { equals: { key: "project", value: "orion" } },
+                    { notEquals: { key: "category", value: "bitbucket" } },
+                ],
+            });
+        });
     });
 
     it("rebuilds the client when the knowledge base's region changes between calls", async () => {

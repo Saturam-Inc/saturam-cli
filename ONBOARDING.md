@@ -7,7 +7,7 @@ queries is produced.
 > files, normalizing them to Markdown, and uploading them to S3 for Bedrock to ingest now runs as
 > a scheduled AWS Lambda off a Google Sheet — see the `onboarding-gsheet-lamba` service in
 > `sat-cli-internal-infra` (`README.md`, `DEPLOY.md`, and `SHEET-COLUMNS.md` for the sheet
-> format). `sat-cli onboard` no longer syncs anything; it is now purely the query side.
+> format). `sat-cli lumos` no longer syncs anything; it is now purely the query side.
 
 ---
 
@@ -130,38 +130,52 @@ Both modes read the corpus the Lambda indexed; neither fetches from Confluence, 
 Use the AWS credentials and Bedrock Knowledge Base configured by `sat-cli init` to run the equivalent of the AWS console's **Standard retrieval only** mode directly in the terminal:
 
 ```bash
-sat-cli onboard --knowledge-base
-sat-cli onboard --knowledge-base --project "Saturam"
+sat-cli lumos --knowledge-base
+sat-cli lumos --knowledge-base --project "Saturam"
 ```
 
 Enter questions interactively to see ranked matching chunks with their relevance scores, source locations, and metadata. This command calls Bedrock's `Retrieve` API and does not generate an AI answer. Enter a blank question, type `exit`, `quit`, or `:q`, or press Ctrl+C to stop.
 
-#### Asking questions (`sat-cli onboard`)
+#### Asking questions (`sat-cli lumos`)
 
-`--knowledge-base` shows you the raw retrieved chunks. `sat-cli onboard` on its own answers the question the way a senior engineer would explain it to someone who just joined:
+`--knowledge-base` shows you the raw retrieved chunks. `sat-cli lumos` on its own answers the question the way a senior engineer would explain it to someone who just joined:
 
 ```bash
-sat-cli onboard
-sat-cli onboard --new-session
+sat-cli lumos
+sat-cli lumos --new-session
 ```
 
-There is no `--project` flag here — the project is determined per question. `--project` still applies to `--knowledge-base`, which is a raw retrieval tool.
+There is no `--project` flag here — the project is determined per question. `--project`, `--kind docs|code|all` and `--repo workspace/repo-slug` still apply to `--knowledge-base`, which is a raw retrieval tool.
 
 ##### The answering flow
 
-Each question goes to one mentor agent (`MentorAgentService`), wired by `AnswerFlowService`. There is no fixed classify → route → retrieve → write pipeline: the agent is given three tools and decides which a question needs.
+Each question goes to one mentor agent (`MentorAgentService`), wired by `AnswerFlowService`. There is no fixed classify → route → retrieve → write pipeline: the agent is given a small set of tools and decides which a question needs.
 
-| Tool                   | What the agent uses it for                                                                                    |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `search_documentation` | Retrieves passages, broadly or narrowed to one project; called again with different wording when results miss |
-| `list_projects`        | Says what is indexed, and the exact slug for a project the user named                                         |
-| `recall_conversation`  | Reaches turns older than the verbatim window, including ones from earlier sessions                            |
+| Tool                   | What the agent uses it for                                                                                                                                                                                                                                                                                                                                                                                          |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `search_documentation` | Retrieves passages, broadly or narrowed to one project, to written documentation or to source code (`kind`), or to one repository (`repo`); called again with different wording when results miss                                                                                                                                                                                                                   |
+| `read_document`        | Reads a document or source file whole from S3, by the `document:` id a search result shows or as `workspace/repo:path`, with line numbers and line ranges for code; a search result is a slice, and a slice of code rarely holds the whole function                                                                                                                                                                 |
+| `open_guide`           | Opens one of a project's onboarding guides by name, whole — architecture, pipelines, configuration, making-changes, change-impact-map, open-questions and the rest of the numbered set under `docs/onboarding/` — from the repository index, or by title for a set kept in Drive; with no topic it lists the guides the project has. Guides have their own small allowance and do not count against the read budget |
+| `browse_repository`    | Lists a project's repositories, or one directory of one repository, from the code index the pipeline writes under the state prefix; every path it returns is real and readable                                                                                                                                                                                                                                      |
+| `find_symbol`          | Where a function, class, method, constant, table or resource is defined, from the symbol index the pipeline builds per repository: path, line range, signature, docstring; `Class.method` finds a method                                                                                                                                                                                                            |
+| `find_references`      | Every indexed file that uses a name, with line numbers, plus its definitions and the files that import a module of that name — what a change touches, enumerated rather than guessed                                                                                                                                                                                                                                |
+| `begin_change_plan`    | Declares that a change is being planned: records the goal for the conversation, widens the round budget, and returns the checklist (locate, trace the impact, order the steps, verify, open questions)                                                                                                                                                                                                              |
+| `begin_walkthrough`    | Declares that a mechanism is being explained end to end: records the subject, widens the round budget, and returns the method (boundaries, entry points and triggers, the path hop by hop, where it runs, design decisions and trade-offs, what breaks, open questions)                                                                                                                                             |
+| `list_projects`        | Says what is indexed — projects, their document counts per source and their repositories — and the exact slug for a project the user named                                                                                                                                                                                                                                                                          |
+| `recall_conversation`  | Reaches turns older than the verbatim window, including ones from earlier sessions                                                                                                                                                                                                                                                                                                                                  |
+| `note_findings`        | The agent's working notes: what it has established and where from, what is still missing, what it will do next. Nothing reaches the user; the notes keep a long investigation straight, go into the forced final answer when the round budget runs out, and are returned with the answer for replays and the eval                                                                                                   |
 
-The agent searches until it can answer, within six tool rounds. A model without tool calling gets one search on the question and a single prompt instead.
+The agent searches, reads and browses until it can answer, within ten tool rounds — sixteen once it has declared a change plan or a walkthrough — and six reads of about 60 KB each, plus four guides. A model without tool calling gets one search on the question and a single prompt instead.
+
+**Explaining a system.** A question that asks how something works end to end, how it is put together, how data or a request moves through it, or for an architecture overview gets a walkthrough. The prompt has the agent call `begin_walkthrough` first, then establish the boundaries (the architecture and overview guides, through `open_guide`, when the project has them), find the entry points and what triggers them, follow the path through the code hop by hop with `find_symbol`, `find_references` and `read_document`, and note where it runs, what it depends on, why it is built this way and what tends to break. The answer is written in the order the data moves, naming the file and the function at each hop, with a short text diagram when three or more components talk, the design decisions and their trade-offs, and the documents' intent separated from what the code does only where the two differ.
+
+**Planning a change.** A question that asks how to change, add, move or remove something gets a plan, not an explanation. The prompt has the agent call `begin_change_plan` first, then locate the thing (`find_symbol` for its definitions, `find_references` for everything that uses it, `read_document` around the hits), trace what the change touches (tests, documents, jobs, data, configuration — and the project's change-impact map or making-changes recipe first, when it has one), and only then write: numbered steps that each name the exact file, key or table and are verifiable on their own, with the impact above them and verification, failure modes, rollback and who to involve below. The goal becomes the conversation's learner goal, so later answers are pitched to it, and the follow-up menu after a plan offers the steps that carry it out — the tests for a step, the file to open first — rather than the next topic. The symbol index behind the two lookups is `code-index/<project>/<repo>.symbols.json` under the state prefix, written by the pipeline from the code documents with tree-sitter grammars for Python, JavaScript, TypeScript, shell, JSON and YAML and patterns for SQL, Terraform and Dockerfiles.
+
+**Code beside documentation.** Since the pipeline indexes source code from Bitbucket under `<project>/bitbucket/<repo>/`, the corpus holds two kinds of material, and the prompt tells the agent to treat them as such: search them apart when a question is clearly about one, read a file around a code hit before explaining it, browse rather than guess a path, and when the two disagree, take the documentation as the intent and the code as what runs today. Reading and browsing go to S3 directly — the documents under the content prefix and the pipeline's `code-index/` state files — never to Bitbucket, so the Slack worker needs only `s3:GetObject` on those and nothing can reach a repository at query time.
 
 **Project attribution.** The project shown above an answer is read off the retrieved chunks' `project` metadata, not decided before searching. When the chunks come from more than one project, the answer is shown without a project label. You are never asked to choose a project.
 
-**Checks on the answer.** Two guards run in code on whatever the model wrote. Any file, path, script or table the answer names that appears in neither the sources nor the recent conversation triggers one revision, and anything shaped like a credential is redacted.
+**Checks on the answer.** Before the answer leaves the agent, any file, path, script or table it named that nothing it retrieved supports is sent back to it once, with its tools still attached, to verify or remove; the agent can look a name up where a blind revision could only guess. Then two guards run in code on whatever the model wrote. Any file, path, script or table the answer names that appears in neither the sources nor the recent conversation triggers one revision, and anything shaped like a credential is redacted. A name the agent met by browsing a repository or reading a file whole counts as support, the same as a retrieved passage: the agent reports every such name alongside its answer, so a correct path taken from a directory listing is not revised away.
 
 **Follow-ups.** Each suggestion is drawn from one of the documents the answer retrieved and must cite it. One that cites nothing, or whose best matches in the Knowledge Base are not among those documents, is dropped before it is shown — a suggestion the corpus cannot answer wastes a turn. An answer that retrieved nothing offers none. Select one to continue, or choose "Let me put it another way" to type your own.
 

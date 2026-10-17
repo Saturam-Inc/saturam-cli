@@ -6,7 +6,14 @@ import { getMentorAgentMessages } from "../../../prompts/mentor-agent.prompt";
 import { LlmService } from "../../llm-service";
 import { ChatTurn, SessionDigest } from "../chat-session.model";
 import { ProjectRegistryService } from "../project-registry.service";
-import { KNOWLEDGE_TOOL_DEFINITIONS, KnowledgeToolExecutor, KnowledgeToolFactory, ToolCall } from "./knowledge-tools";
+import { findUnsupportedIdentifiers } from "../unsupported-identifiers";
+import {
+    Finding,
+    KNOWLEDGE_TOOL_DEFINITIONS,
+    KnowledgeToolExecutor,
+    KnowledgeToolFactory,
+    ToolCall,
+} from "./knowledge-tools";
 
 const logger = getLogger("MentorAgent");
 
@@ -20,9 +27,36 @@ const TEMPERATURE = 0.3;
 /**
  * Ceiling on tool-calling rounds. Not a budget the agent is expected to spend — most questions
  * settle in one or two searches. It exists so a model that keeps re-searching instead of
- * answering cannot hang the terminal.
+ * answering cannot hang the terminal. Raised from six when reading and browsing arrived: a
+ * question about code is often search, browse, read, read, answer, and six left no room for a
+ * second search when the first one missed.
  */
-const MAX_TOOL_ROUNDS = 6;
+export const MAX_TOOL_ROUNDS = 10;
+
+/**
+ * The ceiling once the agent has declared, through begin_change_plan or begin_walkthrough, that
+ * it is planning a change or explaining a mechanism end to end. Both are locate, trace, read the
+ * files, check the documents, then write — more rounds than a plain question needs, and worth
+ * them, because a plan that stopped tracing early misses what the change breaks, and a walkthrough
+ * that stopped early explains the first half of the path.
+ */
+export const MAX_PLAN_TOOL_ROUNDS = 16;
+
+/**
+ * What the agent is told when its draft names something nothing it retrieved supports. It still
+ * has its tools at this point, which the flow's revision step does not, so it can look the name up
+ * rather than have a reviser guess whether to keep it.
+ */
+function verificationRequest(names: string[]): string {
+    const list = names.map((name) => `\`${name}\``).join(", ");
+    return `Before this goes to the reader: nothing you retrieved supports ${names.length === 1 ? "this name" : "these names"}: ${list}. For each one, verify it with a tool (search for it, find_symbol, open the file it should be in) or take it out of the answer. Then give the final answer in full, exactly as you would have sent it.`;
+}
+
+function renderFinding(note: Finding): string {
+    const missing = note.missing ? ` · missing: ${note.missing}` : "";
+    const next = note.next ? ` · next: ${note.next}` : "";
+    return `- ${note.established}${missing}${next}`;
+}
 
 /** A model exposing LangChain's tool binding. SelfHostedChatModel is a bare `invoke`, and some
  *  Ollama builds are served by backends without tool support, so it is detected, not assumed. */
@@ -40,6 +74,17 @@ export interface MentorAnswer {
     chunks: RetrievedChunk[];
     /** The project the evidence settled on, if the chunks agree on one. */
     projectSlug?: string;
+    /**
+     * Names the agent saw by listing or reading rather than in a retrieved passage — a path from
+     * a directory listing, a document it read whole. The identifier guard counts them as support.
+     */
+    knownIdentifiers: string[];
+    /** The change the agent declared it was planning, when the question asked for one. */
+    planGoal?: string;
+    /** The mechanism the agent declared it was explaining end to end, when the question asked for one. */
+    walkthroughSubject?: string;
+    /** The agent's working notes, for replays and the eval; nothing downstream depends on them. */
+    findings: Finding[];
 }
 
 /**
@@ -84,7 +129,10 @@ export class MentorAgentService {
             carriedTurns: params.carriedTurns,
         });
 
-        for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
+        // Re-read each round: begin_change_plan or begin_walkthrough, called mid-loop, widens the budget from then on.
+        const limit = () => (executor.deepDive ? MAX_PLAN_TOOL_ROUNDS : MAX_TOOL_ROUNDS);
+        let verified = false;
+        for (let round = 0; round < limit(); round += 1) {
             const response = await bound.invoke(messages);
             const calls = this.toolCallsOf(response);
 
@@ -93,7 +141,22 @@ export class MentorAgentService {
                 // An empty final message with no tool calls means the model has nothing more to
                 // say and never said anything. One more round would only repeat it.
                 if (answer) {
-                    logger.debug(`Answered after ${executor.searchCount} search(es), ${round + 1} round(s).`);
+                    // One chance to check its own claims with the tools still attached, before the
+                    // flow's guard revises blind. Only the names the evidence does not hold go back.
+                    if (!verified && round + 1 < limit()) {
+                        const unsupported = this.unsupportedIn(answer, executor, params.recentTurns);
+                        if (unsupported.length > 0) {
+                            verified = true;
+                            logger.debug(
+                                `Draft named ${unsupported.length} unsupported identifier(s) (${unsupported.join(", ")}) — one verification round.`,
+                            );
+                            messages.push(response, new HumanMessage(verificationRequest(unsupported)));
+                            continue;
+                        }
+                    }
+                    logger.debug(
+                        `Answered after ${executor.searchCount} search(es), ${executor.readCount} read(s), ${round + 1} round(s).`,
+                    );
                     return this.finish(answer, executor);
                 }
                 break;
@@ -112,12 +175,18 @@ export class MentorAgentService {
 
         // Out of rounds, or nothing written. Ask once for the answer with no tools attached, so
         // the model has to write from what it already gathered rather than search again.
-        logger.debug(`Tool loop did not settle in ${MAX_TOOL_ROUNDS} round(s) — asking for a final answer.`);
+        logger.debug(`Tool loop did not settle in ${limit()} round(s) — asking for a final answer.`);
+        // The notes are what the agent itself said it had established; they are the best summary of
+        // a long investigation that ran out of rounds.
+        const notes =
+            executor.findings.length > 0
+                ? `\n\nYour notes so far:\n${executor.findings.map(renderFinding).join("\n")}`
+                : "";
         const forced = await this.llm.prompt(
             [
                 ...messages,
                 new HumanMessage(
-                    "Answer now, using only what you have already retrieved. If it does not cover the question, say you do not have that information and who they could ask instead.",
+                    `Answer now, using only what you have already retrieved. If it does not cover the question, say you do not have that information and who they could ask instead.${notes}`,
                 ),
             ],
             undefined,
@@ -156,7 +225,28 @@ export class MentorAgentService {
     }
 
     private async finish(answer: string, executor: KnowledgeToolExecutor): Promise<MentorAnswer> {
-        return { answer, chunks: executor.chunks, projectSlug: await this.dominantProject(executor.chunks) };
+        return {
+            answer,
+            chunks: executor.chunks,
+            projectSlug: await this.dominantProject(executor.chunks),
+            knownIdentifiers: executor.knownIdentifiers,
+            planGoal: executor.changePlan?.goal,
+            walkthroughSubject: executor.walkthrough?.subject,
+            findings: executor.findings,
+        };
+    }
+
+    /** The same check the flow runs afterwards, so what the agent is asked to verify is exactly what would be revised. */
+    private unsupportedIn(answer: string, executor: KnowledgeToolExecutor, recentTurns: ChatTurn[]): string[] {
+        const known = executor.knownIdentifiers;
+        if (executor.chunks.length === 0 && known.length === 0) return [];
+        const sources = executor.chunks.map((chunk) => chunk.content).join("\n");
+        return findUnsupportedIdentifiers(
+            answer,
+            sources,
+            recentTurns.map((turn) => turn.answer),
+            known,
+        );
     }
 
     /**

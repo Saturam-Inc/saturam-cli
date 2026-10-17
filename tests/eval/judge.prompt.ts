@@ -16,6 +16,8 @@ export const RUBRIC_CRITERIA = [
     "synthesizes",
     "admitsGaps",
     "avoidsTemplate",
+    "actionablePlan",
+    "impactTraced",
 ] as const;
 
 export type RubricCriterion = (typeof RUBRIC_CRITERIA)[number];
@@ -34,6 +36,8 @@ Score each criterion 0, 1 or 2. 0 = fails, 1 = partial, 2 = fully meets.
 - synthesizes: reads as one coherent explanation rather than a walk through separate document excerpts. Score 0 if it is structured per-source.
 - admitsGaps: where the context does not cover part of the question, the answer says so plainly, in its own voice ("I don't have that information") and says who the reader could ask — a manager, team lead, or owning team. Score 0 if a gap is filled with plausible general knowledge presented as fact about this system, or if the answer quietly ignores the unanswerable part. Score 1 if the gap is only reported as a shortcoming of the documents ("the docs don't name an owner") with nowhere else to turn. Score 2 if the context fully covered the question and there was no gap to admit, or if the answer owns the gap, points at a person, and still delivers what it can.
 - avoidsTemplate: the shape follows the question. Score 0 for a recycled scaffold — generic headings such as "Direct Answer", "Why It Exists", "How It Works", "Where to Find It", "What Tends to Trip People Up" — which signal a form being filled in rather than a question being answered. Headings named after the actual subject ("How the Sunday pipeline runs") score 2, as does a short answer with no headings at all.
+- actionablePlan: only when the question asks how to change, add or remove something. Score 2 if the answer is ordered steps that each name the exact file, setting, table or job to touch and say how to verify the result, with rollback or failure modes noted. Score 1 if the steps are there but vague about where. Score 0 if it explains the thing instead of saying what to do. Score 2 when the question did not ask for a change.
+- impactTraced: only when the question asks how to change something. Score 2 if the answer names what else the change touches — callers, tests, documents, jobs, data, configuration — drawn from the context, and lists what it could not establish as open questions. Score 1 if the impact is partial or generic. Score 0 if the change is presented as isolated when the context shows it is not. Score 2 when the question did not ask for a change.
 
 Judge only what is present. Do not reward length. An answer that correctly says the context does not cover something scores well on avoidsInvention and admitsGaps, not badly — refusing to invent is the behaviour being rewarded, not a shortfall.`,
     );
@@ -54,5 +58,7 @@ export const JUDGE_SHAPE_HINT = `{
   "synthesizes": 0 | 1 | 2,
   "admitsGaps": 0 | 1 | 2,
   "avoidsTemplate": 0 | 1 | 2,
+  "actionablePlan": 0 | 1 | 2,
+  "impactTraced": 0 | 1 | 2,
   "notes": string
 }`;

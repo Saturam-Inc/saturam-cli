@@ -5,21 +5,36 @@ import { markedTerminal } from "marked-terminal";
 import * as colors from "yoctocolors-cjs";
 import { Service } from "typedi";
 import { z } from "zod";
-import { KnowledgeBaseChatService } from "../services/knowledge/knowledge-base-chat.service";
+import { KnowledgeBaseChatService, SearchScope } from "../services/knowledge/knowledge-base-chat.service";
 import { AnswerFlowService } from "../services/knowledge/answer-flow.service";
 import { FollowUp } from "../services/knowledge/agents/follow-up-generator.agent";
+import { DOCUMENT_KINDS, DocumentKind } from "../services/knowledge/knowledge-source.model";
 import { ConfigService } from "../services/config-service";
+import { explainBedrockModelError } from "../services/llm-service";
 import { stripInlineCitations } from "../utils/citations.util";
 import { slugify } from "../utils/slug.util";
 import { TypedCommand, TypedInputs } from "./base";
+import { renderLumosBanner } from "./lumos-banner";
 
-const logger = getLogger("OnboardCommand");
+const logger = getLogger("LumosCommand");
 
 const INPUTS = [
     {
         name: "project",
         description:
             'Only with --knowledge-base: limit retrieval to documents indexed for this project (for example, --project "Saturam"). The chat determines the project automatically per question and does not accept this.',
+        schema: z.string().optional(),
+    },
+    {
+        name: "kind",
+        description:
+            "Only with --knowledge-base: what to retrieve from — 'docs' for written documentation, 'code' for indexed source files, 'all' (default) for both.",
+        schema: z.enum(DOCUMENT_KINDS as [DocumentKind, ...DocumentKind[]]).optional(),
+    },
+    {
+        name: "repo",
+        description:
+            "Only with --knowledge-base: limit retrieval to one repository's source files, as workspace/repo-slug (implies --kind code).",
         schema: z.string().optional(),
     },
     {
@@ -44,16 +59,18 @@ const INPUTS = [
  * on a schedule and off a Google Sheet, so it no longer needs a developer to run it by hand.
  * What is left here is the half a developer actually invokes: asking the indexed corpus questions.
  *
- * Bare `sat-cli onboard` is the chat. `--knowledge-base` swaps it for the raw retrieval inspector,
+ * Bare `sat-cli lumos` is the chat. `--knowledge-base` swaps it for the raw retrieval inspector,
  * which is a debugging tool rather than a way to get answers.
  */
 @Service()
-export class OnboardCommand implements TypedCommand<typeof INPUTS> {
-    readonly name = "onboard";
+export class LumosCommand implements TypedCommand<typeof INPUTS> {
+    readonly name = "lumos";
     readonly description =
         "Chat with a mentor about your projects, grounded in the indexed onboarding documentation (needs an AI/LLM provider and a Bedrock Knowledge Base from 'sat-cli init'); --knowledge-base shows raw retrieval results instead";
     readonly category = "common" as const;
-    readonly aliases = ["ob", "onboarding"];
+    readonly aliases: string[] = [];
+    /** Renamed from `onboard` in October 2026; these keep working, with a reminder of the new name. */
+    readonly formerNames = ["onboard", "ob", "onboarding"];
     readonly inputs = INPUTS;
 
     constructor(
@@ -64,15 +81,21 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
 
     public async execute(inputs: Partial<TypedInputs<typeof INPUTS>>): Promise<void> {
         if (inputs["knowledge-base"]) {
-            await this.runKnowledgeBaseSearch(inputs.project);
+            await this.runKnowledgeBaseSearch({
+                project: this.normalizeProjectName(inputs.project),
+                kind: inputs.kind,
+                repo: inputs.repo?.trim() || undefined,
+            });
             return;
         }
 
-        // Loud rather than ignored: someone passing --project wants answers scoped to a project,
-        // which the chat does not offer, and a warning would scroll past before the first prompt.
-        if (inputs.project) {
+        // Loud rather than ignored: someone passing a retrieval filter wants answers scoped by
+        // it, which the chat does not offer, and a warning would scroll past before the first prompt.
+        const scoped = (["project", "kind", "repo"] as const).filter((flag) => inputs[flag]);
+        if (scoped.length > 0) {
+            const flags = scoped.map((flag) => `--${flag}`).join(", ");
             throw new Error(
-                "--project applies only to --knowledge-base. The chat determines the project automatically per question, so run `sat-cli onboard` without it.",
+                `${flags} applies only to --knowledge-base. The chat determines the project automatically per question and searches documentation and code as the question needs, so run \`sat-cli lumos\` without it.`,
             );
         }
 
@@ -112,7 +135,7 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
             throw err;
         }
         const trimmed = typeof question === "string" ? question.trim() : "";
-        if (!trimmed || OnboardCommand.KB_EXIT_COMMANDS.has(trimmed.toLowerCase())) {
+        if (!trimmed || LumosCommand.KB_EXIT_COMMANDS.has(trimmed.toLowerCase())) {
             return null;
         }
         return trimmed;
@@ -125,7 +148,7 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
 
         let frameIndex = 0;
         const render = () => {
-            const frame = OnboardCommand.LOADING_FRAMES[frameIndex % OnboardCommand.LOADING_FRAMES.length];
+            const frame = LumosCommand.LOADING_FRAMES[frameIndex % LumosCommand.LOADING_FRAMES.length];
             process.stderr.write(`\r${frame} ${message}...`);
             frameIndex += 1;
         };
@@ -145,10 +168,11 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
      * Retrieve (no generation — equivalent to the AWS console's "Retrieve only" test mode),
      * and prints the ranked chunks. Exits on blank input, "exit"/"quit", or Ctrl+C.
      */
-    private async runKnowledgeBaseSearch(projectName?: string): Promise<void> {
-        const project = this.normalizeProjectName(projectName);
+    private async runKnowledgeBaseSearch(scope: SearchScope): Promise<void> {
         logger.info("Bedrock Knowledge Base search (Retrieve only — no answer generation).");
-        if (project) logger.info(`Project filter: ${project}`);
+        if (scope.project) logger.info(`Project filter: ${scope.project}`);
+        if (scope.repo) logger.info(`Repository filter: ${scope.repo} (code only)`);
+        else if (scope.kind && scope.kind !== "all") logger.info(`Kind filter: ${scope.kind}`);
         logger.info("Type a question and press Enter. Type 'exit' or leave blank to quit.\n");
 
         for (;;) {
@@ -160,7 +184,7 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
 
             try {
                 const results = await this.withLoading("Retrieving matching knowledge base chunks", () =>
-                    this.chatService.search(question, { project }),
+                    this.chatService.search(question, scope),
                 );
                 if (results.length === 0) {
                     logger.info("No matching results found.\n");
@@ -243,6 +267,12 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
         logger.info("");
     }
 
+    /** The welcome, on a terminal; a pipe or a log gets the plain intro lines only. */
+    private printBanner(): void {
+        if (!process.stdout.isTTY) return;
+        for (const line of renderLumosBanner(process.stdout.columns || 80)) logger.info(line);
+    }
+
     /**
      * Interactive mentoring chat.
      *
@@ -251,11 +281,12 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
      * project is read off the retrieved evidence, never asked for.
      */
     private async runChatSearch(newSession?: boolean): Promise<void> {
+        this.printBanner();
         const hasLlm = await this.configService.hasAnyLLMProviderConfigured();
         if (!hasLlm) {
             logger.warn("No AI/LLM provider is configured yet.");
             logger.info(
-                "Run 'sat-cli init' and select 'AI / LLM providers' to configure one (Anthropic, OpenAI, Gemini, Bedrock, etc.), then try 'sat-cli onboard' again.",
+                "Run 'sat-cli init' and select 'AI / LLM providers' to configure one (Anthropic, OpenAI, Gemini, Bedrock, etc.), then try 'sat-cli lumos' again.",
             );
             return;
         }
@@ -265,8 +296,15 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
             logger.info("Started a new conversation.");
         }
 
-        logger.info("Ask about any indexed project, or a general engineering question.");
-        logger.info("Type 'exit' or leave blank to quit.\n");
+        logger.info(
+            "Ask how a system works, where something lives, what a change would touch, or any engineering question.",
+        );
+        logger.info(
+            colors.dim(
+                "Answers are grounded in your indexed documentation and source code, with their sources listed.",
+            ),
+        );
+        logger.info(colors.dim("Type 'exit' or leave the line blank to quit.\n"));
 
         // Set when the user picks a suggested follow-up, so the next iteration skips the prompt.
         let queuedQuestion: string | undefined;
@@ -293,7 +331,10 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
                 }
                 queuedQuestion = next;
             } catch (err) {
-                logger.error(`Chat failed: ${(err as Error).message}\n`);
+                logger.error(`Chat failed: ${(err as Error).message}`);
+                const advice = explainBedrockModelError(err);
+                if (advice) logger.info(advice);
+                logger.info("");
             }
         }
     }

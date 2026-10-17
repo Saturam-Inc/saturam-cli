@@ -80,6 +80,8 @@ export function getFollowUpMessages(params: {
     chunks: RetrievedChunk[];
     digest?: SessionDigest;
     projectDisplayName?: string;
+    /** When the answer is a change plan, the menu helps carry the plan out instead of exploring around it. */
+    planGoal?: string;
 }): BaseMessage[] {
     const alreadyAsked = params.digest?.questionsAsked.length
         ? `\n\nAlready asked in this conversation — do not suggest these or near-duplicates:\n${params.digest.questionsAsked.map((q) => `- ${q}`).join("\n")}`
@@ -90,12 +92,16 @@ export function getFollowUpMessages(params: {
         ? `\nTheir overall aim: ${params.digest.learnerGoal}. Prefer the path toward it, where the documents cover it.`
         : "";
 
+    const path = params.planGoal
+        ? `The answer is a plan for a change: ${params.planGoal}. Produce up to 3 entries that help carry that plan out or check it, in the order they would be needed: the tests or checks that cover a step, the file to open first, what to verify before the risky step, who to tell. Not a restatement of the plan, and not the next topic to learn. Skip any step the documents do not cover.`
+        : `Produce up to 3, ordered as a path: the natural next step from what was just explained, then one level deeper into the same thing (how it fails, what it depends on, how to work on it safely), then something adjacent the learner will need soon. Skip any step the documents do not cover.`;
+
     const system = new SystemMessage(
         `You are a mentor deciding what to offer next to someone new to the team${scope}, having just answered their question.
 
 What you offer is a short menu of questions the documentation can answer. Each entry is drawn from one of the numbered documents below and cites it as "sourceIndex": the number of the document whose content answers it. An entry no listed document answers costs the learner their next turn to find that out, so leave it out. Fewer entries, or none, is the right result when the documents do not support more.${goal}
 
-Produce up to 3, ordered as a path: the natural next step from what was just explained, then one level deeper into the same thing (how it fails, what it depends on, how to work on it safely), then something adjacent the learner will need soon. Skip any step the documents do not cover.
+${path}
 
 Rules:
 - Draw each entry from what the cited document actually says — not from what a document like it would usually contain, and not from general knowledge.

@@ -1,4 +1,4 @@
-import { S3Service } from "../../../../src/integrations/aws/services/s3.service";
+import { S3ObjectError, S3Service } from "../../../../src/integrations/aws/services/s3.service";
 import { ConfigService } from "../../../../src/services/config-service";
 
 const mockSend = jest.fn();
@@ -104,6 +104,28 @@ describe("S3Service", () => {
         );
     });
 
+    it("listStateObjects lists under the state prefix, scoped to whole path segments", async () => {
+        mockConfig.getS3Config.mockResolvedValue({
+            bucket: "my-bucket",
+            prefix: "onboarding",
+            statePrefix: "onboarding-state",
+            region: "us-east-1",
+        });
+        mockSend.mockResolvedValueOnce({
+            Contents: [{ Key: "onboarding-state/code-index/orion/core.json" }],
+            IsTruncated: false,
+        });
+
+        const keys = await service.listStateObjects("code-index/orion");
+
+        expect(keys).toEqual(["onboarding-state/code-index/orion/core.json"]);
+        expect(mockSend).toHaveBeenCalledWith(
+            expect.objectContaining({
+                input: expect.objectContaining({ Prefix: "onboarding-state/code-index/orion/" }),
+            }),
+        );
+    });
+
     it("listObjects paginates through all pages and returns keys", async () => {
         mockSend
             .mockResolvedValueOnce({
@@ -125,6 +147,19 @@ describe("S3Service", () => {
         await expect(service.getObject("file.md")).rejects.toThrow(
             "Failed to get s3://my-bucket/docs/file.md: Access Denied",
         );
+    });
+
+    it("getObject keeps the SDK's error code and status, since its message alone cannot tell a missing key", async () => {
+        const denied = Object.assign(new Error("Access Denied"), {
+            name: "AccessDenied",
+            $metadata: { httpStatusCode: 403 },
+        });
+        mockSend.mockRejectedValueOnce(denied);
+
+        const failure = await service.getObject("file.md").catch((err: unknown) => err);
+
+        expect(failure).toBeInstanceOf(S3ObjectError);
+        expect(failure).toMatchObject({ code: "AccessDenied", statusCode: 403 });
     });
 
     describe("objectExists", () => {

@@ -92,7 +92,8 @@ const BASE_EXTENSIONS = [
 /** Extensions the documents themselves use, so the check calibrates to the project's own stack. */
 function extensionsIn(text: string): string[] {
     const found = new Set<string>();
-    for (const match of text.matchAll(/\.([a-z][a-z0-9]{0,7})\b/g)) found.add(match[1]);
+    // Not followed by "(": `sunday.at("01:30")` is a method call, and "at" is not a file extension.
+    for (const match of text.matchAll(/\.([a-z][a-z0-9]{0,7})\b(?!\()/g)) found.add(match[1]);
     return [...found];
 }
 
@@ -107,8 +108,12 @@ function fileLikePattern(extensions: Iterable<string>): RegExp {
 /** Looks like an identifier rather than a word: has a separator, a digit, or CamelCase. */
 const LOOKS_LIKE_CODE = /[/._\-\d]|[a-z][A-Z]/;
 
-/** Wildcards, placeholders and templating — never literal names, so never checkable. */
-const NOT_LITERAL = /[*<>{}|$?]|\.\.\./;
+/**
+ * Wildcards, placeholders, templating, calls and quoted literals — never literal names, so never
+ * checkable. A backticked `schedule.every().friday.at("01:30")` is an expression the answer
+ * proposes, not a file the reader will go looking for.
+ */
+const NOT_LITERAL = /[*<>{}|$?()"']|\.\.\./;
 
 const MIN_LENGTH = 4;
 
@@ -129,7 +134,11 @@ export function extractIdentifiers(answer: string, knownExtensions: Iterable<str
     );
 
     for (const match of remaining.matchAll(PATH_LIKE)) found.add(match[0]);
-    for (const match of remaining.matchAll(fileLike)) found.add(match[0]);
+    for (const match of remaining.matchAll(fileLike)) {
+        // `friday.at("01:30")` is a call on an object, not a file called friday.at.
+        if (remaining[(match.index ?? 0) + match[0].length] === "(") continue;
+        found.add(match[0]);
+    }
 
     const cleaned = [...found]
         .map((token) => token.replace(/^[("'`]+|[.,;:!?)"'`]+$/g, ""))
@@ -146,9 +155,16 @@ export function extractIdentifiers(answer: string, knownExtensions: Iterable<str
 /**
  * Identifiers from the answer that neither the sources nor the earlier conversation contain.
  * Earlier answers count as support: a fact established two turns ago is not an invention now.
+ * So do names the agent saw by other means than a retrieved passage — a file it listed while
+ * browsing a repository, a document it read whole — which `knownIdentifiers` carries.
  */
-export function findUnsupportedIdentifiers(answer: string, sources: string, priorAnswers: string[] = []): string[] {
-    const supporting = [sources, ...priorAnswers].join("\n");
+export function findUnsupportedIdentifiers(
+    answer: string,
+    sources: string,
+    priorAnswers: string[] = [],
+    knownIdentifiers: Iterable<string> = [],
+): string[] {
+    const supporting = [sources, ...priorAnswers, ...knownIdentifiers].join("\n");
     const haystack = supporting.toLowerCase();
     if (!haystack.trim()) return [];
 

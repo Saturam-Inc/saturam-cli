@@ -31,6 +31,29 @@ describe("KnowledgeBaseChatService", () => {
             await service.search("question", { project: "saturam" });
             expect(mockKnowledgeBase.retrieve).toHaveBeenCalledWith("question", { project: "saturam" });
         });
+
+        it("maps a kind onto the category filters, and a repository onto code within it", async () => {
+            mockKnowledgeBase.retrieve.mockResolvedValue([]);
+
+            await service.search("question", { kind: "code" });
+            expect(mockKnowledgeBase.retrieve).toHaveBeenLastCalledWith("question", { category: "bitbucket" });
+
+            await service.search("question", { kind: "docs", project: "saturam" });
+            expect(mockKnowledgeBase.retrieve).toHaveBeenLastCalledWith("question", {
+                project: "saturam",
+                excludeCategory: "bitbucket",
+            });
+
+            await service.search("question", { repo: "acme/core" });
+            expect(mockKnowledgeBase.retrieve).toHaveBeenLastCalledWith("question", {
+                repo: "acme/core",
+                category: "bitbucket",
+            });
+
+            // "all" is what no filter means; it must not become a filter of its own.
+            await service.search("question", { kind: "all" });
+            expect(mockKnowledgeBase.retrieve).toHaveBeenLastCalledWith("question");
+        });
     });
 
     describe("ask", () => {

@@ -28,6 +28,11 @@ export type TypedCommand<T extends CommandInputs = any, R = void> = {
     readonly description: string;
     readonly category: "common" | "review" | "cicd";
     readonly aliases: string[];
+    /**
+     * Names the command used to go by. Each still runs it, with a reminder of the current name,
+     * and none is listed in help. A shortcut that is meant to stay goes in `aliases`.
+     */
+    readonly formerNames?: string[];
     readonly inputs: CommandInputs;
     execute: (inputs: TypedInputs<T>) => Promise<R>;
 };

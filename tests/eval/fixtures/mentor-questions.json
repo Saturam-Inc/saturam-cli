@@ -4,7 +4,7 @@
         {
             "id": "mrf-architecture",
             "question": "Ask about MRF architecture",
-            "notes": "Long answer \u2014 should use headings named after the subject."
+            "notes": "Long answer — should use headings named after the subject."
         },
         {
             "id": "mrf-dags",
@@ -14,7 +14,7 @@
         {
             "id": "mrf-focus-short",
             "question": "What is the focus of the mrf project?",
-            "notes": "Short question \u2014 should get a short answer with no headings."
+            "notes": "Short question — should get a short answer with no headings."
         },
         {
             "id": "smile-overview",
@@ -41,7 +41,7 @@
             "id": "mrf-change-impact-pkl-path",
             "question": "What happens if I change the pkl path? What else breaks?",
             "group": "scenario",
-            "notes": "Impact question. pkl_path is defined in two files that must stay in sync (kpi/pkl_path.py and plugins/preparation/pkl_path_loc.py) and the kpi APIs read from it \u2014 the answer must reach the downstream effect, not just the setting."
+            "notes": "Impact question. pkl_path is defined in two files that must stay in sync (kpi/pkl_path.py and plugins/preparation/pkl_path_loc.py) and the kpi APIs read from it — the answer must reach the downstream effect, not just the setting."
         },
         {
             "id": "mrf-change-new-spend-domain",
@@ -84,6 +84,36 @@
             "question": "What is Apache Airflow and how are we using it?",
             "group": "blended",
             "notes": "Service question with both a general and a project-specific half. The project half must mention that Airflow's own scheduler is not what triggers the DAGs here."
+        },
+        {
+            "id": "arch-mrf-end-to-end",
+            "question": "Walk me through how the MRF pipeline works end to end: what triggers it, what each stage reads and writes, and where the results end up.",
+            "group": "architecture",
+            "notes": "Must call begin_walkthrough and open the architecture guide when the project has one. The answer follows the data in order, names the file and function at each hop, names the scheduler daemon as the trigger, and separates the documents' intent from what the code does only where they differ."
+        },
+        {
+            "id": "arch-smile-components",
+            "question": "Explain the architecture of the smile project: the main components, how they talk to each other, and the design decisions behind that shape.",
+            "group": "architecture",
+            "notes": "Architecture overview. Should open 03-architecture and 31-decisions when they exist, show the components and their communication as a short text diagram, and give trade-offs as an engineer would rather than listing document excerpts."
+        },
+        {
+            "id": "plan-change-weekly-schedule",
+            "question": "I need to move the weekly pipeline run from Sunday to Friday. Give me the exact change: which files, what to edit, what else it affects, and how I verify it.",
+            "group": "change-plan",
+            "notes": "Must call begin_change_plan, name the scheduler file rather than the job definition, order the step after the raw-table reset, and list what to verify. Impact should name the documents and the operations window."
+        },
+        {
+            "id": "plan-add-spend-domain",
+            "question": "We want to add a fifth spend domain. Plan the change: the files, tables, jobs and screens involved, in order, and what I should check before each step.",
+            "group": "change-plan",
+            "notes": "A new-feature plan: should find the nearest existing domain and copy its footprint — job definition, transformation module, tables, dashboard screen — and cite the making-changes recipe when the documents have one."
+        },
+        {
+            "id": "plan-rotate-db-credential",
+            "question": "What would it take to rotate the database password? List every place that reads it and the order to change them in.",
+            "group": "change-plan",
+            "notes": "Must use find_references or the configuration document to enumerate readers, never print a value, and say what restarts. Open questions for anything the corpus does not settle."
         }
     ]
 }

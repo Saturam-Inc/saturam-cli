@@ -1,6 +1,7 @@
 import { getLogger } from "log4js";
 import { Service } from "typedi";
 import { ConfigService } from "../../../services/config-service";
+import { RetrievalFilters } from "../../../services/knowledge/knowledge-source.model";
 import { resolveAwsClientConfig } from "../utils/aws-credentials.util";
 
 const logger = getLogger("BedrockKnowledgeBaseService");
@@ -10,6 +11,34 @@ export interface RetrievedChunk {
     score?: number;
     location?: string;
     metadata?: Record<string, unknown>;
+}
+
+export interface RetrieveOptions extends RetrievalFilters {
+    numberOfResults?: number;
+}
+
+/** The Retrieve API's filter grammar, as far as this service composes it. */
+type RetrievalFilter =
+    | { equals: { key: string; value: string } }
+    | { notEquals: { key: string; value: string } }
+    | { andAll: RetrievalFilter[] };
+
+/**
+ * Composes the metadata filter for a retrieval, or undefined when nothing narrows it.
+ *
+ * One condition is sent bare; two or more go under `andAll`, which the API refuses with fewer
+ * than two members — the reason this is not simply always a conjunction.
+ */
+export function buildRetrievalFilter(filters: RetrievalFilters): RetrievalFilter | undefined {
+    const conditions: RetrievalFilter[] = [];
+    if (filters.project) conditions.push({ equals: { key: "project", value: filters.project } });
+    if (filters.category) conditions.push({ equals: { key: "category", value: filters.category } });
+    if (filters.excludeCategory) conditions.push({ notEquals: { key: "category", value: filters.excludeCategory } });
+    if (filters.repo) conditions.push({ equals: { key: "repo", value: filters.repo } });
+
+    if (conditions.length === 0) return undefined;
+    if (conditions.length === 1) return conditions[0];
+    return { andAll: conditions };
 }
 
 @Service()
@@ -40,14 +69,19 @@ export class BedrockKnowledgeBaseService {
 
     /**
      * Retrieves the most relevant document chunks from the configured Bedrock Knowledge Base for a query.
+     *
+     * The filters are exact matches on the metadata sidecars the ingestion pipeline writes, ANDed
+     * together. The search type is a deployment setting rather than an argument: hybrid search
+     * needs a vector store that supports it, and sending it to one that does not fails every
+     * query, so it is only ever set by whoever configured the store.
      */
-    public async retrieve(
-        query: string,
-        options?: { numberOfResults?: number; project?: string },
-    ): Promise<RetrievedChunk[]> {
+    public async retrieve(query: string, options?: RetrieveOptions): Promise<RetrievedChunk[]> {
         const { RetrieveCommand } = await import("@aws-sdk/client-bedrock-agent-runtime");
-        const { knowledgeBaseId, region } = await this.config.getBedrockKnowledgeBaseConfig();
+        const { knowledgeBaseId, region, searchType } = await this.config.getBedrockKnowledgeBaseConfig();
         const client = await this.getClient(region);
+
+        const filter = options ? buildRetrievalFilter(options) : undefined;
+        const configured = options?.numberOfResults !== undefined || filter !== undefined || searchType !== undefined;
 
         logger.debug(`Retrieving from Bedrock Knowledge Base ${knowledgeBaseId}: "${query}"`);
 
@@ -56,17 +90,15 @@ export class BedrockKnowledgeBaseService {
                 new RetrieveCommand({
                     knowledgeBaseId,
                     retrievalQuery: { text: query },
-                    retrievalConfiguration:
-                        options?.numberOfResults || options?.project
-                            ? {
-                                  vectorSearchConfiguration: {
-                                      numberOfResults: options.numberOfResults,
-                                      filter: options.project
-                                          ? { equals: { key: "project", value: options.project } }
-                                          : undefined,
-                                  },
-                              }
-                            : undefined,
+                    retrievalConfiguration: configured
+                        ? {
+                              vectorSearchConfiguration: {
+                                  numberOfResults: options?.numberOfResults,
+                                  filter,
+                                  overrideSearchType: searchType,
+                              },
+                          }
+                        : undefined,
                 }),
             );
 

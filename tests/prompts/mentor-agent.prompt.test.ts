@@ -36,6 +36,104 @@ describe("mentor agent prompt", () => {
         });
     });
 
+    describe("planning a change", () => {
+        it("treats 'show me how to change it' as a plan question, and changes one mechanism only", () => {
+            const text = systemTextOf();
+            expect(text).toContain('"show me how to change it"');
+            expect(text).toContain("do not also give it a schedule of its own");
+            expect(text).toContain("A change goes to the mechanism that does the thing today, and only that one.");
+            expect(text).toContain("what must run before it and what runs after it");
+            expect(text).toContain("stays consistent with what this conversation already established");
+        });
+
+        it("tells the agent that tool results are private, so what is asked for must be shown", () => {
+            const text = systemTextOf();
+            expect(text).toContain("What a tool returns is visible only to you");
+            expect(text).toContain('never refer to a tool result as "above"');
+        });
+
+        it("has the agent declare the plan first, then locate, trace and only then write", () => {
+            const text = systemTextOf();
+            expect(text).toContain("call begin_change_plan first");
+            expect(text).toContain("find_symbol for where it is defined, find_references for everything that uses it");
+            expect(text).toContain("change-impact-map and making-changes guides first, through open_guide");
+        });
+
+        it("asks for the one shape a plan needs: numbered, verifiable steps with impact and verification", () => {
+            const text = systemTextOf();
+            expect(text).toContain("The plan is numbered steps");
+            expect(text).toContain("a plan without steps is not a plan");
+            expect(text).toContain("open questions in your own voice");
+        });
+
+        it("plans something new from the footprint of the nearest existing thing", () => {
+            expect(systemTextOf()).toContain(
+                "find the nearest existing thing of the same kind and plan from its footprint",
+            );
+        });
+
+        it("says none of this when the provider cannot call tools", () => {
+            expect(systemTextOf({ preGatheredContext: "(nothing retrieved)" })).not.toContain("begin_change_plan");
+        });
+    });
+
+    describe("explaining how something works", () => {
+        it("has the agent declare the walkthrough first, then follow the path hop by hop", () => {
+            const text = systemTextOf();
+            expect(text).toContain("call begin_walkthrough first");
+            expect(text).toContain("follow the path through the code hop by hop, reading each file you will describe");
+            expect(text).toContain("Write in the order the data moves");
+            expect(text).toContain("show the path as a short text diagram");
+        });
+
+        it("keeps a narrow single-function question out of the walkthrough", () => {
+            expect(systemTextOf()).toContain("does not need the walkthrough");
+        });
+
+        it("says none of this when the provider cannot call tools", () => {
+            expect(systemTextOf({ preGatheredContext: "(nothing retrieved)" })).not.toContain("begin_walkthrough");
+        });
+    });
+
+    describe("finding what it needs", () => {
+        it("points at the guides by name, at notes across rounds, and at parallel searches", () => {
+            const text = systemTextOf();
+            expect(text).toContain("open_guide opens one by name");
+            expect(text).toContain("call note_findings after each round of results");
+            expect(text).toContain("run the ones that do not depend on each other in the same round");
+        });
+    });
+
+    describe("code beside documentation", () => {
+        it("tells the agent the corpus holds both, and to search them apart when the question is about one", () => {
+            const text = systemTextOf();
+            expect(text).toContain("written documentation, and source code indexed from the repositories");
+            expect(text).toContain("Search them apart when the question is clearly about one");
+        });
+
+        it("has the agent read a file before explaining a slice of it, and browse rather than guess a path", () => {
+            const text = systemTextOf();
+            expect(text).toContain("read the file around it before you explain it");
+            expect(text).toContain("browse the repository rather than guessing a path");
+        });
+
+        it("settles a disagreement between documentation and code in favour of the code for what happens", () => {
+            expect(systemTextOf()).toContain(
+                "the documentation describes the intent and the code describes what runs today",
+            );
+        });
+
+        it("asks for code to be cited by path and symbol, exactly as written", () => {
+            expect(systemTextOf()).toContain(
+                "Cite code by its path and the function or class name, exactly as written",
+            );
+        });
+
+        it("says none of this when the provider cannot call tools", () => {
+            expect(systemTextOf({ preGatheredContext: "(nothing retrieved)" })).not.toContain("browse the repository");
+        });
+    });
+
     describe("general knowledge when the corpus is silent", () => {
         it("scopes the never-invent rule to claims about our systems", () => {
             const text = systemTextOf();

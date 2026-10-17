@@ -128,6 +128,24 @@ export function bedrockInferenceProfilePrefix(
 }
 
 /**
+ * The advice to add when Bedrock rejects the model id. The id sat-cli sends is the model behind a
+ * geography prefix it derives from the region, and some regions offer a model only under another
+ * profile — "global", or a country one such as "in" — which Bedrock reports as an invalid
+ * identifier with nothing to say what would have been valid. Undefined for any other error.
+ */
+export function explainBedrockModelError(err: unknown): string | undefined {
+    const message = err instanceof Error ? err.message : String(err);
+    if (!/model identifier is invalid/i.test(message)) return undefined;
+    return (
+        "Bedrock did not recognise the inference profile sat-cli built for this model in your region. " +
+        "Your region may offer the model only under another profile, such as the global one: run `sat-cli init` → " +
+        "AI / LLM providers → Change default model → Custom Bedrock model, and enter the profile id as the Bedrock " +
+        "console lists it (for example global.<model id>); or set SATENG_BEDROCK_PROFILE_PREFIX to that prefix. " +
+        "`aws bedrock list-inference-profiles --region <region>` shows which profiles exist."
+    );
+}
+
+/**
  * The Anthropic API base URL for an Azure AI Foundry resource.
  *
  * The portal shows the endpoint in several shapes — the bare resource URL, the ".../anthropic"

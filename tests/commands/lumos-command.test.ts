@@ -1,5 +1,5 @@
 import { input, select } from "@inquirer/prompts";
-import { OnboardCommand } from "../../src/commands/onboard-command";
+import { LumosCommand } from "../../src/commands/lumos-command";
 import { ConfigService } from "../../src/services/config-service";
 import { KnowledgeBaseChatService } from "../../src/services/knowledge/knowledge-base-chat.service";
 import { AnswerFlowService } from "../../src/services/knowledge/answer-flow.service";
@@ -9,8 +9,8 @@ jest.mock("@inquirer/prompts", () => ({
     select: jest.fn(),
 }));
 
-describe("OnboardCommand Mode Routing", () => {
-    let command: OnboardCommand;
+describe("LumosCommand Mode Routing", () => {
+    let command: LumosCommand;
     let mockConfigService: jest.Mocked<ConfigService>;
     let mockChatService: jest.Mocked<KnowledgeBaseChatService>;
     let mockAnswerFlow: jest.Mocked<AnswerFlowService>;
@@ -49,7 +49,7 @@ describe("OnboardCommand Mode Routing", () => {
             ask: jest.fn().mockResolvedValue({ answer: "Here is the answer.", chunks: [] }),
         } as any;
 
-        command = new OnboardCommand(mockConfigService, mockChatService, mockAnswerFlow);
+        command = new LumosCommand(mockConfigService, mockChatService, mockAnswerFlow);
     });
 
     describe("--knowledge-base interactive search", () => {
@@ -143,9 +143,21 @@ describe("OnboardCommand Mode Routing", () => {
 
             expect(input).toHaveBeenCalledTimes(2);
         });
+
+        it("passes --kind and --repo through to retrieval, so code can be inspected apart from prose", async () => {
+            (input as jest.Mock).mockResolvedValueOnce("where is the nightly job?").mockResolvedValueOnce("");
+
+            await command.execute({ ...kbInputs, kind: "code", repo: "acme/orion-core" });
+
+            expect(mockChatService.search).toHaveBeenCalledWith("where is the nightly job?", {
+                project: undefined,
+                kind: "code",
+                repo: "acme/orion-core",
+            });
+        });
     });
 
-    describe("the chat (bare `sat-cli onboard`)", () => {
+    describe("the chat (bare `sat-cli lumos`)", () => {
         const chatInputs = {} as const;
 
         it("shows a setup suggestion and skips everything else when no LLM provider is configured", async () => {
@@ -188,6 +200,14 @@ describe("OnboardCommand Mode Routing", () => {
             // Loud rather than ignored: a manual filter that silently did nothing is the failure
             // mode the redesign removed, and a warning would scroll past the first prompt.
             expect(input).not.toHaveBeenCalled();
+            expect(mockAnswerFlow.ask).not.toHaveBeenCalled();
+        });
+
+        it("refuses --kind and --repo the same way, since the agent chooses what to search per question", async () => {
+            await expect(command.execute({ ...chatInputs, kind: "code", repo: "acme/orion-core" })).rejects.toThrow(
+                /--kind, --repo applies only to --knowledge-base/,
+            );
+
             expect(mockAnswerFlow.ask).not.toHaveBeenCalled();
         });
 
@@ -292,10 +312,16 @@ describe("OnboardCommand Mode Routing", () => {
 
         it("no longer accepts the retired sync flags", () => {
             const names = command.inputs.map((i) => i.name);
-            expect(names).toEqual(["project", "knowledge-base", "new-session"]);
+            expect(names).toEqual(["project", "kind", "repo", "knowledge-base", "new-session"]);
             for (const retired of ["configOrSheet", "project-name", "upload-to-s3", "list", "format", "force"]) {
                 expect(names).not.toContain(retired);
             }
         });
+    });
+
+    it("is called lumos, and keeps its former names for a reminder rather than as shortcuts", () => {
+        expect(command.name).toBe("lumos");
+        expect(command.aliases).toEqual([]);
+        expect(command.formerNames).toEqual(["onboard", "ob", "onboarding"]);
     });
 });

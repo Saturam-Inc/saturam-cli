@@ -83,6 +83,14 @@ export const CloudProviderConfigSchema = z.object({
             knowledgeBaseId: z.string().describe("Bedrock Knowledge Base ID"),
             dataSourceId: z.string().optional().describe("Bedrock Knowledge Base data source ID"),
             region: z.string().optional().describe("Knowledge base region (defaults to awsRegion)"),
+            searchType: z
+                .enum(["HYBRID", "SEMANTIC"])
+                .optional()
+                .describe(
+                    "Retrieval search type to request. HYBRID adds keyword matching, which code identifiers need, " +
+                        "but only vector stores that support it accept the setting (OpenSearch Serverless does; S3 Vectors does not). " +
+                        "Unset leaves the knowledge base's own default.",
+                ),
         })
         .optional()
         .describe("Bedrock Knowledge Base retrieval configuration"),
@@ -893,6 +901,8 @@ export class ConfigService {
         knowledgeBaseId: string;
         dataSourceId?: string;
         region: string;
+        /** See the schema: set only for a vector store known to support it. */
+        searchType?: "HYBRID" | "SEMANTIC";
     }> {
         const cloudConfig = await this.getAWSCloudConfig();
         if (!cloudConfig.bedrockKnowledgeBase) {
@@ -910,6 +920,7 @@ export class ConfigService {
             knowledgeBaseId: cloudConfig.bedrockKnowledgeBase.knowledgeBaseId,
             dataSourceId: cloudConfig.bedrockKnowledgeBase.dataSourceId,
             region,
+            searchType: cloudConfig.bedrockKnowledgeBase.searchType,
         };
     }
 
